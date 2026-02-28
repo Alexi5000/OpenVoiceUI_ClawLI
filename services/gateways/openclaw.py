@@ -94,6 +94,9 @@ def _load_system_prompt() -> str:
             lines = f.readlines()
         content = ''.join(l for l in lines if not l.startswith('#')).strip()
         base = content if content else _PROMPT_FALLBACK
+        # Replace placeholder with actual canvas pages directory
+        from services.paths import CANVAS_PAGES_DIR
+        base = base.replace('${CANVAS_PAGES_DIR}', str(CANVAS_PAGES_DIR))
     except Exception:
         base = _PROMPT_FALLBACK
     # Prompt armor: defense-in-depth against injection attempts in user-controlled content
