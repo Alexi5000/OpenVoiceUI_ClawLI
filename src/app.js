@@ -6379,138 +6379,6 @@ inject();
                 }
 
                 return await resp.json();
-            },
-
-            // --- Action buttons: Save, Send, Save+Talk ---
-
-            // Get all transcript messages as text
-            _getTranscriptText() {
-                const messages = document.getElementById('transcript-messages');
-                if (!messages) return '';
-                const msgs = messages.querySelectorAll('.tp-msg');
-                const lines = [];
-                msgs.forEach(msg => {
-                    const meta = msg.querySelector('.tp-meta')?.textContent || '';
-                    const text = msg.querySelector('.tp-text')?.textContent || '';
-                    if (text) lines.push(`[${meta}] ${text}`);
-                });
-                return lines.join('\n\n');
-            },
-
-            // Save transcript to server only
-            async saveToServer() {
-                const btn = document.querySelector('.tp-save-btn');
-                if (btn) btn.classList.add('saving');
-
-                const text = this._getTranscriptText();
-                if (!text.trim()) {
-                    alert('No transcript to save');
-                    if (btn) btn.classList.remove('saving');
-                    return;
-                }
-
-                try {
-                    const serverUrl = window.CONFIG?.serverUrl || '';
-                    const res = await fetch(`${serverUrl}/api/transcripts/save`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            title: `Transcript ${new Date().toLocaleString()}`,
-                            text: text
-                        })
-                    });
-                    const data = await res.json();
-                    if (data.saved) {
-                        this.addMessage('system', `✓ Saved to ${data.path}`);
-                        console.log('Transcript saved:', data.path);
-                    } else {
-                        throw new Error(data.error || 'Save failed');
-                    }
-                } catch (e) {
-                    console.error('Save failed:', e);
-                    alert('Save failed: ' + e.message);
-                } finally {
-                    if (btn) btn.classList.remove('saving');
-                }
-            },
-
-            // Send transcript to agent as context (no voice call)
-            async sendToAgent() {
-                const text = this._getTranscriptText();
-                if (!text.trim()) {
-                    alert('No transcript to send');
-                    return;
-                }
-
-                const input = document.getElementById('tp-text-input');
-                const userText = input?.value?.trim() || '';
-
-                const messageToSend = `[TRANSCRIPT CONTEXT - Previous conversation summary:]\n${text}\n\n[User's current message:]\n${userText || '(no additional message)'}`;
-
-                // Clear input
-                if (input) input.value = '';
-
-                // Send through voice conversation path (no call)
-                if (window.ModeManager?.clawdbotMode) {
-                    window.ModeManager.clawdbotMode.sendMessage(messageToSend);
-                    this.addMessage('user', '📤 Sent transcript as context');
-                }
-            },
-
-            // Save transcript AND start voice call
-            async saveAndTalk() {
-                const btn = document.querySelector('.tp-talk-btn');
-                if (btn) btn.classList.add('saving');
-
-                const text = this._getTranscriptText();
-
-                // Save first
-                if (text.trim()) {
-                    try {
-                        const serverUrl = window.CONFIG?.serverUrl || '';
-                        const res = await fetch(`${serverUrl}/api/transcripts/save`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                title: `Transcript ${new Date().toLocaleString()}`,
-                                text: text
-                            })
-                        });
-                        const data = await res.json();
-                        if (data.saved) {
-                            console.log('Transcript saved before call:', data.path);
-                        }
-                    } catch (e) {
-                        console.warn('Auto-save before call failed:', e);
-                    }
-                }
-
-                // Get user's typed message
-                const input = document.getElementById('tp-text-input');
-                const userText = input?.value?.trim() || '';
-
-                // Prepare context message
-                const contextMsg = text.trim()
-                    ? `[Continuing from previous conversation. Here's what we discussed:\n${text.substring(0, 2000)}${text.length > 2000 ? '...' : ''}]\n\n${userText}`
-                    : userText;
-
-                // Clear input
-                if (input) input.value = '';
-
-                // Send message to agent
-                if (window.ModeManager?.clawdbotMode) {
-                    window.ModeManager.clawdbotMode.sendMessage(contextMsg || "Let's continue our conversation.");
-                }
-
-                // Start voice call
-                if (window.ModeManager?.toggleVoice) {
-                    // Make sure we're not already in a call
-                    if (!ModeManager.clawdbotMode?.stt?.isListening) {
-                        ModeManager.toggleVoice();
-                    }
-                }
-
-                if (btn) btn.classList.remove('saving');
             }
         };
 
@@ -7112,8 +6980,10 @@ inject();
                 const hasText = words > 0;
                 const sendBtn = document.getElementById('listen-send-btn');
                 const saveBtn = document.getElementById('listen-save-btn');
+                const talkBtn = document.getElementById('listen-talk-btn');
                 if (sendBtn) sendBtn.disabled = !hasText;
                 if (saveBtn) saveBtn.disabled = !hasText;
+                if (talkBtn) talkBtn.disabled = !hasText;
             },
 
             async save() {
@@ -7141,12 +7011,32 @@ inject();
                 }
             },
 
-            async sendAsContext() {
+            // Send to agent without saving
+            async sendOnly() {
                 if (!this._buffer.trim()) return;
                 const btn = document.getElementById('listen-send-btn');
                 if (btn) { btn.disabled = true; btn.classList.add('sending'); btn.textContent = '⏳ Sending…'; }
 
-                // Auto-save to server first
+                const msg = 'Here\'s some transcribed context I wanted to share with you:\n\n' + this._buffer.trim();
+                try {
+                    ModeManager?.clawdbotMode?.sendMessage(msg);
+                    window.ModeSelector?.select('normal');
+                    console.log('ListenPanel: sent to agent');
+                    this.clear();
+                } catch (e) {
+                    console.error('ListenPanel: send failed', e);
+                    this._setStatus('Send failed: ' + e.message, 'err');
+                    if (btn) { btn.disabled = false; btn.classList.remove('sending'); btn.textContent = '📤 Send'; }
+                }
+            },
+
+            // Save to server AND start voice call
+            async saveAndTalk() {
+                if (!this._buffer.trim()) return;
+                const btn = document.getElementById('listen-talk-btn');
+                if (btn) { btn.disabled = true; btn.classList.add('saving'); btn.textContent = '⏳ Saving…'; }
+
+                // Save first
                 try {
                     const res = await fetch('/api/transcripts/save', {
                         method: 'POST',
@@ -7154,20 +7044,33 @@ inject();
                         body: JSON.stringify({ title: this._getTitle(), text: this._buffer.trim() }),
                     });
                     const data = await res.json();
-                    if (data.saved) console.log('ListenPanel: auto-saved to', data.path);
+                    if (data.saved) {
+                        this._setStatus('✓ Saved — ' + data.path, 'ok');
+                        console.log('ListenPanel: saved to', data.path);
+                    } else {
+                        this._setStatus('Save failed: ' + (data.error || 'unknown'), 'err');
+                        if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = '📞 Save+Talk'; }
+                        return;
+                    }
                 } catch (e) {
-                    console.warn('ListenPanel: auto-save failed', e);
+                    this._setStatus('Save error: ' + e.message, 'err');
+                    if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = '📞 Save+Talk'; }
+                    return;
                 }
 
-                const msg = 'Here\'s some transcribed context I wanted to share with you:\n\n' + this._buffer.trim();
+                // Switch to normal mode and start voice call
                 try {
-                    ModeManager?.clawdbotMode?.sendMessage(msg);
                     window.ModeSelector?.select('normal');
-                    console.log('ListenPanel: context sent');
+                    // Small delay to let mode switch complete
+                    await new Promise(r => setTimeout(r, 100));
+                    // Start the voice call
+                    await ModeManager?.toggleVoice();
+                    console.log('ListenPanel: voice call started');
                     this.clear();
                 } catch (e) {
-                    console.error('ListenPanel: send failed', e);
-                    if (btn) { btn.disabled = false; btn.classList.remove('sending'); btn.textContent = '📤 Send as Context'; }
+                    console.error('ListenPanel: failed to start call', e);
+                    this._setStatus('Failed to start call: ' + e.message, 'err');
+                    if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = '📞 Save+Talk'; }
                 }
             }
         };

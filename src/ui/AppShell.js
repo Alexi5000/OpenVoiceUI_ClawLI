@@ -107,11 +107,7 @@ const SHELL_HTML = `
             <input type="text" class="tp-text-input" id="tp-text-input"
                    placeholder="Type a message..."
                    onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();TranscriptPanel.sendText()}">
-        </div>
-        <div class="tp-action-bar">
-            <button class="tp-action-btn tp-save-btn" onclick="TranscriptPanel.saveToServer()" title="Save transcript to server">💾 Save</button>
-            <button class="tp-action-btn tp-send-btn" onclick="TranscriptPanel.sendToAgent()" title="Send to agent as context">📤 Send</button>
-            <button class="tp-action-btn tp-talk-btn" onclick="TranscriptPanel.saveAndTalk()" title="Save and start voice call">📞 Save+Talk</button>
+            <button class="tp-send-btn" onclick="TranscriptPanel.sendText()" title="Send">➤</button>
         </div>
     </div>
 
@@ -370,11 +366,14 @@ const SHELL_HTML = `
         </div>
         <div class="listen-interim" id="listen-interim"></div>
         <div class="listen-actions">
-            <button class="listen-save-btn" id="listen-save-btn" onclick="window.ListenPanel?.save()" disabled title="Save to server">
-                💾
+            <button class="listen-action-btn listen-save-btn" id="listen-save-btn" onclick="window.ListenPanel?.save()" disabled title="Save to server">
+                💾 Save
             </button>
-            <button class="listen-send-btn" id="listen-send-btn" onclick="window.ListenPanel?.sendAsContext()" disabled>
-                📤 Send as Context
+            <button class="listen-action-btn listen-send-btn" id="listen-send-btn" onclick="window.ListenPanel?.sendOnly()" disabled title="Send to agent">
+                📤 Send
+            </button>
+            <button class="listen-action-btn listen-talk-btn" id="listen-talk-btn" onclick="window.ListenPanel?.saveAndTalk()" disabled title="Save and start voice call">
+                📞 Save+Talk
             </button>
         </div>
         <div class="listen-save-status" id="listen-save-status"></div>

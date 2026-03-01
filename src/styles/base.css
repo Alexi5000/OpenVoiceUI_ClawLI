@@ -394,19 +394,27 @@
         .listen-title-input:focus { border-color: rgba(20,184,166,0.5); }
         .listen-title-input::placeholder { color: #3d3d3d; }
         .listen-actions { display: flex; gap: 6px; }
-        .listen-save-btn {
-            padding: 11px 13px;
+        .listen-action-btn {
+            flex: 1;
+            padding: 11px 12px;
             background: rgba(255,255,255,0.04);
             border: 1px solid rgba(255,255,255,0.1);
             border-radius: 8px;
-            color: #4d5260;
-            font-size: 15px;
+            color: #8b949e;
+            font-size: 12px;
+            font-weight: 500;
             cursor: pointer;
             transition: all 0.2s;
-            flex-shrink: 0;
+            white-space: nowrap;
         }
+        .listen-action-btn:hover:not(:disabled) { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.2); color: #c9d1d9; }
+        .listen-action-btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .listen-save-btn:hover:not(:disabled) { background: rgba(20,184,166,0.12); border-color: rgba(20,184,166,0.35); color: #2dd4bf; }
-        .listen-save-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .listen-send-btn:hover:not(:disabled) { background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.35); color: #60a5fa; }
+        .listen-talk-btn { background: rgba(20, 184, 166, 0.12); border-color: rgba(20, 184, 166, 0.35); color: #2dd4bf; }
+        .listen-talk-btn:hover:not(:disabled) { background: rgba(20, 184, 166, 0.22); border-color: #2dd4bf; }
+        .listen-talk-btn.saving { color: #facc15; border-color: rgba(250,204,21,0.4); }
+        .listen-send-btn.sending { color: #facc15; border-color: rgba(250,204,21,0.4); }
         .listen-save-status {
             font-size: 11px;
             color: #4d5260;
@@ -415,21 +423,6 @@
         }
         .listen-save-status.ok { color: #4ade80; }
         .listen-save-status.err { color: #f87171; }
-        .listen-send-btn {
-            flex: 1;
-            padding: 11px 16px;
-            background: rgba(20, 184, 166, 0.12);
-            border: 1px solid rgba(20, 184, 166, 0.35);
-            border-radius: 8px;
-            color: #2dd4bf;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .listen-send-btn:hover:not(:disabled) { background: rgba(20, 184, 166, 0.22); border-color: #2dd4bf; }
-        .listen-send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-        .listen-send-btn.sending { color: #facc15; border-color: rgba(250,204,21,0.4); animation: ptt-pulse 0.8s ease-in-out infinite; }
 
         /* ── Theme presets (data-theme-preset on body) ── */
         /* Each preset overrides the default blue accent with a profile colour. */
@@ -871,43 +864,6 @@
             line-height: 1;
         }
         .tp-upload-btn:hover { opacity: 1; }
-
-        /* Action bar with save/send/talk buttons */
-        .tp-action-bar {
-            display: flex;
-            gap: 6px;
-            padding: 8px 10px;
-            border-top: 1px solid rgba(255, 255, 255, 0.06);
-            background: rgba(0, 0, 0, 0.2);
-        }
-        .tp-action-btn {
-            flex: 1;
-            padding: 8px 12px;
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            border-radius: 6px;
-            background: rgba(0, 0, 0, 0.3);
-            color: #ccc;
-            font-size: 12px;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 4px;
-        }
-        .tp-action-btn:hover {
-            background: rgba(255, 255, 255, 0.1);
-            border-color: rgba(255, 255, 255, 0.3);
-            color: #fff;
-        }
-        .tp-action-btn:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        .tp-action-btn.tp-save-btn:hover { border-color: var(--blue); color: var(--blue); }
-        .tp-action-btn.tp-send-btn:hover { border-color: var(--cyan); color: var(--cyan); }
-        .tp-action-btn.tp-talk-btn:hover { border-color: #4ade80; color: #4ade80; }
-        .tp-action-btn.saving { opacity: 0.6; }
 
         .tp-file-preview {
             display: flex;
