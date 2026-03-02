@@ -39,9 +39,16 @@ GENERATED_METADATA_FILE = GENERATED_MUSIC_DIR / 'generated_metadata.json'
 
 SUNO_API_KEY = os.environ.get('SUNO_API_KEY', '')
 SUNO_API_BASE = 'https://api.sunoapi.org'
-SUNO_CALLBACK_URL = os.environ.get('SUNO_CALLBACK_URL', '')
 SUNO_WEBHOOK_SECRET = os.environ.get('SUNO_WEBHOOK_SECRET', '')
 SUNO_MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB cap on audio downloads
+
+# Callback URL: explicit > auto-derived from DOMAIN > empty
+# sunoapi.org requires callBackUrl; auto-derive from DOMAIN if not set explicitly.
+_domain = os.environ.get('DOMAIN', '')
+SUNO_CALLBACK_URL = (
+    os.environ.get('SUNO_CALLBACK_URL')
+    or (f'https://{_domain}/api/suno/callback' if _domain else '')
+)
 
 # ---------------------------------------------------------------------------
 # In-memory job tracking (single-worker deployment)
@@ -483,10 +490,16 @@ def suno_callback():
             callback_type = data.get('data', {}).get('callbackType', '')
             task_id = data.get('data', {}).get('taskId', '')
 
-            if callback_type == 'complete':
+            # sunoapi.org sends: "text" (lyrics ready), "first"/"second" (audio ready), "complete"
+            # Handle any callback that carries audio_url, not just "complete"
+            if callback_type in ('complete', 'first', 'second') or (
+                callback_type not in ('text',) and data.get('data', {}).get('data')
+            ):
                 songs = data.get('data', {}).get('data', [])
                 for song in songs:
                     audio_url = song.get('audioUrl') or song.get('audio_url')
+                    if not audio_url:
+                        continue  # "text" callback — lyrics only, no audio yet
                     song_id = song.get('id', task_id)
                     song_title = song.get('title', 'Generated Track')
                     duration = song.get('duration', 0)
