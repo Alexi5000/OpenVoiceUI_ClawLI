@@ -148,7 +148,7 @@ def create_app(config_override: dict = None):
                 return
             # Canvas pages and images have their own auth logic (public flag)
             # handled inside canvas_bp — let them through here
-            if path.startswith('/pages/') or path.startswith('/canvas-proxy'):
+            if path.startswith('/pages/') or path.startswith('/canvas-proxy') or path.startswith('/website-dev'):
                 return
 
             from services.auth import get_token_from_request, verify_clerk_token

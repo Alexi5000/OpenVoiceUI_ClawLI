@@ -613,6 +613,51 @@ def canvas_images_proxy(path):
         return 'Internal server error', 500
 
 
+# Dev server proxy for website preview in canvas
+WEBSITE_DEV_PORT = int(os.getenv('WEBSITE_DEV_PORT', '15050'))
+
+@canvas_bp.route('/website-dev', methods=['GET', 'POST', 'PUT', 'DELETE'], strict_slashes=False)
+@canvas_bp.route('/website-dev/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
+def website_dev_proxy(path=''):
+    """Proxy requests to the local website dev server (for HTTPS canvas compatibility)."""
+    import re as re_module
+    try:
+        dev_url = f'http://localhost:{WEBSITE_DEV_PORT}/{path}'
+        if request.method == 'GET':
+            resp = http_requests.get(dev_url, params=request.args, timeout=30, stream=True)
+        elif request.method == 'POST':
+            resp = http_requests.post(dev_url, json=request.get_json(silent=True), data=request.get_data(), timeout=30, stream=True)
+        elif request.method == 'PUT':
+            resp = http_requests.put(dev_url, json=request.get_json(silent=True), data=request.get_data(), timeout=30, stream=True)
+        elif request.method == 'DELETE':
+            resp = http_requests.delete(dev_url, timeout=30, stream=True)
+        else:
+            return 'Method not allowed', 405
+
+        content_type = resp.headers.get('content-type', '')
+
+        # For HTML responses, rewrite absolute URLs to go through proxy
+        if 'text/html' in content_type:
+            content = resp.content.decode('utf-8', errors='replace')
+            # Rewrite absolute URLs: src="/..." -> src="/website-dev/..."
+            content = re_module.sub(r'(src|href|action)=("|\')/(?!website-dev)', r'\1=\2/website-dev/', content)
+            return Response(content.encode('utf-8'), status=resp.status_code, content_type=content_type)
+
+        def generate():
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+
+        # Forward content type and other relevant headers
+        excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
+        headers = [(k, v) for k, v in resp.headers.items() if k.lower() not in excluded_headers]
+
+        return Response(generate(), status=resp.status_code, headers=headers)
+    except Exception as exc:
+        logger.error(f'Website dev proxy error: {exc}')
+        return 'Dev server unavailable', 503
+
+
 @canvas_bp.route('/canvas-session/<path:path>', methods=['GET', 'POST'])
 def canvas_session_proxy(path):
     """Proxy Canvas session API requests."""

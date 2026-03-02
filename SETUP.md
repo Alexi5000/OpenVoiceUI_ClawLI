@@ -67,18 +67,90 @@ cd OpenVoiceUI
 cp .env.example .env
 ```
 
+---
+
+### Do you already have OpenClaw running?
+
+#### No — start everything fresh (recommended)
+
+The compose stack starts three containers for you:
+- **openclaw** — AI gateway on port 18791
+- **openvoiceui** — the UI/API server on port 5001
+- **supertonic** — local TTS engine
+
 Edit `.env` and set at minimum:
 ```bash
-CLAWDBOT_AUTH_TOKEN=your-openclaw-token
+CLAWDBOT_AUTH_TOKEN=your-openclaw-token   # from openclaw gateway config
 GROQ_API_KEY=your-groq-key
 SECRET_KEY=any-random-string-here
 ```
 
-> Leave `CANVAS_PAGES_DIR` unset for Docker — it defaults correctly to the mounted volume.
+**Optional: enable the coding-agent skill**
+
+The coding-agent skill lets the AI write code, create files, and run commands
+autonomously. It requires a coding CLI installed in the openclaw container.
+Set `CODING_CLI` in your `.env` before building — same options as openclaw's
+setup wizard:
+
+```bash
+# Choose one (or leave unset to skip):
+CODING_CLI=codex      # OpenAI Codex — also needs OPENAI_API_KEY
+CODING_CLI=claude     # Anthropic Claude Code — also needs ANTHROPIC_API_KEY
+CODING_CLI=opencode   # OpenCode — bring your own provider key
+CODING_CLI=pi         # Pi coding agent — bring your own provider key
+```
+
+> If you already ran openclaw's interactive setup wizard, it asked you this
+> question — you don't need to set it here.
 
 ```bash
 docker compose up --build
 ```
+
+#### Yes — connect to your existing OpenClaw
+
+Point openvoiceui at your running OpenClaw gateway instead of starting a new one.
+
+1. Make sure your existing openclaw gateway has `bind: "lan"` (not `"loopback"`) so it
+   accepts connections from other containers, and `controlUi.dangerouslyAllowHostHeaderOriginFallback: true`:
+   ```json
+   "gateway": {
+     "bind": "lan",
+     "controlUi": { "dangerouslyAllowHostHeaderOriginFallback": true }
+   }
+   ```
+
+2. Share the canvas-pages directory between your existing openclaw container and openvoiceui
+   (both need to read/write the same pages). Add a bind mount to **both** containers:
+   ```yaml
+   # your existing openclaw container (add to its volumes):
+   - ./canvas-pages:/path/to/openclaw/workspace/canvas-pages
+
+   # openvoiceui (already in docker-compose.yml):
+   - ./canvas-pages:/app/runtime/canvas-pages
+   ```
+   Pre-create the canvas manifest file before starting (Docker would otherwise create it as a directory):
+   ```bash
+   mkdir -p canvas-pages
+   echo '{"pages":{},"categories":{},"order":[]}' > canvas-manifest.json
+   ```
+
+3. Edit `.env`:
+   ```bash
+   CLAWDBOT_GATEWAY_URL=ws://<your-openclaw-host>:<port>   # e.g. ws://192.168.1.10:18791
+   CLAWDBOT_AUTH_TOKEN=your-openclaw-token
+   GROQ_API_KEY=your-groq-key
+   SECRET_KEY=any-random-string-here
+   ```
+
+4. Start only the openvoiceui and supertonic services (skip the built-in openclaw):
+   ```bash
+   docker compose up --build openvoiceui supertonic
+   ```
+
+---
+
+> Leave `CANVAS_PAGES_DIR` unset for Docker — it defaults correctly to the mounted volume.
 
 Open [http://localhost:5001](http://localhost:5001) in your browser. Allow microphone access and speak.
 
@@ -87,7 +159,7 @@ Open [http://localhost:5001](http://localhost:5001) in your browser. Allow micro
 docker compose down
 ```
 
-**Persistent data** (canvas pages, music, uploads) lives in local folders and survives container restarts.
+**Persistent data** (canvas pages, music, uploads, transcripts) lives in Docker named volumes and survives container restarts.
 
 ---
 
@@ -246,10 +318,25 @@ venv/bin/python -m pytest tests/
 - Verify PORT in `.env` matches nginx proxy port (default 5001)
 - Check nginx error log: `sudo tail -f /var/log/nginx/error.log`
 
-**Canvas pages not loading**
+**Canvas pages not loading / black screen**
 - Verify `CANVAS_PAGES_DIR` path exists and is writable by the server user
 - Docker: leave `CANVAS_PAGES_DIR` unset so it uses the mounted volume
+- Docker: both `openclaw` and `openvoiceui` share the `canvas-pages` named volume — if you
+  customised the compose file make sure both services mount it at the same paths as the
+  default `docker-compose.yml`
 - Check logs for canvas route errors
 
 **Permission errors on VPS**
 - Canvas dir and uploads must be owned by the service user: `sudo chown -R $USER /var/www/openvoiceui`
+
+**Separate openclaw container (not using docker-compose)**
+- If you run openclaw outside of this compose stack (e.g. an existing installation), make sure
+  openclaw's gateway `bind` is set to `"lan"` (not `"loopback"`) so openvoiceui can reach it:
+  ```json
+  "gateway": {
+    "bind": "lan",
+    "controlUi": { "dangerouslyAllowHostHeaderOriginFallback": true }
+  }
+  ```
+- Share the canvas-pages directory between the two containers via a bind mount so openclaw
+  can write pages that openvoiceui serves.

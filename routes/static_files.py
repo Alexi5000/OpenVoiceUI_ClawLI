@@ -120,6 +120,52 @@ def serve_sound(filepath):
     return jsonify({"error": "Sound not found"}), 404
 
 
+@static_files_bp.route('/api/upload', methods=['POST'])
+def upload_file():
+    """Accept a file upload from the text panel and save to uploads/."""
+    import uuid, mimetypes, os
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({'error': 'Empty filename'}), 400
+
+    # Sanitize filename
+    original_name = Path(f.filename).name
+    ext = Path(original_name).suffix.lower()
+    safe_name = f"{uuid.uuid4().hex}{ext}"
+    dest = UPLOADS_DIR / safe_name
+
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    f.save(str(dest))
+
+    # Determine type
+    mime = f.mimetype or mimetypes.guess_type(original_name)[0] or ''
+    is_image = mime.startswith('image/')
+
+    result = {
+        'original_name': original_name,
+        'path': str(dest),
+        'filename': safe_name,
+        'url': f'/uploads/{safe_name}',
+    }
+
+    if is_image:
+        result['type'] = 'image'
+    else:
+        result['type'] = 'file'
+        # Preview first 3000 chars of text files
+        text_types = {'text/', 'application/json', 'application/xml', 'application/javascript'}
+        if any(mime.startswith(t) for t in text_types) or ext in {'.txt', '.md', '.csv', '.log', '.py', '.js', '.json', '.yaml', '.yml'}:
+            try:
+                result['content_preview'] = dest.read_text(errors='replace')[:3000]
+            except Exception:
+                pass
+
+    return jsonify(result)
+
+
 @static_files_bp.route('/uploads/<path:filename>')
 def serve_upload(filename):
     """Serve uploaded files (path traversal guarded)."""
@@ -135,7 +181,7 @@ def serve_upload(filename):
 def serve_src(filepath):
     """Serve frontend source files (JS, CSS modules)"""
     # P7-T3 security: prevent path traversal (same guard used by serve_sound)
-    src_path = _safe_path(BASE_DIR / 'src', filepath)
+    src_path = _safe_path(APP_ROOT / 'src', filepath)
     if src_path is None:
         return jsonify({"error": "Invalid path"}), 400
     if not src_path.exists():
@@ -281,7 +327,7 @@ def serve_install():
 @static_files_bp.route('/admin')
 def serve_admin():
     """Serve the OpenUI admin dashboard"""
-    admin_path = BASE_DIR / 'src' / 'admin.html'
+    admin_path = APP_ROOT / 'src' / 'admin.html'
     if not admin_path.exists():
         return jsonify({"error": "Admin dashboard not found"}), 404
     resp = send_file(admin_path, mimetype='text/html')

@@ -1325,6 +1325,26 @@ inject();
                 setTimeout(() => this._hideStatus(), 8000);
                 // Refresh music player so the agent and UI see the new track immediately
                 window.musicPlayer?.loadMetadata();
+                // Speak the completion via TTS
+                this._speakCompletion(title);
+            },
+
+            async _speakCompletion(title) {
+                try {
+                    const resp = await fetch(`${CONFIG.serverUrl}/api/tts/generate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: `Your track "${title}" is ready in the generated playlist.` }),
+                    });
+                    if (!resp.ok) return;
+                    const blob = await resp.blob();
+                    const url = URL.createObjectURL(blob);
+                    const audio = new Audio(url);
+                    audio.onended = () => URL.revokeObjectURL(url);
+                    audio.play().catch(() => {});
+                } catch (e) {
+                    console.warn('[Suno] TTS completion error:', e);
+                }
             },
         };
 
@@ -2847,6 +2867,8 @@ inject();
                         if (musicPlay && !canvasCommandsProcessed.has('MUSIC_PLAY')) {
                             canvasCommandsProcessed.add('MUSIC_PLAY');
                             const trackName = musicPlay[1]?.trim();
+                            // Always open the panel regardless of whether tracks exist
+                            if (window.musicPlayer?.panelState === 'closed') window.musicPlayer.openPanel();
                             if (trackName) {
                                 window.musicPlayer?.play(trackName);
                             } else {
@@ -4053,6 +4075,8 @@ inject();
                 const musicPlay = text.match(/\[MUSIC_PLAY(?::([^\]]+))?\]/i);
                 if (musicPlay) {
                     const trackName = musicPlay[1]?.trim();
+                    // Always open the panel regardless of whether tracks exist
+                    if (window.musicPlayer?.panelState === 'closed') window.musicPlayer.openPanel();
                     if (trackName) {
                         window.musicPlayer?.play(trackName);
                     } else {
@@ -6980,8 +7004,10 @@ inject();
                 const hasText = words > 0;
                 const sendBtn = document.getElementById('listen-send-btn');
                 const saveBtn = document.getElementById('listen-save-btn');
+                const talkBtn = document.getElementById('listen-talk-btn');
                 if (sendBtn) sendBtn.disabled = !hasText;
                 if (saveBtn) saveBtn.disabled = !hasText;
+                if (talkBtn) talkBtn.disabled = !hasText;
             },
 
             async save() {
@@ -7009,12 +7035,32 @@ inject();
                 }
             },
 
-            async sendAsContext() {
+            // Send to agent without saving
+            async sendOnly() {
                 if (!this._buffer.trim()) return;
                 const btn = document.getElementById('listen-send-btn');
                 if (btn) { btn.disabled = true; btn.classList.add('sending'); btn.textContent = '⏳ Sending…'; }
 
-                // Auto-save to server first
+                const msg = 'Here\'s some transcribed context I wanted to share with you:\n\n' + this._buffer.trim();
+                try {
+                    ModeManager?.clawdbotMode?.sendMessage(msg);
+                    window.ModeSelector?.select('normal');
+                    console.log('ListenPanel: sent to agent');
+                    this.clear();
+                } catch (e) {
+                    console.error('ListenPanel: send failed', e);
+                    this._setStatus('Send failed: ' + e.message, 'err');
+                    if (btn) { btn.disabled = false; btn.classList.remove('sending'); btn.textContent = '📤 Send'; }
+                }
+            },
+
+            // Save to server AND start voice call
+            async saveAndTalk() {
+                if (!this._buffer.trim()) return;
+                const btn = document.getElementById('listen-talk-btn');
+                if (btn) { btn.disabled = true; btn.classList.add('saving'); btn.textContent = '⏳ Saving…'; }
+
+                // Save first
                 try {
                     const res = await fetch('/api/transcripts/save', {
                         method: 'POST',
@@ -7022,20 +7068,33 @@ inject();
                         body: JSON.stringify({ title: this._getTitle(), text: this._buffer.trim() }),
                     });
                     const data = await res.json();
-                    if (data.saved) console.log('ListenPanel: auto-saved to', data.path);
+                    if (data.saved) {
+                        this._setStatus('✓ Saved — ' + data.path, 'ok');
+                        console.log('ListenPanel: saved to', data.path);
+                    } else {
+                        this._setStatus('Save failed: ' + (data.error || 'unknown'), 'err');
+                        if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = '📞 Save+Talk'; }
+                        return;
+                    }
                 } catch (e) {
-                    console.warn('ListenPanel: auto-save failed', e);
+                    this._setStatus('Save error: ' + e.message, 'err');
+                    if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = '📞 Save+Talk'; }
+                    return;
                 }
 
-                const msg = 'Here\'s some transcribed context I wanted to share with you:\n\n' + this._buffer.trim();
+                // Switch to normal mode and start voice call
                 try {
-                    ModeManager?.clawdbotMode?.sendMessage(msg);
                     window.ModeSelector?.select('normal');
-                    console.log('ListenPanel: context sent');
+                    // Small delay to let mode switch complete
+                    await new Promise(r => setTimeout(r, 100));
+                    // Start the voice call
+                    await ModeManager?.toggleVoice();
+                    console.log('ListenPanel: voice call started');
                     this.clear();
                 } catch (e) {
-                    console.error('ListenPanel: send failed', e);
-                    if (btn) { btn.disabled = false; btn.classList.remove('sending'); btn.textContent = '📤 Send as Context'; }
+                    console.error('ListenPanel: failed to start call', e);
+                    this._setStatus('Failed to start call: ' + e.message, 'err');
+                    if (btn) { btn.disabled = false; btn.classList.remove('saving'); btn.textContent = '📞 Save+Talk'; }
                 }
             }
         };
