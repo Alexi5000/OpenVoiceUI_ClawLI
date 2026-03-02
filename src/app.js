@@ -1325,6 +1325,26 @@ inject();
                 setTimeout(() => this._hideStatus(), 8000);
                 // Refresh music player so the agent and UI see the new track immediately
                 window.musicPlayer?.loadMetadata();
+                // Speak the completion via TTS
+                this._speakCompletion(title);
+            },
+
+            async _speakCompletion(title) {
+                try {
+                    const resp = await fetch(`${CONFIG.serverUrl}/api/tts/generate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: `Your track "${title}" is ready in the generated playlist.` }),
+                    });
+                    if (!resp.ok) return;
+                    const blob = await resp.blob();
+                    const url = URL.createObjectURL(blob);
+                    const audio = new Audio(url);
+                    audio.onended = () => URL.revokeObjectURL(url);
+                    audio.play().catch(() => {});
+                } catch (e) {
+                    console.warn('[Suno] TTS completion error:', e);
+                }
             },
         };
 
