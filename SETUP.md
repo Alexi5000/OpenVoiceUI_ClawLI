@@ -61,29 +61,78 @@ Docker users: `docker compose down`, pull the latest code, then `docker compose 
 
 **Fastest path. Recommended for trying OpenVoiceUI.**
 
-The stack starts three containers automatically:
-- **openclaw** — AI gateway (OpenClaw) on port 18791
-- **openvoiceui** — the UI/API server on port 5001 (shares openclaw's network)
-- **supertonic** — local TTS engine
-
 ```bash
 git clone https://github.com/MCERQUA/OpenVoiceUI.git
 cd OpenVoiceUI
 cp .env.example .env
 ```
 
+---
+
+### Do you already have OpenClaw running?
+
+#### No — start everything fresh (recommended)
+
+The compose stack starts three containers for you:
+- **openclaw** — AI gateway on port 18791
+- **openvoiceui** — the UI/API server on port 5001
+- **supertonic** — local TTS engine
+
 Edit `.env` and set at minimum:
 ```bash
-CLAWDBOT_AUTH_TOKEN=your-openclaw-token
+CLAWDBOT_AUTH_TOKEN=your-openclaw-token   # from openclaw gateway config
 GROQ_API_KEY=your-groq-key
 SECRET_KEY=any-random-string-here
 ```
 
-> Leave `CANVAS_PAGES_DIR` unset for Docker — it defaults correctly to the mounted volume.
-
 ```bash
 docker compose up --build
 ```
+
+#### Yes — connect to your existing OpenClaw
+
+Point openvoiceui at your running OpenClaw gateway instead of starting a new one.
+
+1. Make sure your existing openclaw gateway has `bind: "lan"` (not `"loopback"`) so it
+   accepts connections from other containers, and `controlUi.dangerouslyAllowHostHeaderOriginFallback: true`:
+   ```json
+   "gateway": {
+     "bind": "lan",
+     "controlUi": { "dangerouslyAllowHostHeaderOriginFallback": true }
+   }
+   ```
+
+2. Share the canvas-pages directory between your existing openclaw container and openvoiceui
+   (both need to read/write the same pages). Add a bind mount to **both** containers:
+   ```yaml
+   # your existing openclaw container (add to its volumes):
+   - ./canvas-pages:/path/to/openclaw/workspace/canvas-pages
+
+   # openvoiceui (already in docker-compose.yml):
+   - ./canvas-pages:/app/runtime/canvas-pages
+   ```
+   Pre-create the canvas manifest file before starting (Docker would otherwise create it as a directory):
+   ```bash
+   mkdir -p canvas-pages
+   echo '{"pages":{},"categories":{},"order":[]}' > canvas-manifest.json
+   ```
+
+3. Edit `.env`:
+   ```bash
+   CLAWDBOT_GATEWAY_URL=ws://<your-openclaw-host>:<port>   # e.g. ws://192.168.1.10:18791
+   CLAWDBOT_AUTH_TOKEN=your-openclaw-token
+   GROQ_API_KEY=your-groq-key
+   SECRET_KEY=any-random-string-here
+   ```
+
+4. Start only the openvoiceui and supertonic services (skip the built-in openclaw):
+   ```bash
+   docker compose up --build openvoiceui supertonic
+   ```
+
+---
+
+> Leave `CANVAS_PAGES_DIR` unset for Docker — it defaults correctly to the mounted volume.
 
 Open [http://localhost:5001](http://localhost:5001) in your browser. Allow microphone access and speak.
 
