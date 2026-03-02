@@ -490,10 +490,16 @@ def suno_callback():
             callback_type = data.get('data', {}).get('callbackType', '')
             task_id = data.get('data', {}).get('taskId', '')
 
-            if callback_type == 'complete':
+            # sunoapi.org sends: "text" (lyrics ready), "first"/"second" (audio ready), "complete"
+            # Handle any callback that carries audio_url, not just "complete"
+            if callback_type in ('complete', 'first', 'second') or (
+                callback_type not in ('text',) and data.get('data', {}).get('data')
+            ):
                 songs = data.get('data', {}).get('data', [])
                 for song in songs:
                     audio_url = song.get('audioUrl') or song.get('audio_url')
+                    if not audio_url:
+                        continue  # "text" callback — lyrics only, no audio yet
                     song_id = song.get('id', task_id)
                     song_title = song.get('title', 'Generated Track')
                     duration = song.get('duration', 0)
