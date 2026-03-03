@@ -22,7 +22,7 @@ inject();
 
             // TTS provider to use: 'supertonic', 'hume', 'elevenlabs', 'openai', etc.
             ttsProvider: 'supertonic',
-            ttsVoice: 'M1',
+            ttsVoice: 'F3',
 
             // Hume EVI config (loaded from server)
             hume: {
@@ -35,12 +35,12 @@ inject();
         const ProviderManager = {
             selectedProvider: null,
             providers: [],
-            currentVoice: 'M1',
+            currentVoice: 'F3',
 
             async init() {
                 // Load provider selection from localStorage, default to 'supertonic'
                 this.selectedProvider = localStorage.getItem('voice_provider') || 'supertonic';
-                this.currentVoice = localStorage.getItem('voice_voice') || 'M1';
+                this.currentVoice = localStorage.getItem('voice_voice') || 'F3';
 
                 await this.loadProviders();
                 this.initProviderUI();
@@ -440,6 +440,7 @@ inject();
             noiseOffset: 0,
             isSpeaking: false,
             wavePhase: 0,
+            _tdBuf: null,
 
             init() {
                 this.ctx = this.canvas.getContext('2d');
@@ -450,6 +451,7 @@ inject();
 
             setAmplitude(value) {
                 this.targetAmplitude = Math.min(1, Math.max(0, value));
+                window.ttsAmplitude = this.targetAmplitude; // expose for audio-reactive faces
             },
 
             setSpeaking(speaking) {
@@ -460,13 +462,30 @@ inject();
             },
 
             animate() {
-                // When speaking, generate random amplitude like original ai-eyes
-                if (this.isSpeaking) {
+                const an = window.audioAnalyser;
+
+                // Drive amplitude from real analyser data when available
+                if (this.isSpeaking && an) {
+                    // Compute RMS from time-domain for amplitude
+                    if (!this._tdBuf || this._tdBuf.length !== an.fftSize) {
+                        this._tdBuf = new Uint8Array(an.fftSize);
+                    }
+                    an.getByteTimeDomainData(this._tdBuf);
+                    let sum = 0;
+                    for (let i = 0; i < this._tdBuf.length; i++) {
+                        const v = (this._tdBuf[i] - 128) / 128;
+                        sum += v * v;
+                    }
+                    const rms = Math.sqrt(sum / this._tdBuf.length);
+                    // Scale RMS up for visible mouth movement (speech RMS is typically 0.05-0.3)
+                    this.targetAmplitude = Math.min(1, rms * 4.5);
+                } else if (this.isSpeaking) {
+                    // Fallback: no analyser — use random (legacy behavior)
                     this.wavePhase += 0.12 + this.amplitude * 0.1;
                     this.targetAmplitude = 0.3 + Math.random() * 0.7;
                 }
 
-                this.amplitude += (this.targetAmplitude - this.amplitude) * 0.3;
+                this.amplitude += (this.targetAmplitude - this.amplitude) * 0.25;
                 this.noiseOffset += 0.3;
 
                 this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -474,9 +493,43 @@ inject();
                 const centerY = this.canvas.height / 2;
                 const time = Date.now() * 0.001;
 
-                // When speaking, draw chaotic intense waveform
-                if (this.amplitude > 0.1) {
-                    // Multiple overlapping waves + noise for chaos
+                // Draw real waveform from analyser when speaking with audio data
+                if (this.amplitude > 0.05 && an && this._tdBuf) {
+                    const td = this._tdBuf;
+                    const w = this.canvas.width;
+                    const h = this.canvas.height;
+                    const halfH = h * 0.45; // vertical range
+
+                    // Main waveform — draw actual time-domain audio
+                    this.ctx.strokeStyle = '#00ffff';
+                    this.ctx.lineWidth = 2.5;
+                    this.ctx.lineCap = 'round';
+                    this.ctx.lineJoin = 'round';
+                    this.ctx.beginPath();
+
+                    const step = Math.max(1, Math.floor(td.length / 100));
+                    const points = Math.floor(td.length / step);
+                    for (let i = 0; i < points; i++) {
+                        const x = (i / points) * w;
+                        const normalizedX = i / points;
+                        const edgeFade = Math.sin(normalizedX * Math.PI);
+                        // Map sample: 128 = silence (center), 0/-128 = peaks
+                        const sample = (td[i * step] - 128) / 128;
+                        const y = centerY + sample * halfH * edgeFade * Math.min(1, this.amplitude * 2.5);
+
+                        if (i === 0) this.ctx.moveTo(x, y);
+                        else this.ctx.lineTo(x, y);
+                    }
+                    this.ctx.stroke();
+
+                    // Glow layer
+                    this.ctx.strokeStyle = `rgba(0, 255, 255, ${0.15 + this.amplitude * 0.2})`;
+                    this.ctx.lineWidth = 7;
+                    this.ctx.stroke();
+
+                } else if (this.amplitude > 0.1) {
+                    // Fallback chaotic waveform (no analyser)
+                    this.wavePhase += 0.12 + this.amplitude * 0.1;
                     this.ctx.strokeStyle = '#00ffff';
                     this.ctx.lineWidth = 3;
                     this.ctx.lineCap = 'round';
@@ -488,28 +541,16 @@ inject();
                         const x = (i / points) * this.canvas.width;
                         const normalizedX = i / points;
                         const edgeFade = Math.sin(normalizedX * Math.PI);
-
-                        // Layer multiple frequencies for complex waveform
                         const wave1 = Math.sin((normalizedX * 4 + this.wavePhase) * Math.PI * 2) * 8;
                         const wave2 = Math.sin((normalizedX * 7 + this.wavePhase * 1.3) * Math.PI * 2) * 12;
                         const wave3 = Math.sin((normalizedX * 13 + this.wavePhase * 0.7) * Math.PI * 2) * 5;
-
-                        // Add randomized noise/jitter
                         const noise = (Math.random() - 0.5) * 8 * this.amplitude;
-
-                        // Combine all waves with edge fade
                         const combined = (wave1 + wave2 + wave3 + noise) * this.amplitude * edgeFade;
                         const y = centerY + combined;
-
-                        if (i === 0) {
-                            this.ctx.moveTo(x, y);
-                        } else {
-                            this.ctx.lineTo(x, y);
-                        }
+                        if (i === 0) this.ctx.moveTo(x, y);
+                        else this.ctx.lineTo(x, y);
                     }
                     this.ctx.stroke();
-
-                    // Glow layer - thicker line for the glow effect
                     this.ctx.strokeStyle = 'rgba(0, 255, 255, 0.3)';
                     this.ctx.lineWidth = 8;
                     this.ctx.stroke();
@@ -2623,6 +2664,14 @@ inject();
                 try {
                     if (!this._audioCtx) {
                         this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                        // Create analyser for audio-reactive faces (HaloSmokeFace etc.)
+                        this._analyser = this._audioCtx.createAnalyser();
+                        this._analyser.fftSize = 2048;
+                        this._analyser.smoothingTimeConstant = 0.55;
+                        this._analyser.minDecibels = -95;
+                        this._analyser.maxDecibels = -12;
+                        this._analyser.connect(this._audioCtx.destination);
+                        window.audioAnalyser = this._analyser;
                     }
                     if (this._audioCtx.state === 'suspended') {
                         await this._audioCtx.resume();
@@ -2828,6 +2877,7 @@ inject();
                             .replace(/```[\s\S]*/g, '')            // unclosed generic fence (streaming)
                             .replace(/\[CANVAS_MENU\]/gi, '')
                             .replace(/\[CANVAS:[^\]]*\]/gi, '')
+                            .replace(/\[CANVAS_URL:[^\]]*\]/gi, '')
                             .replace(/\[MUSIC_PLAY(?::[^\]]*)?\]/gi, '')
                             .replace(/\[MUSIC_STOP\]/gi, '')
                             .replace(/\[MUSIC_NEXT\]/gi, '')
@@ -2931,6 +2981,16 @@ inject();
                             const soundName = soundMatch[1].trim();
                             console.log('[Sound] DJ sound trigger:', soundName);
                             DJSoundboard.play(soundName);
+                        }
+                        // Check for [CANVAS_URL:https://example.com] — load external URL in iframe
+                        const canvasUrlMatch = text.match(/\[CANVAS_URL:([^\]]+)\]/i);
+                        if (canvasUrlMatch && !canvasCommandsProcessed.has('CANVAS_URL')) {
+                            canvasCommandsProcessed.add('CANVAS_URL');
+                            const externalUrl = canvasUrlMatch[1].trim();
+                            console.log('[Canvas] External URL trigger:', externalUrl);
+                            ActionConsole.addEntry('system', `Canvas: loading ${externalUrl}`);
+                            const iframe = document.getElementById('canvas-iframe');
+                            if (iframe) { iframe.src = externalUrl; CanvasControl.show(); }
                         }
                         // Check for [SLEEP] — agent-initiated return to wake-word mode
                         if (/\[SLEEP\]/i.test(text) && !canvasCommandsProcessed.has('SLEEP')) {
@@ -3429,7 +3489,8 @@ inject();
                         await new Promise((resolve) => {
                             const source = this._audioCtx.createBufferSource();
                             source.buffer = audioBuffer;
-                            source.connect(this._audioCtx.destination);
+                            // Route through analyser for audio-reactive faces
+                            source.connect(this._analyser || this._audioCtx.destination);
                             source.onended = resolve;
                             this.currentSource = source;
                             source.start(0);
@@ -3452,15 +3513,38 @@ inject();
                     const audioBlob = this.base64ToBlob(base64, mimeType);
                     const audioUrl = URL.createObjectURL(audioBlob);
                     const audio = new Audio(audioUrl);
+                    audio.crossOrigin = 'anonymous';
+
+                    // Route HTMLAudioElement through analyser for audio-reactive faces
+                    try {
+                        if (!this._audioCtx) {
+                            this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                            this._analyser = this._audioCtx.createAnalyser();
+                            this._analyser.fftSize = 2048;
+                            this._analyser.smoothingTimeConstant = 0.55;
+                            this._analyser.minDecibels = -95;
+                            this._analyser.maxDecibels = -12;
+                            this._analyser.connect(this._audioCtx.destination);
+                            window.audioAnalyser = this._analyser;
+                        }
+                        if (!this._fallbackSource) {
+                            this._fallbackSource = this._audioCtx.createMediaElementSource(audio);
+                            this._fallbackSource.connect(this._analyser);
+                        }
+                    } catch (e) {
+                        console.warn('[ClawdBot] Fallback analyser setup failed:', e);
+                    }
 
                     audio.onended = () => {
                         URL.revokeObjectURL(audioUrl);
+                        this._fallbackSource = null;
                         this.playNextAudio();
                     };
 
                     audio.onerror = (e) => {
                         console.error('Audio playback error:', e);
                         URL.revokeObjectURL(audioUrl);
+                        this._fallbackSource = null;
                         this.playNextAudio();
                     };
 
@@ -3769,7 +3853,7 @@ inject();
                 this.isProcessing = false;
                 this.stt = new WebSpeechSTT();
                 this.ttsProvider = 'supertonic';
-                this.ttsVoice = 'M1';
+                this.ttsVoice = 'F3';
                 this.audioContext = null;
                 this.analyser = null;
                 this.analyserData = null;
@@ -3823,10 +3907,14 @@ inject();
                 if (!this.audioContext) {
                     this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     this.analyser = this.audioContext.createAnalyser();
-                    this.analyser.fftSize = 256;
-                    this.analyser.smoothingTimeConstant = 0.3;
+                    this.analyser.fftSize = 2048;
+                    this.analyser.smoothingTimeConstant = 0.55;
+                    this.analyser.minDecibels = -95;
+                    this.analyser.maxDecibels = -12;
                     this.analyserData = new Uint8Array(this.analyser.frequencyBinCount);
                     this.analyser.connect(this.audioContext.destination);
+                    // Expose for audio-reactive face modules (e.g. HaloSmokeFace)
+                    window.audioAnalyser = this.analyser;
                 }
 
                 // Set up STT callbacks
@@ -3899,6 +3987,7 @@ inject();
                         const displayText = data.response
                             .replace(/\[CANVAS_MENU\]/gi, '')
                             .replace(/\[CANVAS:[^\]]*\]/gi, '')
+                            .replace(/\[CANVAS_URL:[^\]]*\]/gi, '')
                             .replace(/\[MUSIC_PLAY(?::[^\]]*)?\]/gi, '')
                             .replace(/\[MUSIC_STOP\]/gi, '')
                             .replace(/\[MUSIC_NEXT\]/gi, '')
@@ -4014,6 +4103,7 @@ inject();
                             .replace(/```[\s\S]*?```/g, '')
                             .replace(/\[CANVAS_MENU\]/gi, '')
                             .replace(/\[CANVAS:[^\]]*\]/gi, '')
+                            .replace(/\[CANVAS_URL:[^\]]*\]/gi, '')
                             .replace(/\[MUSIC_PLAY(?::[^\]]*)?\]/gi, '')
                             .replace(/\[MUSIC_STOP\]/gi, '')
                             .replace(/\[MUSIC_NEXT\]/gi, '')
@@ -4070,6 +4160,15 @@ inject();
                         await window.CanvasMenu?.loadManifest();
                     } catch (e) { console.warn('[Canvas] manifest sync failed:', e); }
                     CanvasControl.showPage?.(pageName);
+                }
+                // [CANVAS_URL:https://example.com]
+                const canvasUrlMatch = text.match(/\[CANVAS_URL:([^\]]+)\]/i);
+                if (canvasUrlMatch) {
+                    const externalUrl = canvasUrlMatch[1].trim();
+                    console.log('[Canvas] External URL trigger:', externalUrl);
+                    ActionConsole.addEntry('system', `Canvas: loading ${externalUrl}`);
+                    const iframe = document.getElementById('canvas-iframe');
+                    if (iframe) { iframe.src = externalUrl; CanvasControl.show(); }
                 }
                 // [MUSIC_PLAY] or [MUSIC_PLAY:track]
                 const musicPlay = text.match(/\[MUSIC_PLAY(?::([^\]]+))?\]/i);
@@ -4463,10 +4562,14 @@ inject();
                     // Create analyser if not exists
                     if (!this.analyser) {
                         this.analyser = this.audioContext.createAnalyser();
-                        this.analyser.fftSize = 256;
-                        this.analyser.smoothingTimeConstant = 0.3;
+                        this.analyser.fftSize = 2048;
+                        this.analyser.smoothingTimeConstant = 0.55;
+                        this.analyser.minDecibels = -95;
+                        this.analyser.maxDecibels = -12;
                         this.analyserData = new Uint8Array(this.analyser.frequencyBinCount);
                         this.analyser.connect(this.audioContext.destination);
+                        // Expose for audio-reactive face modules (e.g. HaloSmokeFace)
+                        window.audioAnalyser = this.analyser;
                     }
 
                     const audioData = this.base64ToArrayBuffer(base64Data);
@@ -5207,15 +5310,39 @@ inject();
                     });
                 }
 
-                // Auto-open canvas when canvas-proxy receives new content via SSE
-                // DISABLED for voice app — agent's server-side canvas tools should NOT
-                // auto-open the canvas overlay. Only explicit [CANVAS:] text tags should.
-                // window.addEventListener('message', (event) => {
-                //     if (event.data && event.data.type === 'canvas-show') {
-                //         console.log('Canvas auto-open triggered:', event.data.title);
-                //         this.show();
-                //     }
-                // });
+                // postMessage bridge: canvas pages can send actions to the parent app
+                // Actions: speak (send text to AI), navigate (open canvas page),
+                //          open-url (load URL in iframe), menu (open canvas menu), close (close canvas)
+                window.addEventListener('message', (event) => {
+                    if (!event.data || event.data.type !== 'canvas-action') return;
+                    const { action, text, page, url } = event.data;
+                    console.log('[Canvas] postMessage action:', action, event.data);
+                    switch (action) {
+                        case 'speak':
+                            // Send text as if user spoke it — triggers AI response
+                            if (text && ModeManager.clawdbotMode) {
+                                ModeManager.clawdbotMode.sendMessage(text);
+                            }
+                            break;
+                        case 'navigate':
+                            // Navigate to another canvas page
+                            if (page) CanvasControl.showPage(page);
+                            break;
+                        case 'open-url':
+                            // Load external URL in the iframe
+                            if (url) {
+                                const iframe = document.getElementById('canvas-iframe');
+                                if (iframe) iframe.src = url;
+                            }
+                            break;
+                        case 'menu':
+                            CanvasControl.showMenu();
+                            break;
+                        case 'close':
+                            CanvasControl.hide();
+                            break;
+                    }
+                });
 
                 // Auto-refresh polling: detect when agent edits the current canvas page
                 this._pollInterval = null;

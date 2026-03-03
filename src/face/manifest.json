@@ -13,15 +13,15 @@
       "features": ["blink", "eye-tracking", "mood-eyelids"]
     },
     {
-      "id": "orb",
-      "name": "Sound Orb",
-      "description": "Audio-reactive orb visualizer with particle effects",
-      "module": "/src/ui/face/FaceRenderer.js",
+      "id": "halo-smoke",
+      "name": "Halo Smoke Orb",
+      "description": "Halo frequency ring with wispy smoke core — calm at rest, reacts to TTS speech",
+      "module": "/src/face/HaloSmokeFace.js",
       "class": null,
-      "note": "Legacy renderer — use FaceRenderer.setMode('orb'). Full ES module port planned for P5.",
+      "note": "Global script — use FaceRenderer.setMode('halo-smoke').",
       "preview": "/src/face/previews/orb.svg",
       "moods": [],
-      "features": ["audio-reactive", "particles"]
+      "features": ["audio-reactive", "smoke", "halo", "speech-reactive"]
     }
   ]
 }

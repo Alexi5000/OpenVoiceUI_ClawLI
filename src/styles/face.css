@@ -38,6 +38,16 @@
             --shake-amount: 5px;
         }
 
+        /* Halo Smoke Orb — hide square, only circle canvas shows */
+        .face-box.halo-smoke-mode {
+            background: transparent;
+            border-color: transparent;
+            box-shadow: none;
+        }
+        .face-box.halo-smoke-mode .mouth-container {
+            display: none;
+        }
+
         /* Eyes container */
         .eyes-container {
             display: flex;
