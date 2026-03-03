@@ -59,6 +59,7 @@ const SHELL_HTML = `
             id="canvas-iframe"
             src="about:blank"
             data-canvas-src=""
+            sandbox="allow-same-origin allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-top-navigation-by-user-activation"
             style="width: 100vw; height: 100vh; border: none; display: block;"
             allow="autoplay; fullscreen">
         </iframe>

@@ -2877,6 +2877,7 @@ inject();
                             .replace(/```[\s\S]*/g, '')            // unclosed generic fence (streaming)
                             .replace(/\[CANVAS_MENU\]/gi, '')
                             .replace(/\[CANVAS:[^\]]*\]/gi, '')
+                            .replace(/\[CANVAS_URL:[^\]]*\]/gi, '')
                             .replace(/\[MUSIC_PLAY(?::[^\]]*)?\]/gi, '')
                             .replace(/\[MUSIC_STOP\]/gi, '')
                             .replace(/\[MUSIC_NEXT\]/gi, '')
@@ -2980,6 +2981,16 @@ inject();
                             const soundName = soundMatch[1].trim();
                             console.log('[Sound] DJ sound trigger:', soundName);
                             DJSoundboard.play(soundName);
+                        }
+                        // Check for [CANVAS_URL:https://example.com] — load external URL in iframe
+                        const canvasUrlMatch = text.match(/\[CANVAS_URL:([^\]]+)\]/i);
+                        if (canvasUrlMatch && !canvasCommandsProcessed.has('CANVAS_URL')) {
+                            canvasCommandsProcessed.add('CANVAS_URL');
+                            const externalUrl = canvasUrlMatch[1].trim();
+                            console.log('[Canvas] External URL trigger:', externalUrl);
+                            ActionConsole.addEntry('system', `Canvas: loading ${externalUrl}`);
+                            const iframe = document.getElementById('canvas-iframe');
+                            if (iframe) { iframe.src = externalUrl; CanvasControl.show(); }
                         }
                         // Check for [SLEEP] — agent-initiated return to wake-word mode
                         if (/\[SLEEP\]/i.test(text) && !canvasCommandsProcessed.has('SLEEP')) {
@@ -3976,6 +3987,7 @@ inject();
                         const displayText = data.response
                             .replace(/\[CANVAS_MENU\]/gi, '')
                             .replace(/\[CANVAS:[^\]]*\]/gi, '')
+                            .replace(/\[CANVAS_URL:[^\]]*\]/gi, '')
                             .replace(/\[MUSIC_PLAY(?::[^\]]*)?\]/gi, '')
                             .replace(/\[MUSIC_STOP\]/gi, '')
                             .replace(/\[MUSIC_NEXT\]/gi, '')
@@ -4091,6 +4103,7 @@ inject();
                             .replace(/```[\s\S]*?```/g, '')
                             .replace(/\[CANVAS_MENU\]/gi, '')
                             .replace(/\[CANVAS:[^\]]*\]/gi, '')
+                            .replace(/\[CANVAS_URL:[^\]]*\]/gi, '')
                             .replace(/\[MUSIC_PLAY(?::[^\]]*)?\]/gi, '')
                             .replace(/\[MUSIC_STOP\]/gi, '')
                             .replace(/\[MUSIC_NEXT\]/gi, '')
@@ -4147,6 +4160,15 @@ inject();
                         await window.CanvasMenu?.loadManifest();
                     } catch (e) { console.warn('[Canvas] manifest sync failed:', e); }
                     CanvasControl.showPage?.(pageName);
+                }
+                // [CANVAS_URL:https://example.com]
+                const canvasUrlMatch = text.match(/\[CANVAS_URL:([^\]]+)\]/i);
+                if (canvasUrlMatch) {
+                    const externalUrl = canvasUrlMatch[1].trim();
+                    console.log('[Canvas] External URL trigger:', externalUrl);
+                    ActionConsole.addEntry('system', `Canvas: loading ${externalUrl}`);
+                    const iframe = document.getElementById('canvas-iframe');
+                    if (iframe) { iframe.src = externalUrl; CanvasControl.show(); }
                 }
                 // [MUSIC_PLAY] or [MUSIC_PLAY:track]
                 const musicPlay = text.match(/\[MUSIC_PLAY(?::([^\]]+))?\]/i);
@@ -5288,15 +5310,39 @@ inject();
                     });
                 }
 
-                // Auto-open canvas when canvas-proxy receives new content via SSE
-                // DISABLED for voice app — agent's server-side canvas tools should NOT
-                // auto-open the canvas overlay. Only explicit [CANVAS:] text tags should.
-                // window.addEventListener('message', (event) => {
-                //     if (event.data && event.data.type === 'canvas-show') {
-                //         console.log('Canvas auto-open triggered:', event.data.title);
-                //         this.show();
-                //     }
-                // });
+                // postMessage bridge: canvas pages can send actions to the parent app
+                // Actions: speak (send text to AI), navigate (open canvas page),
+                //          open-url (load URL in iframe), menu (open canvas menu), close (close canvas)
+                window.addEventListener('message', (event) => {
+                    if (!event.data || event.data.type !== 'canvas-action') return;
+                    const { action, text, page, url } = event.data;
+                    console.log('[Canvas] postMessage action:', action, event.data);
+                    switch (action) {
+                        case 'speak':
+                            // Send text as if user spoke it — triggers AI response
+                            if (text && ModeManager.clawdbotMode) {
+                                ModeManager.clawdbotMode.sendMessage(text);
+                            }
+                            break;
+                        case 'navigate':
+                            // Navigate to another canvas page
+                            if (page) CanvasControl.showPage(page);
+                            break;
+                        case 'open-url':
+                            // Load external URL in the iframe
+                            if (url) {
+                                const iframe = document.getElementById('canvas-iframe');
+                                if (iframe) iframe.src = url;
+                            }
+                            break;
+                        case 'menu':
+                            CanvasControl.showMenu();
+                            break;
+                        case 'close':
+                            CanvasControl.hide();
+                            break;
+                    }
+                });
 
                 // Auto-refresh polling: detect when agent edits the current canvas page
                 this._pollInterval = null;
