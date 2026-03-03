@@ -177,13 +177,8 @@ async function mount(container) {
     attachListeners(container);
 }
 
-// Export as both ESM-compatible and window global
+// Expose as window global for SettingsPanel
 const FacePicker = { renderHTML, mount, attachListeners };
-
-// Global for SettingsPanel (non-module context)
 if (typeof window !== 'undefined') {
     window.FacePicker = FacePicker;
 }
-
-export default FacePicker;
-export { renderHTML, mount, attachListeners };

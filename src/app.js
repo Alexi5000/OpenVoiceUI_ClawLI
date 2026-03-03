@@ -450,6 +450,7 @@ inject();
 
             setAmplitude(value) {
                 this.targetAmplitude = Math.min(1, Math.max(0, value));
+                window.ttsAmplitude = this.targetAmplitude; // expose for audio-reactive faces
             },
 
             setSpeaking(speaking) {
@@ -2623,6 +2624,14 @@ inject();
                 try {
                     if (!this._audioCtx) {
                         this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                        // Create analyser for audio-reactive faces (HaloSmokeFace etc.)
+                        this._analyser = this._audioCtx.createAnalyser();
+                        this._analyser.fftSize = 2048;
+                        this._analyser.smoothingTimeConstant = 0.55;
+                        this._analyser.minDecibels = -95;
+                        this._analyser.maxDecibels = -12;
+                        this._analyser.connect(this._audioCtx.destination);
+                        window.audioAnalyser = this._analyser;
                     }
                     if (this._audioCtx.state === 'suspended') {
                         await this._audioCtx.resume();
@@ -3429,7 +3438,8 @@ inject();
                         await new Promise((resolve) => {
                             const source = this._audioCtx.createBufferSource();
                             source.buffer = audioBuffer;
-                            source.connect(this._audioCtx.destination);
+                            // Route through analyser for audio-reactive faces
+                            source.connect(this._analyser || this._audioCtx.destination);
                             source.onended = resolve;
                             this.currentSource = source;
                             source.start(0);
@@ -3452,15 +3462,38 @@ inject();
                     const audioBlob = this.base64ToBlob(base64, mimeType);
                     const audioUrl = URL.createObjectURL(audioBlob);
                     const audio = new Audio(audioUrl);
+                    audio.crossOrigin = 'anonymous';
+
+                    // Route HTMLAudioElement through analyser for audio-reactive faces
+                    try {
+                        if (!this._audioCtx) {
+                            this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                            this._analyser = this._audioCtx.createAnalyser();
+                            this._analyser.fftSize = 2048;
+                            this._analyser.smoothingTimeConstant = 0.55;
+                            this._analyser.minDecibels = -95;
+                            this._analyser.maxDecibels = -12;
+                            this._analyser.connect(this._audioCtx.destination);
+                            window.audioAnalyser = this._analyser;
+                        }
+                        if (!this._fallbackSource) {
+                            this._fallbackSource = this._audioCtx.createMediaElementSource(audio);
+                            this._fallbackSource.connect(this._analyser);
+                        }
+                    } catch (e) {
+                        console.warn('[ClawdBot] Fallback analyser setup failed:', e);
+                    }
 
                     audio.onended = () => {
                         URL.revokeObjectURL(audioUrl);
+                        this._fallbackSource = null;
                         this.playNextAudio();
                     };
 
                     audio.onerror = (e) => {
                         console.error('Audio playback error:', e);
                         URL.revokeObjectURL(audioUrl);
+                        this._fallbackSource = null;
                         this.playNextAudio();
                     };
 
@@ -3823,10 +3856,14 @@ inject();
                 if (!this.audioContext) {
                     this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
                     this.analyser = this.audioContext.createAnalyser();
-                    this.analyser.fftSize = 256;
-                    this.analyser.smoothingTimeConstant = 0.3;
+                    this.analyser.fftSize = 2048;
+                    this.analyser.smoothingTimeConstant = 0.55;
+                    this.analyser.minDecibels = -95;
+                    this.analyser.maxDecibels = -12;
                     this.analyserData = new Uint8Array(this.analyser.frequencyBinCount);
                     this.analyser.connect(this.audioContext.destination);
+                    // Expose for audio-reactive face modules (e.g. HaloSmokeFace)
+                    window.audioAnalyser = this.analyser;
                 }
 
                 // Set up STT callbacks
@@ -4463,10 +4500,14 @@ inject();
                     // Create analyser if not exists
                     if (!this.analyser) {
                         this.analyser = this.audioContext.createAnalyser();
-                        this.analyser.fftSize = 256;
-                        this.analyser.smoothingTimeConstant = 0.3;
+                        this.analyser.fftSize = 2048;
+                        this.analyser.smoothingTimeConstant = 0.55;
+                        this.analyser.minDecibels = -95;
+                        this.analyser.maxDecibels = -12;
                         this.analyserData = new Uint8Array(this.analyser.frequencyBinCount);
                         this.analyser.connect(this.audioContext.destination);
+                        // Expose for audio-reactive face modules (e.g. HaloSmokeFace)
+                        window.audioAnalyser = this.analyser;
                     }
 
                     const audioData = this.base64ToArrayBuffer(base64Data);

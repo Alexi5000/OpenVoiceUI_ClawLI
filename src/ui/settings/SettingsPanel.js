@@ -204,7 +204,7 @@ window.SettingsPanel = {
             <div class="settings-section open">
                 <h3>Face Display</h3>
                 <div class="section-content">
-                    <div id="face-picker-root"><div class="face-picker-loading">Loading faces\u2026</div></div>
+                    ${this.renderFaceContent()}
                 </div>
             </div>
         `;

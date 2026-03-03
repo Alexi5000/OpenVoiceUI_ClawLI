@@ -10,9 +10,9 @@ window.FaceRenderer = {
             name: 'AI Eyes',
             description: 'Classic animated eyes'
         },
-        'orb': {
-            name: 'Sound Orb',
-            description: 'Reactive audio visualizer'
+        'halo-smoke': {
+            name: 'Halo Smoke Orb',
+            description: 'Halo ring + wispy smoke core, reacts to TTS audio'
         }
     },
 
@@ -86,6 +86,11 @@ window.FaceRenderer = {
             this.orb.canvas = null;
             this.orb.ctx = null;
         }
+
+        // Stop halo-smoke face if running
+        if (window.HaloSmokeFace) {
+            window.HaloSmokeFace.stop();
+        }
     },
 
     render() {
@@ -95,6 +100,9 @@ window.FaceRenderer = {
                 break;
             case 'orb':
                 this.renderOrb();
+                break;
+            case 'halo-smoke':
+                this.renderHaloSmoke();
                 break;
         }
     },
@@ -257,6 +265,15 @@ window.FaceRenderer = {
 
         // Continue animation
         this.animationFrame = requestAnimationFrame(() => this.animateOrb());
+    },
+
+    renderHaloSmoke() {
+        if (!window.HaloSmokeFace) {
+            console.warn('[FaceRenderer] HaloSmokeFace not loaded — add src/face/HaloSmokeFace.js to index.html');
+            return;
+        }
+        // HaloSmokeFace.start() handles hiding eyes, removing old canvases, etc.
+        window.HaloSmokeFace.start(this.container);
     },
 
     hexToRgba(hex, alpha) {
