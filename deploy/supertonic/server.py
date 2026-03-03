@@ -41,9 +41,10 @@ app = FastAPI(title="Supertonic TTS", lifespan=lifespan)
 class TTSRequest(BaseModel):
     text: str
     voice: str = "F3"
-    speed: float = Field(default=1.05, gt=0, le=3)
-    steps: int = Field(default=5, ge=1, le=50)
+    speed: float = Field(default=0.95, gt=0, le=2)
+    steps: int = Field(default=40, ge=1, le=100)
     lang: str = "en"
+    silence_duration: float = Field(default=0.3, ge=0.0, le=2.0)
 
 
 @app.get("/health")
@@ -67,6 +68,7 @@ async def tts(req: TTSRequest):
             voice_style=_styles[req.voice],
             speed=req.speed,
             total_steps=req.steps,
+            silence_duration=req.silence_duration,
         )
         audio = wav[0, : int(_tts.sample_rate * duration[0].item())]
         buf = BytesIO()
