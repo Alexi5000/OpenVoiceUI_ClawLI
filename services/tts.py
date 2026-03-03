@@ -98,7 +98,7 @@ def generate_tts_chunked(provider, text: str, voice: str, max_chars: int = 800) 
     """
     # Short text — no chunking needed
     if len(text) <= max_chars:
-        return provider.generate_speech(text=text, voice=voice, speed=0.95, total_step=40)
+        return provider.generate_speech(text=text, voice=voice, speed=1.05, total_step=40)
 
     # Split on sentence boundaries
     sentences = re.split(r'(?<=[.!?])\s+', text)
@@ -125,7 +125,7 @@ def generate_tts_chunked(provider, text: str, voice: str, max_chars: int = 800) 
         if not chunk.strip():
             continue
         try:
-            chunk_audio = provider.generate_speech(text=chunk, voice=voice, speed=0.95, total_step=40)
+            chunk_audio = provider.generate_speech(text=chunk, voice=voice, speed=1.05, total_step=40)
             if i == 0:
                 if chunk_audio[:4] == b'RIFF' and chunk_audio[8:12] == b'WAVE':
                     pos = 12
@@ -159,7 +159,7 @@ def generate_tts_chunked(provider, text: str, voice: str, max_chars: int = 800) 
 
     if not all_audio_data or sample_rate is None:
         logger.warning("All TTS chunks failed, trying truncated text")
-        return provider.generate_speech(text=text[:max_chars], voice=voice, speed=0.95, total_step=40)
+        return provider.generate_speech(text=text[:max_chars], voice=voice, speed=1.05, total_step=40)
 
     # Rebuild WAV with concatenated PCM data
     byte_rate = sample_rate * num_channels * (bits_per_sample // 8)
