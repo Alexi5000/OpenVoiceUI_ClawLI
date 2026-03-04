@@ -16,6 +16,17 @@
             pointer-events: none;
         }
 
+        /* Hide face from DOM hit-testing when canvas is active (iOS Safari fix) */
+        body.canvas-active .face-container {
+            visibility: hidden;
+        }
+
+        /* Keep edge controls visible above canvas overlay */
+        body.canvas-active .controls-left,
+        body.canvas-active .controls-right {
+            z-index: 200;
+        }
+
         /* Face Box - Black rounded container with glow */
         .face-box {
             position: relative;

@@ -601,10 +601,24 @@ def canvas_pages_proxy(path):
                     b'a{color:#fb923c;}'
                     b'</style>'
                 )
+                # Inject error bridge — posts JS errors back to parent for debugging
+                _error_bridge = (
+                    b'<script id="canvas-error-bridge">'
+                    b"window.onerror=function(msg,src,line,col,err){"
+                    b"window.parent.postMessage({type:'canvas-error',"
+                    b"error:msg,source:src,line:line,col:col},'*');"
+                    b"};"
+                    b"window.addEventListener('unhandledrejection',function(e){"
+                    b"window.parent.postMessage({type:'canvas-error',"
+                    b"error:'Unhandled promise: '+e.reason},'*');"
+                    b"});"
+                    b'</script>'
+                )
+                _inject = _base_css + _error_bridge
                 if b'</head>' in content:
-                    content = content.replace(b'</head>', _base_css + b'</head>', 1)
+                    content = content.replace(b'</head>', _inject + b'</head>', 1)
                 else:
-                    content = _base_css + content
+                    content = _inject + content
                 content_type = 'text/html'
             elif path.endswith('.css'):
                 content_type = 'text/css'

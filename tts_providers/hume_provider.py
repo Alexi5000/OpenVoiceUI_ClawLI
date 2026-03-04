@@ -82,8 +82,8 @@ class HumeProvider(TTSProvider):
         """
         self.api_key = api_key
         self.voice_id = voice_id or self.DEFAULT_VOICE_ID
-        logger.warning(
-            "HumeProvider initialized but is INACTIVE. "
+        logger.debug(
+            "HumeProvider initialized (inactive stub). "
             "Use SupertonicTTS for actual TTS functionality."
         )
 

@@ -729,7 +729,7 @@ inject();
             isPlaying: false,
             currentTrack: null,
             currentMetadata: null,
-            volume: 0.85,
+            volume: /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? 1.0 : 0.85,
             metadata: null,  // Will be loaded from server
             crossfadeInProgress: false,
             crossfadeDuration: 1500,  // 1.5 second crossfade
@@ -891,6 +891,17 @@ inject();
                 }
             },
 
+            // Shift transcript + action console panels up/down when music panel opens/closes
+            _adjustOverlayPanels() {
+                const mpHeight = (this.panelState !== 'closed' && this.panel)
+                    ? this.panel.offsetHeight : 0;
+                const offset = mpHeight > 0 ? `${60 + mpHeight + 8}px` : '60px';
+                const tp = document.getElementById('transcript-panel');
+                const ac = document.getElementById('action-console');
+                if (tp) { tp.style.bottom = offset; tp.style.transition = 'bottom 0.3s ease'; }
+                if (ac) { ac.style.bottom = offset; ac.style.transition = 'bottom 0.3s ease'; }
+            },
+
             openPanel() {
                 this.panel.classList.add('open');
                 this.button.classList.add('active');
@@ -906,6 +917,8 @@ inject();
                     this.panelState = 'full';
                 }
                 this._startTimeline();
+                // Wait for CSS transition to settle before measuring height
+                requestAnimationFrame(() => this._adjustOverlayPanels());
             },
 
             closePanel() {
@@ -914,6 +927,7 @@ inject();
                 if (!this.isPlaying) this.button.classList.remove('active');
                 this.panelState = 'closed';
                 this._stopTimeline();
+                this._adjustOverlayPanels();
             },
 
             collapsePanel() {
@@ -923,6 +937,7 @@ inject();
                 this.panelState = 'mini';
                 this.lastOpenState = 'mini';
                 this._syncMiniControls();
+                requestAnimationFrame(() => this._adjustOverlayPanels());
             },
 
             expandPanel() {
@@ -931,6 +946,7 @@ inject();
                 this.panel.classList.remove('state-mini');
                 this.panelState = 'full';
                 this.lastOpenState = 'full';
+                requestAnimationFrame(() => this._adjustOverlayPanels());
             },
 
             toggle() {
@@ -2487,24 +2503,11 @@ inject();
         // WebSocket client for Clawdbot integration with chat + TTS
         class ClawdBotMode {
             stripReasoningTokens(text) {
-                // GPT-OSS-120B outputs reasoning before the answer
-                // Strip everything before the last actual response
+                // NOTE: Only strip NO_REPLY markers. The old GPT-OSS-120B reasoning
+                // patterns ("I should", "The user", "They say") were matching normal
+                // Z.AI/claude response text and nuking it from the transcript panel.
                 if (!text) return text;
-
-                // Look for common reasoning patterns and remove them
-                const reasoningPatterns = [
-                    /^.*?I should.*?\./s,
-                    /^.*?NO_REPLY.*?\./s,
-                    /^.*?The user.*?\./s,
-                    /^.*?They say.*?\./s
-                ];
-
-                let cleaned = text;
-                for (const pattern of reasoningPatterns) {
-                    cleaned = cleaned.replace(pattern, '');
-                }
-
-                return cleaned.trim();
+                return text.replace(/NO_REPLY/g, '').trim();
             }
 
             constructor(config, sharedSTT = null) {
@@ -3143,7 +3146,18 @@ inject();
                                     const cleanedResponse = this.stripReasoningTokens(fullResponse);
                                     const displayText = stripCanvasTags(cleanedResponse);
 
-                                    if (displayText && displayText === this._lastResponse) {
+                                    // Empty response fallback — show message and re-enable mic
+                                    if (!displayText || !displayText.trim()) {
+                                        console.warn('[text_done] Empty response — showing fallback');
+                                        const fallback = "Sorry, I couldn't process that. Could you try again?";
+                                        TranscriptPanel.finalizeStreaming(fallback);
+                                        ActionConsole.addEntry('error', 'Empty response from agent');
+                                        // Don't send fallback to TTS — just re-enable mic
+                                        reader.cancel();
+                                        return;
+                                    }
+
+                                    if (displayText === this._lastResponse) {
                                         console.log('Skipping duplicate response');
                                         TranscriptPanel.finalizeStreaming(null);
                                         reader.cancel();
@@ -5465,6 +5479,14 @@ inject();
                     }
                 });
 
+                // Canvas error bridge: catch JS errors from sandboxed canvas pages
+                window.addEventListener('message', (event) => {
+                    if (!event.data || event.data.type !== 'canvas-error') return;
+                    const { error, source, line, col } = event.data;
+                    console.error(`[Canvas JS Error] ${error} at ${source}:${line}:${col}`);
+                    ActionConsole.addEntry('error', `Canvas JS: ${error} (line ${line})`);
+                });
+
                 // Auto-refresh polling: detect when agent edits the current canvas page
                 this._pollInterval = null;
                 this._lastMtime = null;
@@ -5528,6 +5550,7 @@ inject();
                     }
                     this.container.style.display = 'block';
                     this.isVisible = true;
+                    document.body.classList.add('canvas-active');
                     document.getElementById('canvas-button')?.classList.add('active');
                     console.log('Canvas shown');
                 }
@@ -5537,6 +5560,7 @@ inject();
                 if (this.container) {
                     this.container.style.display = 'none';
                     this.isVisible = false;
+                    document.body.classList.remove('canvas-active');
                     document.getElementById('canvas-button')?.classList.remove('active');
                     console.log('Canvas hidden');
                 }
@@ -7445,8 +7469,11 @@ inject();
                     if (this._holding) { this._holding = false; this._releaseMic(); }
                 });
 
-                btn.addEventListener('pointerleave', () => {
-                    if (this._holding) {
+                btn.addEventListener('pointerleave', (e) => {
+                    // On mobile, pointerleave fires when finger shifts slightly during tap.
+                    // Only cancel if we DON'T have pointer capture (setPointerCapture prevents this
+                    // on most browsers, but iOS Safari can be inconsistent).
+                    if (this._holding && !btn.hasPointerCapture?.(e.pointerId)) {
                         clearTimeout(this._holdTimer);
                         this._holding = false;
                         this._releaseMic();
