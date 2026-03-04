@@ -54,13 +54,13 @@ const SHELL_HTML = `
     </div>
 
     <!-- Canvas System - Full Screen Visual Display -->
-    <div id="canvas-container" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 100; background: #000;">
+    <div id="canvas-container" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 150; background: #000; touch-action: manipulation;">
         <iframe
             id="canvas-iframe"
             src="about:blank"
             data-canvas-src=""
             sandbox="allow-same-origin allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-top-navigation-by-user-activation"
-            style="width: 100vw; height: 100vh; border: none; display: block;"
+            style="width: 100vw; height: 100vh; border: none; display: block; touch-action: manipulation;"
             allow="autoplay; fullscreen">
         </iframe>
     </div>

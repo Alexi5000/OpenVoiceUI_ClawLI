@@ -24,7 +24,7 @@ class WebSpeechSTT {
 
         // Silence detection for continuous listening
         this.silenceTimer = null;
-        this.silenceDelayMs = 3000; // 3 seconds of silence before sending
+        this.silenceDelayMs = 3500; // 3.5s — 3s was cutting people off mid-sentence
         this.accumulatedText = '';
         this.isProcessing = false;
 

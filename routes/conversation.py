@@ -180,10 +180,14 @@ def _save_session_counter(counter: int) -> None:
 
 
 def get_voice_session_key() -> str:
-    """Return the current voice session key, e.g. 'voice-main-6'.
+    """Return the current voice session key.
 
-    Result is cached in memory (FIND-02: avoids file I/O on every request).
-    Cache is invalidated by bump_voice_session().
+    Uses a STABLE key (no incrementing counter) so the Z.AI prompt cache
+    stays warm across session resets.  OpenClaw's daily reset handles context
+    clearing — we don't need a new key for that.
+
+    Priority: GATEWAY_SESSION_KEY env → VOICE_SESSION_PREFIX env → 'voice-main'
+    Cache is invalidated by bump_voice_session() (explicit agent reset only).
     """
     global _session_key_cache
     if _session_key_cache is not None:
@@ -191,14 +195,13 @@ def get_voice_session_key() -> str:
     with _session_key_lock:
         if _session_key_cache is not None:
             return _session_key_cache
-        try:
-            with open(VOICE_SESSION_FILE, 'r') as f:
-                counter = int(f.read().strip())
-        except (FileNotFoundError, ValueError):
-            counter = 6  # default as of Feb 2026
-            _save_session_counter(counter)
-        _prefix = os.getenv('VOICE_SESSION_PREFIX', 'voice-main')
-        _session_key_cache = f'{_prefix}-{counter}'
+        # Use GATEWAY_SESSION_KEY if set (unique per user), else prefix
+        _gw_key = os.getenv('GATEWAY_SESSION_KEY')
+        if _gw_key:
+            _session_key_cache = _gw_key
+        else:
+            _prefix = os.getenv('VOICE_SESSION_PREFIX', 'voice-main')
+            _session_key_cache = _prefix
     return _session_key_cache
 
 
@@ -537,6 +540,7 @@ def _conversation_inner():
         )
 
     # Build context prefix from UI state
+    t_context_start = time.time()
     context_prefix = ''
     context_parts = []
 
@@ -651,12 +655,27 @@ def _conversation_inner():
             '[DJ sounds: air_horn, scratch_long, rewind, record_stop, '
             'crowd_cheer, crowd_hype, yeah, lets_go, gunshot, bruh, sad_trombone]'
         )
+    # Inject active profile's custom system_prompt (admin editor → runtime)
+    try:
+        from profiles.manager import get_profile_manager
+        from routes.profiles import _active_profile_id
+        _mgr = get_profile_manager()
+        _prof = _mgr.get_profile(_active_profile_id)
+        if _prof and _prof.system_prompt and _prof.system_prompt.strip():
+            context_parts.append(f'[PROFILE INSTRUCTIONS: {_prof.system_prompt.strip()}]')
+    except Exception:
+        pass  # Profile system not available — skip gracefully
+
     # Inject voice assistant instructions so the agent knows about action tags.
     # This must be in-app (not workspace files) so it works out of the box.
     context_parts.append(_VOICE_INSTRUCTIONS)
 
     if context_parts:
         context_prefix = ' '.join(context_parts) + ' '
+
+    t_context_ms = int((time.time() - t_context_start) * 1000)
+    if t_context_ms > 50:
+        logger.info(f"### CONTEXT BUILD TIMING: {t_context_ms}ms ({len(context_parts)} parts, {len(context_prefix)} chars)")
 
     log_conversation('user', user_message, session_id=session_id,
                      tts_provider=tts_provider, voice=voice)
@@ -705,7 +724,7 @@ def _conversation_inner():
             if wants_stream:
                 # ── STREAMING MODE ────────────────────────────────────────
                 def stream_response():
-                    nonlocal ai_response
+                    nonlocal ai_response, event_queue, t_llm_start
 
                     # ── TTS helpers ───────────────────────────────────────
                     try:
@@ -760,12 +779,21 @@ def _conversation_inner():
                         result = {'audio': None, 'error': None}
                         def _run():
                             try:
+                                t0 = time.time()
                                 cleaned = clean_for_tts(raw_text)
+                                t_clean = time.time()
                                 if cleaned and cleaned.strip():
                                     result['audio'] = _tts_generate_b64(
                                         cleaned, voice=voice or 'M1',
                                         tts_provider=tts_provider
                                     )
+                                t_done = time.time()
+                                logger.info(
+                                    f"### TTS TIMING: clean={int((t_clean-t0)*1000)}ms "
+                                    f"generate={int((t_done-t_clean)*1000)}ms "
+                                    f"total={int((t_done-t0)*1000)}ms "
+                                    f"text={len(cleaned or '')} chars"
+                                )
                             except Exception as e:
                                 result['error'] = str(e)
                             finally:
@@ -803,6 +831,26 @@ def _conversation_inner():
                         if evt['type'] == 'heartbeat':
                             logger.info(f"### HEARTBEAT → browser ({evt.get('elapsed', 0)}s)")
                             yield json.dumps({'type': 'heartbeat', 'elapsed': evt.get('elapsed', 0)}) + '\n'
+                            # Flush any TTS that finished during tool execution —
+                            # without this, audio sits in _tts_pending for the
+                            # entire duration of tool calls (30-60s+ silence).
+                            while _tts_pending and _tts_pending[0][0].is_set():
+                                _done_evt, _res = _tts_pending.pop(0)
+                                if _res.get('error'):
+                                    yield _tts_error_event(_res['error'])
+                                elif _res.get('audio'):
+                                    yield json.dumps({
+                                        'type': 'audio',
+                                        'audio': _res['audio'],
+                                        'audio_format': _audio_fmt,
+                                        'chunk': _chunks_sent,
+                                        'total_chunks': None,
+                                        'timing': {
+                                            'tts_ms': 0,
+                                            'total_ms': int((time.time() - t_request_start) * 1000),
+                                        },
+                                    }) + '\n'
+                                    _chunks_sent += 1
                             continue
 
                         if evt['type'] == 'delta':
@@ -925,24 +973,45 @@ def _conversation_inner():
                                 }
                             }) + '\n'
 
-                            # Auto-reset on consecutive empty responses
+                            # ── Retry once on instant empty response ──
+                            # When the gateway returns empty in <500ms, the
+                            # LLM never ran (rate limit / stale state).
+                            # Retry once after a short pause before giving up.
                             global _consecutive_empty_responses
-                            if not full_response or not full_response.strip():
-                                _consecutive_empty_responses += 1
-                                if _consecutive_empty_responses >= 3:
-                                    old_key = get_voice_session_key()
-                                    new_key = bump_voice_session()
-                                    logger.warning(
-                                        f'### AUTO-RESET: {_consecutive_empty_responses} '
-                                        f'consecutive empty responses. {old_key} → {new_key}'
+                            _is_empty = not full_response or not full_response.strip()
+                            if _is_empty and metrics.get('llm_inference_ms', 9999) < 500 \
+                                    and not getattr(stream_response, '_retried', False):
+                                stream_response._retried = True
+                                logger.warning(
+                                    f"### EMPTY RESPONSE in {metrics['llm_inference_ms']}ms "
+                                    f"— retrying once after 2s pause..."
+                                )
+                                yield json.dumps({'type': 'heartbeat'}) + '\n'
+                                time.sleep(2)
+                                # Re-send the same message through the gateway
+                                retry_queue = queue.Queue()
+                                captured_actions.clear()
+                                def _retry_gateway():
+                                    gateway_manager.stream_to_queue(
+                                        retry_queue, message_with_context,
+                                        _session_key, captured_actions,
+                                        gateway_id=gateway_id,
+                                        agent_id=agent_id,
                                     )
-                                    yield json.dumps({
-                                        'type': 'session_reset',
-                                        'old': old_key, 'new': new_key,
-                                        'reason': 'consecutive_empty'
-                                    }) + '\n'
-                            else:
-                                _consecutive_empty_responses = 0
+                                retry_thread = threading.Thread(
+                                    target=_retry_gateway, daemon=True
+                                )
+                                t_llm_start = time.time()
+                                retry_thread.start()
+                                # Swap the event queue so the main loop reads
+                                # from the retry queue from now on.
+                                event_queue = retry_queue
+                                logger.info("### RETRY: re-sent message to gateway")
+                                continue  # back to event loop
+
+                            # Auto-reset removed — loop detection (Phase 1 config)
+                            # handles stuck agents; consecutive empties no longer
+                            # trigger a session key bump that would cold-cache Z.AI.
 
                             # Handle [SESSION_RESET] trigger from agent
                             if full_response and '[SESSION_RESET]' in full_response:

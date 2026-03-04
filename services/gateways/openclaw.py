@@ -778,11 +778,23 @@ class GatewayConnection:
                         event_queue.put({'type': 'text_done', 'response': final_text, 'actions': captured_actions})
                         return
 
-                    if subagent_active or main_lifecycle_ended:
+                    # Also check if any captured actions suggest subagent activity
+                    # even if the subagent_active flag wasn't set (tool name mismatch)
+                    _has_subagent_tools = any(
+                        a.get('type') == 'tool' and a.get('name', '') in (
+                            'sessions_spawn', 'sessions-spawn', 'spawn_subagent',
+                            'agent_send', 'agent-send',
+                        )
+                        for a in captured_actions
+                    )
+                    if subagent_active or main_lifecycle_ended or _has_subagent_tools:
                         logger.info("### chat.final with no text — subagent mode, waiting for announce-back...")
                         chat_final_seen = False
                         lifecycle_ended = False
                         prev_text_len = 0
+                        if _has_subagent_tools and not subagent_active:
+                            subagent_active = True
+                            logger.info("### SUBAGENT detected via captured_actions (late detection)")
                         continue
                     else:
                         logger.warning("### chat.final with no text (no subagent)")

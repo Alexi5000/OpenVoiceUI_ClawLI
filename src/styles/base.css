@@ -647,7 +647,7 @@
             justify-content: center;
             font-size: 24px;
             transition: all 0.3s;
-            z-index: 200;
+            z-index: 9999;
         }
         .transcript-button:hover {
             border-color: var(--blue-bright);
@@ -670,7 +670,7 @@
             right: 10px;
             width: 380px;
             max-height: 50vh;
-            z-index: 200;
+            z-index: 9999;
             background: rgba(0, 0, 0, 0.95);
             backdrop-filter: blur(10px);
             border: 1px solid rgba(0, 136, 255, 0.3);
@@ -757,19 +757,21 @@
             #transcript-panel { width: calc(100vw - 40px); right: 20px; }
             .controls-left, .controls-right { gap: 2px; }
             .edge-tab {
-                width: 32px;
-                height: 40px;
-                font-size: 14px;
+                width: 44px;
+                min-width: 44px;
+                height: 48px;
+                min-height: 48px;
+                font-size: 16px;
             }
-            .edge-tab:hover { width: 38px; }
+            .edge-tab:hover { width: 48px; }
             #canvas-menu-button {
-                width: 32px;
-                height: 32px;
+                width: 36px;
+                height: 36px;
                 font-size: 14px;
             }
             .transcript-button {
-                width: 32px;
-                height: 32px;
+                width: 36px;
+                height: 36px;
                 font-size: 16px;
             }
         }
@@ -949,14 +951,13 @@
             position: fixed;
             bottom: 0;
             left: 50%;
-            transform: translateX(-50%) translateY(100%);
             max-width: 520px;
             width: calc(100% - 128px);
             background: rgba(5, 10, 20, 0.97);
             border: 1px solid rgba(0, 229, 255, 0.25);
             border-bottom: none;
             border-radius: 14px 14px 0 0;
-            transform: translateY(100%);
+            transform: translateX(-50%) translateY(100%);
             transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             z-index: 100;
             overflow: hidden;
@@ -1449,6 +1450,12 @@
             display: flex;
             flex-direction: column;
             align-items: center;
+            pointer-events: none;
+        }
+
+        .settings-drawer .settings-tab,
+        .settings-drawer.open .settings-panel {
+            pointer-events: auto;
         }
 
         .settings-tab {

@@ -18,6 +18,7 @@ export class TTSPlayer {
     constructor() {
         // AudioContext-based path (used by VoiceConversation / direct TTS)
         this.audioContext = null;
+        this.gainNode = null;
         this.analyser = null;
         this.analyserData = null;
         this.analyserAnimationId = null;
@@ -27,6 +28,11 @@ export class TTSPlayer {
         this.audioQueue = [];
         this.currentAudio = null;   // HTMLAudioElement
         this.isPlaying = false;
+
+        // Volume boost — iOS Safari web audio is quieter than native apps.
+        // GainNode values > 1.0 amplify the signal. Default 1.5x on mobile, 1.0x desktop.
+        this._isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        this.gain = this._isMobile ? 1.8 : 1.0;
 
         // Callbacks
         this.onAmplitude = null;        // (value: 0-1) => void
@@ -41,11 +47,30 @@ export class TTSPlayer {
         if (this.audioContext) return;
 
         this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+        // GainNode for volume boost (especially on mobile where web audio is quieter)
+        this.gainNode = this.audioContext.createGain();
+        this.gainNode.gain.value = this.gain;
+
         this.analyser = this.audioContext.createAnalyser();
         this.analyser.fftSize = 256;
         this.analyser.smoothingTimeConstant = 0.3;
         this.analyserData = new Uint8Array(this.analyser.frequencyBinCount);
+
+        // Chain: source → gainNode → analyser → destination
+        this.gainNode.connect(this.analyser);
         this.analyser.connect(this.audioContext.destination);
+    }
+
+    /**
+     * Set TTS volume gain (1.0 = normal, 2.0 = 2x boost).
+     * Values above 1.0 amplify the signal for quieter devices.
+     */
+    setGain(value) {
+        this.gain = Math.max(0, Math.min(3.0, value));
+        if (this.gainNode) {
+            this.gainNode.gain.value = this.gain;
+        }
     }
 
     /**
@@ -84,7 +109,7 @@ export class TTSPlayer {
 
                     const source = this.audioContext.createBufferSource();
                     source.buffer = audioBuffer;
-                    source.connect(this.analyser);
+                    source.connect(this.gainNode);
 
                     source.onended = () => {
                         this._stopAnalyserAnimation();
@@ -160,6 +185,19 @@ export class TTSPlayer {
         this.currentAudio = this.audioQueue.shift();
         this.isPlaying = true;
         this._notifySpeaking(true);
+
+        // Route HTMLAudioElement through AudioContext gain for volume boost
+        if (this.gainNode && this.audioContext) {
+            try {
+                if (!this.currentAudio._mediaSource) {
+                    this.currentAudio._mediaSource = this.audioContext.createMediaElementSource(this.currentAudio);
+                    this.currentAudio._mediaSource.connect(this.gainNode);
+                }
+            } catch (e) {
+                // Fallback: if AudioContext routing fails, just play directly
+                console.warn('[TTSPlayer] MediaElementSource fallback:', e.message);
+            }
+        }
 
         const promise = this.currentAudio.play();
         if (promise) {
