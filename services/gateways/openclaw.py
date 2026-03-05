@@ -703,6 +703,13 @@ class GatewayConnection:
                             'sessionKey': sk, 'ts': time.time()
                         }})
 
+                    if phase == 'error' and not is_subagent:
+                        error_msg = payload.get('data', {}).get('error', 'Unknown LLM error')
+                        logger.error(f"### LIFECYCLE ERROR: {error_msg}")
+                        event_queue.put({'type': 'text_done', 'response': None, 'actions': captured_actions,
+                                         'error': error_msg})
+                        return
+
                     if phase == 'end' and not is_subagent:
                         lifecycle_ended = True
                         if subagent_active:
@@ -730,6 +737,13 @@ class GatewayConnection:
                     logger.info(f"### RUN ABORTED: runId={payload.get('runId', '?')[:12]} "
                                 f"reason={payload.get('stopReason', '?')}")
                     continue
+
+                if payload.get('state') == 'error':
+                    error_msg = payload.get('errorMessage', 'Unknown error')
+                    logger.error(f"### CHAT ERROR: {error_msg}")
+                    event_queue.put({'type': 'text_done', 'response': None, 'actions': captured_actions,
+                                     'error': error_msg})
+                    return
 
                 if payload.get('state') == 'final':
                     logger.info(f"### CHAT FINAL payload: {json.dumps(payload)[:1500]}")
