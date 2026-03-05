@@ -38,8 +38,8 @@ window.FaceRenderer = {
             return;
         }
 
-        // Load saved mode
-        const savedMode = localStorage.getItem('ai-face-mode');
+        // Load saved mode from server profile (shared across devices)
+        const savedMode = window._serverProfile?.ui?.face_mode;
         if (savedMode && this.modes[savedMode]) {
             this.currentMode = savedMode;
         }
@@ -65,7 +65,17 @@ window.FaceRenderer = {
         this.cleanup();
 
         this.currentMode = modeName;
-        localStorage.setItem('ai-face-mode', modeName);
+        // Persist to server profile
+        const profileId = window.providerManager?._activeProfileId || 'default';
+        fetch('/api/profiles/' + profileId, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ui: { face_mode: modeName } })
+        }).catch(e => console.warn('Failed to save face mode:', e));
+        if (window._serverProfile) {
+            if (!window._serverProfile.ui) window._serverProfile.ui = {};
+            window._serverProfile.ui.face_mode = modeName;
+        }
 
         // Re-render
         this.render();

@@ -21,8 +21,8 @@ inject();
             serverUrl: (window.AGENT_CONFIG?.serverUrl || window.location.origin).replace(/\/$/, ''),
 
             // TTS provider to use: 'supertonic', 'hume', 'elevenlabs', 'openai', etc.
-            ttsProvider: 'supertonic',
-            ttsVoice: 'F3',
+            ttsProvider: 'groq',
+            ttsVoice: 'autumn',
 
             // Hume EVI config (loaded from server)
             hume: {
@@ -35,12 +35,26 @@ inject();
         const ProviderManager = {
             selectedProvider: null,
             providers: [],
-            currentVoice: 'F3',
+            currentVoice: 'autumn',
+            _activeProfileId: 'default',
 
             async init() {
-                // Load provider selection from localStorage, default to 'supertonic'
-                this.selectedProvider = localStorage.getItem('voice_provider') || 'supertonic';
-                this.currentVoice = localStorage.getItem('voice_voice') || 'F3';
+                // Load from server profile (shared across all devices for this deployment)
+                try {
+                    const resp = await fetch(CONFIG.serverUrl + '/api/profiles/active');
+                    if (resp.ok) {
+                        const profile = await resp.json();
+                        this._activeProfileId = profile.id || 'default';
+                        this.selectedProvider = profile.voice?.tts_provider || 'groq';
+                        this.currentVoice = profile.voice?.voice_id || 'autumn';
+                        // Expose profile globally so face/theme modules can read it
+                        window._serverProfile = profile;
+                    }
+                } catch (e) {
+                    console.warn('Failed to load server profile, using defaults:', e);
+                    this.selectedProvider = 'groq';
+                    this.currentVoice = 'autumn';
+                }
 
                 await this.loadProviders();
                 this.initProviderUI();
@@ -139,7 +153,7 @@ inject();
                 if (providerId === this.selectedProvider) return;
 
                 this.selectedProvider = providerId;
-                localStorage.setItem('voice_provider', providerId);
+                this._saveVoiceToProfile();
 
                 // Update VoiceConversation if it exists
                 if (window.voiceAgent && window.voiceAgent.setTTSProvider) {
@@ -154,12 +168,21 @@ inject();
 
             setVoice(voice) {
                 this.currentVoice = voice;
-                localStorage.setItem('voice_voice', voice);
+                this._saveVoiceToProfile();
 
                 // Update voice agent if connected
                 if (window.voiceAgent && window.voiceAgent.setTTSProvider) {
                     window.voiceAgent.setTTSProvider(this.selectedProvider, voice);
                 }
+            },
+
+            _saveVoiceToProfile() {
+                // Persist to server profile so all devices see the same settings
+                fetch(CONFIG.serverUrl + '/api/profiles/' + this._activeProfileId, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ voice: { tts_provider: this.selectedProvider, voice_id: this.currentVoice } })
+                }).catch(e => console.warn('Failed to save voice to profile:', e));
             }
         };
 
@@ -2874,8 +2897,8 @@ inject();
                 // Send via HTTP POST - server connects to Gateway, generates TTS, returns response
                 let _inactivityTimer = null;  // declared here so finally block can clear it
                 try {
-                    const provider = localStorage.getItem('voice_provider') || 'supertonic';
-                    const voice = localStorage.getItem('voice_voice') || 'M1';
+                    const provider = window.providerManager?.selectedProvider || 'groq';
+                    const voice = window.providerManager?.currentVoice || 'autumn';
                     const uiContext = this.getUIContext();
 
                     const gatewayAgentId = localStorage.getItem('gateway_agent_id') || null;
@@ -3876,7 +3899,8 @@ inject();
                     // Supertonic mode: STT + Clawdbot LLM, TTS = whatever user chose
                     // Restore saved TTS provider (don't hardcode supertonic — user may have chosen Groq)
                     if (window.providerManager) {
-                        const savedProvider = localStorage.getItem('voice_provider') || 'supertonic';
+                        const savedProvider = window.providerManager.selectedProvider || 'groq';
+                        // Provider already set from server profile — just ensure UI is in sync
                         window.providerManager.switchProvider(savedProvider);
                     }
                     // Show Clawdbot UI and connect
@@ -5153,11 +5177,13 @@ inject();
 
         // ===== MAIN INITIALIZATION =====
         async function init() {
-            // One-time migration: reset old defaults to supertonic/clawdbot (v3)
-            if (localStorage.getItem('settings_v') !== '3') {
+            // One-time migration: clear stale localStorage voice settings (v4)
+            // Voice/provider now come from server profile, not localStorage
+            if (localStorage.getItem('settings_v') !== '4') {
+                localStorage.removeItem('voice_provider');
+                localStorage.removeItem('voice_voice');
                 localStorage.setItem('voice_mode', 'supertonic');
-                localStorage.setItem('voice_provider', 'supertonic');
-                localStorage.setItem('settings_v', '3');
+                localStorage.setItem('settings_v', '4');
             }
 
             console.log('Initializing OpenVoiceUI...');

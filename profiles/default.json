@@ -67,6 +67,7 @@
     "theme": "dark",
     "theme_preset": "blue",
     "face_enabled": true,
+    "face_mode": "halo-smoke",
     "face_mood": "neutral",
     "transcript_panel": true,
     "thought_bubbles": false,

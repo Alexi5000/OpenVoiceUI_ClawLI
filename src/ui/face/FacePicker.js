@@ -20,19 +20,30 @@ const STORAGE_KEY  = 'ai-face-active';
 // ── helpers ────────────────────────────────────────────────────────────────
 
 function getActiveFaceId() {
-    // ES module faceManager takes priority; fall back to legacy localStorage key
+    // ES module faceManager takes priority
     try {
         if (window._faceManager?.activeFaceId) return window._faceManager.activeFaceId;
     } catch (_) {}
+    // Server profile is source of truth
     try {
-        return localStorage.getItem(STORAGE_KEY) || localStorage.getItem('ai-face-mode') || 'eyes';
-    } catch (_) {
-        return 'eyes';
-    }
+        if (window._serverProfile?.ui?.face_mode) return window._serverProfile.ui.face_mode;
+    } catch (_) {}
+    return 'eyes';
 }
 
 function persistFaceId(id) {
-    try { localStorage.setItem(STORAGE_KEY, id); } catch (_) {}
+    // Save to server profile so all devices see the same face
+    const profileId = window.providerManager?._activeProfileId || 'default';
+    fetch('/api/profiles/' + profileId, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ui: { face_mode: id } })
+    }).catch(e => console.warn('Failed to save face to profile:', e));
+    // Update cached profile
+    if (window._serverProfile) {
+        if (!window._serverProfile.ui) window._serverProfile.ui = {};
+        window._serverProfile.ui.face_mode = id;
+    }
 }
 
 async function loadManifest() {
