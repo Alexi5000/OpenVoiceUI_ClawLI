@@ -16,14 +16,17 @@ Agent trigger:
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
+import socket
 import threading
 import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests as http_requests
 from flask import Blueprint, jsonify, request
@@ -59,6 +62,27 @@ completed_songs_queue: list = []  # [{song_id, title, job_id, completed_at, url}
 _suno_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
+
+
+def _is_safe_download_url(url: str) -> bool:
+    """Reject URLs that point to private/reserved IP ranges (SSRF protection)."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname or parsed.scheme not in ('http', 'https'):
+            return False
+        # Resolve hostname to IP and check if private/reserved
+        for info in socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP):
+            addr = info[4][0]
+            ip = ipaddress.ip_address(addr)
+            if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local:
+                logger.warning(f'SSRF blocked: {url} resolves to private IP {addr}')
+                return False
+        return True
+    except (ValueError, socket.gaierror, OSError) as exc:
+        logger.warning(f'SSRF check failed for {url}: {exc}')
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Blueprint
@@ -107,6 +131,28 @@ def _add_song_to_metadata(filename: str, title: str, prompt: str, style: str,
         'suno_id': song_id,
     }
     _save_generated_metadata(metadata)
+
+
+def _slugify_title(title: str) -> str:
+    """Convert a song title to a safe filename slug (no extension)."""
+    import re
+    import unicodedata
+    # Normalize unicode (e.g., smart quotes → ascii)
+    s = unicodedata.normalize('NFKD', title).encode('ascii', 'ignore').decode('ascii')
+    # Lowercase, replace non-alnum with hyphens, collapse multiples, strip edges
+    s = re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-')
+    return s[:80] or 'generated-track'
+
+
+def _unique_filename(directory: Path, base: str, ext: str = '.mp3') -> str:
+    """Return a unique filename in directory, appending -2, -3, etc. if needed."""
+    candidate = f'{base}{ext}'
+    if not (directory / candidate).exists():
+        return candidate
+    counter = 2
+    while (directory / f'{base}-{counter}{ext}').exists():
+        counter += 1
+    return f'{base}-{counter}{ext}'
 
 
 def _guess_genre(text: str) -> str:
@@ -363,10 +409,13 @@ def _action_status(job_id: str):
                         song_id = song.get('id', task_id)
                         song_title = song.get('title') or job.get('title') or 'Generated Track'
                         duration = song.get('duration', 0)
-                        filename = f'{song_id}.mp3'
+                        slug = _slugify_title(song_title)
+                        filename = _unique_filename(GENERATED_MUSIC_DIR, slug)
                         save_path = GENERATED_MUSIC_DIR / filename
 
                         if not save_path.exists():
+                            if not _is_safe_download_url(audio_url):
+                                continue
                             audio_resp = http_requests.get(audio_url, timeout=60, stream=True)
                             if audio_resp.status_code == 200:
                                 content_length = int(audio_resp.headers.get('Content-Length', 0))
@@ -503,10 +552,13 @@ def suno_callback():
                     song_id = song.get('id', task_id)
                     song_title = song.get('title', 'Generated Track')
                     duration = song.get('duration', 0)
-                    filename = f'{song_id}.mp3'
+                    slug = _slugify_title(song_title)
+                    filename = _unique_filename(GENERATED_MUSIC_DIR, slug)
                     save_path = GENERATED_MUSIC_DIR / filename
 
                     if audio_url and not save_path.exists():
+                        if not _is_safe_download_url(audio_url):
+                            continue
                         try:
                             audio_resp = http_requests.get(audio_url, timeout=60, stream=True)
                             if audio_resp.status_code == 200:

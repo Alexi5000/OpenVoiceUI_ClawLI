@@ -923,6 +923,12 @@ def _conversation_inner():
 
                         if evt['type'] == 'text_done':
                             logger.info(f"### TEXT_DONE received. response={len(evt.get('response', '') or '')} chars, _tts_pending={len(_tts_pending)}, _tts_buf={repr(_tts_buf[:80])}")
+                            # Handle LLM/gateway errors with a spoken fallback
+                            if evt.get('error') and not evt.get('response'):
+                                error_msg = evt['error']
+                                logger.error(f"### GATEWAY ERROR → fallback: {error_msg}")
+                                evt['response'] = "Sorry, I hit a temporary issue. Could you try that again?"
+                                metrics['fallback_used'] = 1
                             full_response = evt.get('response')
                             if full_response and max_response_chars:
                                 full_response = _truncate_at_sentence(full_response, max_response_chars)
@@ -1435,6 +1441,159 @@ def tts_generate():
         logger.error(f'TTS generate endpoint error: {e}')
         logger.error(traceback.format_exc())
         return jsonify({'error': 'Internal server error'}), 500
+
+# ---------------------------------------------------------------------------
+# POST /api/tts/clone — Clone a voice from audio
+# ---------------------------------------------------------------------------
+
+
+@conversation_bp.route('/api/tts/clone', methods=['POST'])
+def tts_clone_voice():
+    """
+    Clone a voice from an audio sample.
+
+    Accepts either:
+      - JSON: {"audio_url": "...", "name": "...", "reference_text": "..."}
+      - Multipart form: audio file + name field
+
+    Returns: JSON with voice_id, name, embedding metadata.
+    """
+    try:
+        provider = get_provider('qwen3')
+        if not provider.is_available():
+            return jsonify({'error': 'Qwen3 provider not available (FAL_KEY not set)'}), 503
+
+        # JSON mode (audio already hosted at a URL)
+        if request.is_json:
+            data = request.get_json()
+            audio_url = data.get('audio_url', '').strip()
+            name = data.get('name', '').strip()
+            reference_text = data.get('reference_text', '').strip() or None
+
+            if not audio_url:
+                return jsonify({'error': 'audio_url is required'}), 400
+            if not name:
+                return jsonify({'error': 'name is required'}), 400
+
+        # Multipart form mode (upload audio file directly)
+        elif 'audio' in request.files:
+            from services.paths import UPLOADS_DIR
+            import uuid
+
+            audio_file = request.files['audio']
+            name = request.form.get('name', '').strip()
+            reference_text = request.form.get('reference_text', '').strip() or None
+
+            if not name:
+                return jsonify({'error': 'name field is required'}), 400
+            if not audio_file.filename:
+                return jsonify({'error': 'Empty audio file'}), 400
+
+            # Save upload
+            ext = Path(audio_file.filename).suffix.lower()
+            if ext not in ('.wav', '.mp3', '.m4a', '.ogg', '.webm', '.flac'):
+                return jsonify({'error': f'Unsupported audio format: {ext}'}), 400
+
+            safe_name = f"voice_clone_{uuid.uuid4().hex[:12]}{ext}"
+            UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+            save_path = UPLOADS_DIR / safe_name
+            audio_file.save(str(save_path))
+
+            # Build public URL for fal.ai to fetch
+            audio_url = f"{request.host_url.rstrip('/')}/uploads/{safe_name}"
+        else:
+            return jsonify({
+                'error': 'Send JSON with audio_url or multipart form with audio file'
+            }), 400
+
+        logger.info(f"Voice clone request: name='{name}', url={audio_url[:80]}")
+        result = provider.clone_voice(
+            audio_url=audio_url,
+            name=name,
+            reference_text=reference_text,
+        )
+
+        return jsonify({
+            'status': 'ok',
+            'voice_id': result['voice_id'],
+            'name': result['name'],
+            'created_at': result['created_at'],
+            'clone_time_ms': result['clone_time_ms'],
+            'embedding_size': result['embedding_size'],
+            'usage': (
+                f'Use voice_id "{result["voice_id"]}" in /api/tts/generate '
+                f'with provider=qwen3'
+            ),
+        })
+
+    except RuntimeError as e:
+        logger.error(f"Voice clone failed: {e}")
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        import traceback
+        logger.error(f"Voice clone error: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': 'Internal server error'}), 500
+
+
+# ---------------------------------------------------------------------------
+# GET /api/tts/voices — List all voices (built-in + cloned) across providers
+# ---------------------------------------------------------------------------
+
+
+@conversation_bp.route('/api/tts/voices', methods=['GET'])
+def tts_voices_list():
+    """List all available voices across all providers, including cloned voices."""
+    try:
+        all_voices = {}
+        for provider_info in list_providers(include_inactive=False):
+            pid = provider_info.get('provider_id', provider_info.get('name', 'unknown'))
+            voices = provider_info.get('voices', [])
+            cloned = provider_info.get('cloned_voices', [])
+            all_voices[pid] = {
+                'builtin': voices,
+                'cloned': cloned,
+            }
+        return jsonify({'voices': all_voices})
+    except Exception as e:
+        logger.error(f"Failed to list voices: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/tts/voices/<voice_id> — Retire a cloned voice
+# ---------------------------------------------------------------------------
+
+
+@conversation_bp.route('/api/tts/voices/<voice_id>', methods=['DELETE'])
+def tts_delete_voice(voice_id):
+    """Retire a cloned voice embedding (renamed, not deleted)."""
+    try:
+        if not voice_id.startswith('clone_'):
+            return jsonify({'error': 'Can only retire cloned voices (clone_*)'}), 400
+
+        from services.paths import VOICE_CLONES_DIR
+        voice_dir = VOICE_CLONES_DIR / voice_id
+
+        # Validate path doesn't escape
+        try:
+            voice_dir.resolve().relative_to(VOICE_CLONES_DIR.resolve())
+        except ValueError:
+            return jsonify({'error': 'Invalid voice_id'}), 400
+
+        if not voice_dir.exists():
+            return jsonify({'error': f'Voice {voice_id} not found'}), 404
+
+        # Rename to .retired instead of removing (NEVER DELETE rule)
+        renamed = voice_dir.with_name(voice_dir.name + '.retired')
+        voice_dir.rename(renamed)
+        logger.info(f"Cloned voice retired: {voice_id}")
+
+        return jsonify({'status': 'ok', 'voice_id': voice_id, 'action': 'retired'})
+    except Exception as e:
+        logger.error(f"Failed to retire voice {voice_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+
 
 # ---------------------------------------------------------------------------
 # POST /api/supertonic-tts  (DEPRECATED — use /api/tts/generate)

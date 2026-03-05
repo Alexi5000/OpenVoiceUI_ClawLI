@@ -12,6 +12,7 @@ import { inject } from './ui/AppShell.js';
 inject();
 
         import { WebSpeechSTT, WakeWordDetector } from '/src/providers/WebSpeechSTT.js';
+        import { GroqSTT, GroqWakeWordDetector } from '/src/providers/GroqSTT.js';
 
         // ===== CONFIGURATION =====
         const CONFIG = {
@@ -21,8 +22,8 @@ inject();
             serverUrl: (window.AGENT_CONFIG?.serverUrl || window.location.origin).replace(/\/$/, ''),
 
             // TTS provider to use: 'supertonic', 'hume', 'elevenlabs', 'openai', etc.
-            ttsProvider: 'supertonic',
-            ttsVoice: 'F3',
+            ttsProvider: 'groq',
+            ttsVoice: 'autumn',
 
             // Hume EVI config (loaded from server)
             hume: {
@@ -35,12 +36,26 @@ inject();
         const ProviderManager = {
             selectedProvider: null,
             providers: [],
-            currentVoice: 'F3',
+            currentVoice: 'autumn',
+            _activeProfileId: 'default',
 
             async init() {
-                // Load provider selection from localStorage, default to 'supertonic'
-                this.selectedProvider = localStorage.getItem('voice_provider') || 'supertonic';
-                this.currentVoice = localStorage.getItem('voice_voice') || 'F3';
+                // Load from server profile (shared across all devices for this deployment)
+                try {
+                    const resp = await fetch(CONFIG.serverUrl + '/api/profiles/active');
+                    if (resp.ok) {
+                        const profile = await resp.json();
+                        this._activeProfileId = profile.id || 'default';
+                        this.selectedProvider = profile.voice?.tts_provider || 'groq';
+                        this.currentVoice = profile.voice?.voice_id || 'autumn';
+                        // Expose profile globally so face/theme modules can read it
+                        window._serverProfile = profile;
+                    }
+                } catch (e) {
+                    console.warn('Failed to load server profile, using defaults:', e);
+                    this.selectedProvider = 'groq';
+                    this.currentVoice = 'autumn';
+                }
 
                 await this.loadProviders();
                 this.initProviderUI();
@@ -139,7 +154,7 @@ inject();
                 if (providerId === this.selectedProvider) return;
 
                 this.selectedProvider = providerId;
-                localStorage.setItem('voice_provider', providerId);
+                this._saveVoiceToProfile();
 
                 // Update VoiceConversation if it exists
                 if (window.voiceAgent && window.voiceAgent.setTTSProvider) {
@@ -154,12 +169,21 @@ inject();
 
             setVoice(voice) {
                 this.currentVoice = voice;
-                localStorage.setItem('voice_voice', voice);
+                this._saveVoiceToProfile();
 
                 // Update voice agent if connected
                 if (window.voiceAgent && window.voiceAgent.setTTSProvider) {
                     window.voiceAgent.setTTSProvider(this.selectedProvider, voice);
                 }
+            },
+
+            _saveVoiceToProfile() {
+                // Persist to server profile so all devices see the same settings
+                fetch(CONFIG.serverUrl + '/api/profiles/' + this._activeProfileId, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ voice: { tts_provider: this.selectedProvider, voice_id: this.currentVoice } })
+                }).catch(e => console.warn('Failed to save voice to profile:', e));
             }
         };
 
@@ -2525,7 +2549,7 @@ inject();
 
                 // Use shared STT instance instead of creating a new one
                 // This prevents conflicts with VoiceConversation's STT
-                this.stt = sharedSTT || new WebSpeechSTT();
+                this.stt = sharedSTT || new GroqSTT();
 
                 // Wake detector state
                 this.restartWakeAfter = false;
@@ -2685,6 +2709,18 @@ inject();
                 // between stt.start() and the first onSpeaking callback from slipping through
                 this._ttsPlaying = true;
 
+                // Hard safety timeout: if _ttsPlaying stays true for 20s, force-clear it.
+                // Prevents permanent muting if greeting hangs or errors silently.
+                if (this._ttsGuardTimer) clearTimeout(this._ttsGuardTimer);
+                this._ttsGuardTimer = setTimeout(() => {
+                    if (this._ttsPlaying && this._voiceActive) {
+                        console.warn('[STT] Hard timeout: _ttsPlaying stuck for 20s — force-clearing');
+                        this._ttsPlaying = false;
+                        if (this.stt?.resume) this.stt.resume();
+                        this.callbacks.onListening();
+                    }
+                }, 20000);
+
                 // Unlock AudioContext for iOS — MUST happen synchronously within the user
                 // gesture call stack, before any await. iOS suspends AudioContext by default
                 // and blocks async audio.play() calls that arrive via network responses.
@@ -2759,6 +2795,7 @@ inject();
                     // will fire onListening (with echo guard delay) when TTS actually finishes.
                     if (!this.isPlaying && this.audioQueue.length === 0 && !this._fetchAbortController) {
                         this._ttsPlaying = false;
+                        if (this._ttsGuardTimer) { clearTimeout(this._ttsGuardTimer); this._ttsGuardTimer = null; }
                         if (this.stt.resume) this.stt.resume();
                         this.callbacks.onListening();
                     }
@@ -2770,6 +2807,8 @@ inject();
 
             stopVoiceInput() {
                 this._voiceActive = false;  // Mark call as ended — prevents safety-net restart
+                this._ttsPlaying = false;
+                if (this._ttsGuardTimer) { clearTimeout(this._ttsGuardTimer); this._ttsGuardTimer = null; }
                 // Abort any in-flight fetch so streaming stops immediately
                 if (this._fetchAbortController) {
                     this._fetchAbortController.abort();
@@ -2874,8 +2913,8 @@ inject();
                 // Send via HTTP POST - server connects to Gateway, generates TTS, returns response
                 let _inactivityTimer = null;  // declared here so finally block can clear it
                 try {
-                    const provider = localStorage.getItem('voice_provider') || 'supertonic';
-                    const voice = localStorage.getItem('voice_voice') || 'M1';
+                    const provider = window.providerManager?.selectedProvider || 'groq';
+                    const voice = window.providerManager?.currentVoice || 'autumn';
                     const uiContext = this.getUIContext();
 
                     const gatewayAgentId = localStorage.getItem('gateway_agent_id') || null;
@@ -3301,6 +3340,7 @@ inject();
                         if (this._voiceActive && this.stt && !this.isPlaying) {
                             console.log('🎤 Safety net: restarting STT (no audio played)');
                             this._ttsPlaying = false;
+                            if (this._ttsGuardTimer) { clearTimeout(this._ttsGuardTimer); this._ttsGuardTimer = null; }
                             if (this.stt.resume) {
                                 this.stt.resume();
                             } else {
@@ -3876,7 +3916,8 @@ inject();
                     // Supertonic mode: STT + Clawdbot LLM, TTS = whatever user chose
                     // Restore saved TTS provider (don't hardcode supertonic — user may have chosen Groq)
                     if (window.providerManager) {
-                        const savedProvider = localStorage.getItem('voice_provider') || 'supertonic';
+                        const savedProvider = window.providerManager.selectedProvider || 'groq';
+                        // Provider already set from server profile — just ensure UI is in sync
                         window.providerManager.switchProvider(savedProvider);
                     }
                     // Show Clawdbot UI and connect
@@ -3973,7 +4014,7 @@ inject();
                 this.config = config;
                 this.isConnected = false;
                 this.isProcessing = false;
-                this.stt = new WebSpeechSTT();
+                this.stt = new GroqSTT();
                 this.ttsProvider = 'supertonic';
                 this.ttsVoice = 'F3';
                 this.audioContext = null;
@@ -5109,12 +5150,12 @@ inject();
 
         // ===== WAKE WORD TOGGLE FUNCTION =====
         // Global function for wake button onclick
-        window.toggleWakeWord = function() {
+        window.toggleWakeWord = async function() {
             if (!window.wakeDetector) return;
             if (window.PTTButton?.pttMode) return; // wake word blocked while PTT is active
 
             const wakeButton = document.getElementById('wake-button');
-            const isListening = window.wakeDetector.toggle();
+            const isListening = await window.wakeDetector.toggle();
 
             if (isListening) {
                 wakeButton.classList.add('listening');
@@ -5153,11 +5194,13 @@ inject();
 
         // ===== MAIN INITIALIZATION =====
         async function init() {
-            // One-time migration: reset old defaults to supertonic/clawdbot (v3)
-            if (localStorage.getItem('settings_v') !== '3') {
+            // One-time migration: clear stale localStorage voice settings (v4)
+            // Voice/provider now come from server profile, not localStorage
+            if (localStorage.getItem('settings_v') !== '4') {
+                localStorage.removeItem('voice_provider');
+                localStorage.removeItem('voice_voice');
                 localStorage.setItem('voice_mode', 'supertonic');
-                localStorage.setItem('voice_provider', 'supertonic');
-                localStorage.setItem('settings_v', '3');
+                localStorage.setItem('settings_v', '4');
             }
 
             console.log('Initializing OpenVoiceUI...');
@@ -5207,9 +5250,9 @@ inject();
             // localStorage — do NOT override it here. voiceConversation.setTTSProvider()
             // below will apply it correctly.
 
-            // Initialize Wake Word Detector
-            console.log('Initializing WakeWordDetector...');
-            const wakeDetector = new WakeWordDetector();
+            // Initialize Wake Word Detector (Groq-based — no Chrome Speech API dependency)
+            console.log('Initializing GroqWakeWordDetector...');
+            const wakeDetector = new GroqWakeWordDetector();
             window.wakeDetector = wakeDetector;
 
             // Set up wake word callback to auto-trigger call button
@@ -5576,8 +5619,9 @@ inject();
 
             openPage(page) {
                 if (this.iframe) {
-                    this.iframe.src = `/pages/${page}`;
+                    this.iframe.src = `/pages/${page}?t=${Date.now()}`;
                     localStorage.setItem('canvas_last_page', page);
+                    this._lastMtime = null;  // reset mtime tracking on manual navigation
                 }
                 this.show();
             },
@@ -5595,8 +5639,9 @@ inject();
                     const filename = pageName.replace(/\s+/g, '-').toLowerCase() + '.html';
                     console.log('[Canvas] showPage direct:', filename);
                     if (this.iframe) {
-                        this.iframe.src = `/pages/${filename}`;
+                        this.iframe.src = `/pages/${filename}?t=${Date.now()}`;
                         localStorage.setItem('canvas_last_page', filename);
+                        this._lastMtime = null;
                         this.show();
                     }
                     return;
@@ -5610,8 +5655,9 @@ inject();
                     const filename = pageName.replace(/\s+/g, '-').toLowerCase() + '.html';
                     console.log('[Canvas] showPage fallback:', filename);
                     if (this.iframe) {
-                        this.iframe.src = `/pages/${filename}`;
+                        this.iframe.src = `/pages/${filename}?t=${Date.now()}`;
                         localStorage.setItem('canvas_last_page', filename);
+                        this._lastMtime = null;
                         this.show();
                     }
                 }
@@ -6203,7 +6249,7 @@ inject();
 
                 const iframe = document.getElementById('canvas-iframe');
                 if (iframe) {
-                    iframe.src = `/pages/${filename}`;
+                    iframe.src = `/pages/${filename}?t=${Date.now()}`;
                     // Reset mtime tracking so auto-refresh doesn't false-trigger on page switch
                     CanvasControl._lastMtime = null;
                     // Remember this page for next time
@@ -7489,12 +7535,7 @@ inject();
                 if (this.pttMode) {
                     // --- PTT ON ---
                     if (stt) {
-                        stt._pttHolding = false;
-                        if (stt.silenceTimer) { clearTimeout(stt.silenceTimer); stt.silenceTimer = null; }
-                        // Mute first, then stop — onend will try to restart but
-                        // the patched recognition.start will block it silently
-                        stt._micMuted = true;
-                        if (stt.recognition) stt.recognition.stop();
+                        stt.pttMute(); // Stop recording, discard audio, set muted
                     }
                     // Stop wake word detector
                     if (window.wakeDetector?.isListening) {
@@ -7506,28 +7547,12 @@ inject();
                 } else {
                     // --- PTT OFF ---
                     if (stt) {
-                        stt._micMuted = false;
-                        stt._pttHolding = false;
                         // Clear any stale isProcessing state from a previous response
-                        // that was in-flight while PTT was on
                         if (stt.isProcessing && !ModeManager?.clawdbotMode?._ttsPlaying) {
                             stt.isProcessing = false;
                             stt.accumulatedText = '';
                         }
-                        // Re-open mic if STT session is supposed to be running.
-                        // Use a short delay — Chrome needs a moment after recognition.stop()
-                        // before it will accept a new recognition.start(); calling immediately
-                        // throws InvalidStateError which is silently caught, leaving mic dead.
-                        if (stt.isListening) {
-                            setTimeout(() => {
-                                if (!stt._micMuted) {
-                                    try { stt.recognition.start(); } catch(e) {
-                                        console.warn('[PTT OFF] recognition.start failed, doing full restart:', e);
-                                        stt.start();
-                                    }
-                                }
-                            }, 150);
-                        }
+                        stt.pttUnmute(); // Unmute and resume continuous listening
                     }
                     // Restore wake word detector
                     if (this._wakeWasRunning && window.wakeDetector?.isSupported()) {
@@ -7542,12 +7567,6 @@ inject();
                 this.button.classList.add('holding');
                 const stt = this._getSTT();
                 if (!stt) return;
-                stt._pttHolding = true;
-                stt.accumulatedText = '';
-                // Clear isProcessing — user explicitly chose to speak, so capture it
-                // regardless of whether a previous response was still being "processed"
-                stt.isProcessing = false;
-                if (stt.silenceTimer) { clearTimeout(stt.silenceTimer); stt.silenceTimer = null; }
 
                 // ⚡ PTT interrupt: if TTS is playing, kill it immediately
                 const cm = ModeManager?.clawdbotMode;
@@ -7575,33 +7594,20 @@ inject();
                             window._voiceConversation._fetchAbortController = null;
                         }
                     }
-                    // STT was muted during TTS — we'll open it below
                 }
 
-                // Unmute and open mic for the hold duration
-                stt._micMuted = false;
-                if (stt.recognition) {
-                    try { stt.recognition.start(); } catch(e) {}
-                }
+                // Start recording — pttActivate handles all state
+                stt.pttActivate();
             },
 
             _releaseMic() {
                 this.button.classList.remove('holding');
                 const stt = this._getSTT();
                 if (!stt) return;
-                stt._pttHolding = false;
 
-                // Mute mic again immediately — any pending onend restart will be blocked
-                stt._micMuted = true;
-                if (stt.recognition) stt.recognition.stop();
-
-                // Send whatever was heard during the hold
-                const text = stt.accumulatedText?.trim();
-                if (text && !stt.isProcessing) {
-                    stt.isProcessing = true;
-                    if (stt.onResult) stt.onResult.call(stt, text);
-                    stt.accumulatedText = '';
-                }
+                // Stop recording and force transcription — pttRelease handles all state
+                // onstop handler will send to Groq and call onResult asynchronously
+                stt.pttRelease();
             }
         };
         window.PTTButton.init();
@@ -7845,48 +7851,15 @@ inject();
         };
 
         // Expose STT instance — lives at ModeManager.clawdbotMode.stt
-        // Once acquired, patch recognition.start to respect _micMuted flag.
-        // This is the single global choke-point — ALL restarts (onend, VoiceSession,
-        // stt.start()) go through recognition.start, so one patch controls everything.
+        // GroqSTT has mute/PTT support built in — no monkey-patching needed.
         const _sttExposePoll = setInterval(() => {
             const stt = ModeManager?.clawdbotMode?.stt;
-            if (stt && stt.recognition && !stt._startPatched) {
+            if (stt && !stt._exposed) {
                 window._sttInstance = stt;
                 clearInterval(_sttExposePoll);
+                stt._exposed = true;
 
-                // Patch 1: recognition.start — respect _micMuted flag; reset listen index on new session
-                stt._listenFinalIdx = 0;
-                const _origRecognitionStart = stt.recognition.start.bind(stt.recognition);
-                stt.recognition.start = function() {
-                    if (stt._micMuted) return; // silently block, no abort loop
-                    stt._listenFinalIdx = 0;   // new session — results array resets
-                    return _origRecognitionStart();
-                };
-
-                // Patch 2: recognition.onresult — add live-final and interim hooks
-                const _origOnResult = stt.recognition.onresult;
-                stt.recognition.onresult = function(event) {
-                    // Call original handler (silence-timer logic, stt.onResult, etc.)
-                    _origOnResult.call(this, event);
-
-                    // Walk from OUR tracked index (not event.resultIndex which can skip).
-                    // This ensures every final is captured even when the browser batches them.
-                    let newFinal = '';
-                    let interim  = '';
-                    for (let i = stt._listenFinalIdx; i < event.results.length; i++) {
-                        if (event.results[i].isFinal) {
-                            newFinal += event.results[i][0].transcript;
-                            stt._listenFinalIdx = i + 1; // advance past confirmed final
-                        } else {
-                            interim += event.results[i][0].transcript;
-                        }
-                    }
-                    if (stt.onListenFinal && newFinal) stt.onListenFinal(newFinal);
-                    if (stt.onInterim) stt.onInterim(interim);
-                };
-
-                stt._startPatched = true;
-                console.log('PTT: STT acquired, recognition patches applied');
+                console.log('STT exposed (GroqSTT — no patches needed)');
                 // Apply any profile settings that were deferred (profile loaded before STT existed)
                 if (window._activeProfileData) {
                     const ms = window._activeProfileData?.stt?.silence_timeout_ms;

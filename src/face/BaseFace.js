@@ -193,8 +193,17 @@ class FaceManager {
         }
         this._active = face;
 
-        // Persist selection
-        try { localStorage.setItem('ai-face-active', id); } catch (_) {}
+        // Persist selection to server profile
+        const profileId = window.providerManager?._activeProfileId || 'default';
+        fetch('/api/profiles/' + profileId, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ui: { face_mode: id } })
+        }).catch(e => console.warn('Failed to save face to profile:', e));
+        if (window._serverProfile) {
+            if (!window._serverProfile.ui) window._serverProfile.ui = {};
+            window._serverProfile.ui.face_mode = id;
+        }
 
         eventBus.emit('face:changed', { from: previousId, to: id });
     }
@@ -205,7 +214,7 @@ class FaceManager {
      */
     async loadSaved(defaultId = 'eyes') {
         let saved = defaultId;
-        try { saved = localStorage.getItem('ai-face-active') || defaultId; } catch (_) {}
+        try { saved = window._serverProfile?.ui?.face_mode || defaultId; } catch (_) {}
         await this.load(saved);
     }
 

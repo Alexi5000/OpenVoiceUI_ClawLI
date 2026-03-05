@@ -573,9 +573,10 @@ def canvas_pages_proxy(path):
         if resolved is None:
             return 'Invalid path', 400
         if resolved.exists():
-            with open(resolved, 'rb') as f:
-                content = f.read()
+            # HTML files need custom processing (script stripping, CSS/error injection)
             if path.endswith('.html'):
+                with open(resolved, 'rb') as f:
+                    content = f.read()
                 # Strip external CDN scripts (Tailwind CDN etc break in sandboxed iframes)
                 import re as _re
                 content_str = content.decode('utf-8', errors='replace')
@@ -619,14 +620,37 @@ def canvas_pages_proxy(path):
                     content = content.replace(b'</head>', _inject + b'</head>', 1)
                 else:
                     content = _inject + content
-                content_type = 'text/html'
-            elif path.endswith('.css'):
-                content_type = 'text/css'
-            elif path.endswith('.js'):
-                content_type = 'application/javascript'
+                resp = Response(content, mimetype='text/html')
+                resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+                resp.headers['Pragma'] = 'no-cache'
+                resp.headers['Expires'] = '0'
+                # Canvas-specific CSP: allow inline scripts (interactive pages)
+                # but block ALL outbound connections to prevent data exfiltration
+                # from prompt-injected scripts. postMessage to parent is still
+                # allowed (canvas-action bridge uses it).
+                resp.headers['Content-Security-Policy'] = (
+                    "default-src 'none'; "
+                    "script-src 'unsafe-inline'; "
+                    "style-src 'unsafe-inline'; "
+                    "img-src 'self' data: blob:; "
+                    "media-src 'self' blob:; "
+                    "font-src 'self'; "
+                    "connect-src 'none'; "
+                    "frame-src 'none'"
+                )
+                return resp
             else:
-                content_type = 'application/octet-stream'
-            return Response(content, mimetype=content_type)
+                # Non-HTML files: use send_file for proper range request support
+                # (required for video/audio streaming playback)
+                resp = send_file(
+                    resolved,
+                    conditional=True,
+                    max_age=3600,
+                )
+                # Tell Cloudflare CDN to cache media files explicitly
+                resp.headers['CDN-Cache-Control'] = 'public, max-age=86400'
+                resp.headers['Accept-Ranges'] = 'bytes'
+                return resp
         return 'Page not found', 404
     except Exception as exc:
         logger.error(f'Canvas pages proxy error: {exc}')

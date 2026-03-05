@@ -15,6 +15,7 @@ FACES_DIR = RUNTIME_DIR / "faces"
 TRANSCRIPTS_DIR = RUNTIME_DIR / "transcripts"
 DB_PATH = RUNTIME_DIR / "usage.db"
 CANVAS_MANIFEST_PATH = RUNTIME_DIR / "canvas-manifest.json"
+VOICE_CLONES_DIR = RUNTIME_DIR / "voice-clones"
 VOICE_SESSION_FILE = str(RUNTIME_DIR / ".voice-session-counter")
 ACTIVE_PROFILE_FILE = RUNTIME_DIR / ".active-profile"
 
