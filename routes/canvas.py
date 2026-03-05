@@ -624,6 +624,20 @@ def canvas_pages_proxy(path):
                 resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
                 resp.headers['Pragma'] = 'no-cache'
                 resp.headers['Expires'] = '0'
+                # Canvas-specific CSP: allow inline scripts (interactive pages)
+                # but block ALL outbound connections to prevent data exfiltration
+                # from prompt-injected scripts. postMessage to parent is still
+                # allowed (canvas-action bridge uses it).
+                resp.headers['Content-Security-Policy'] = (
+                    "default-src 'none'; "
+                    "script-src 'unsafe-inline'; "
+                    "style-src 'unsafe-inline'; "
+                    "img-src 'self' data: blob:; "
+                    "media-src 'self' blob:; "
+                    "font-src 'self'; "
+                    "connect-src 'none'; "
+                    "frame-src 'none'"
+                )
                 return resp
             else:
                 # Non-HTML files: use send_file for proper range request support
