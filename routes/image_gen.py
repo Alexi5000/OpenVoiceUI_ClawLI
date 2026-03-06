@@ -94,11 +94,70 @@ def _generate_gemini(model, prompt, images):
     return images_out, text_out
 
 
-def _generate_imagen(model, prompt):
+def _enhance_prompt(idea: str, quality: str = 'standard', style: str = '') -> str:
+    """Use Gemini Flash text to turn a rough idea into a detailed merch image prompt."""
+    quality_context = {
+        'standard': 'print-quality merch art',
+        'high': 'high-resolution 2K print-quality merch art, sharp fine detail',
+        'ultra': 'ultra-high-resolution 4K print-quality merch art, photorealistic detail, maximum sharpness',
+    }.get(quality, 'print-quality merch art')
+
+    style_instruction = (
+        f"Art style: {style}. " if style else
+        "Art style: vintage screen-print graphic tee art, bold ink outlines, flat cel-shading with 4-5 solid colors. "
+    )
+
+    system = (
+        "You are an art director specializing in apparel graphics for trade and contractor merch. "
+        "Turn rough ideas into image generation prompts that produce great t-shirt and hoodie designs.\n\n"
+        "T-SHIRT DESIGN RULES — these are the most important:\n"
+        "- Design must be ISOLATED: single bold graphic element on a solid black or transparent background. "
+        "No scenic backgrounds, no landscapes, no environments behind the subject.\n"
+        "- Use 3 to 5 solid bold colors maximum. High contrast. Prints cleanly on dark fabric.\n"
+        "- Style should read like: vintage concert tee, old-school band shirt, Harley Davidson apparel, "
+        "classic biker patch art, or retro work-wear graphic — NOT a photograph, NOT a painting, NOT a scene.\n"
+        "- The subject (character, object, logo) must be large and centered. Readable at a glance.\n"
+        "- Bold clean outlines on every element. No fine detail that disappears at shirt scale.\n"
+        "- If there is a character, they should look like a mascot or graphic illustration — "
+        "detailed face, gear, and posture — NOT a silhouette, NOT an outline-only figure.\n\n"
+        "SPRAY FOAM EQUIPMENT — strictly enforced:\n"
+        "- Professional spray foam guns ONLY: hose-connected industrial guns (Graco Fusion, PMC, Graco Reactor) "
+        "with a thick heated hose trailing back to equipment. Substantial pistol-grip with hose at the rear.\n"
+        "- NEVER a consumer canned foam gun (the orange/yellow Great Stuff gun from Home Depot). "
+        "If a gun appears in the design, it is always the professional contractor type.\n\n"
+        "PROMPT FORMAT — write the prompt to include:\n"
+        "1. Subject description (character/object/logo with specific details)\n"
+        f"2. {style_instruction}\n"
+        "3. Color palette (name 3-5 specific colors, e.g. 'burnt orange, cream white, black, gold')\n"
+        "4. Isolated on solid black background\n"
+        "5. End with: 'apparel graphic, screen-print style, bold outlines, print-ready, no background'\n\n"
+        f"Quality: {quality_context}\n\n"
+        "Return ONLY the prompt. No explanation, no quotes, no intro."
+    )
+
+    payload = {
+        'contents': [{'role': 'user', 'parts': [{'text': idea}]}],
+        'systemInstruction': {'parts': [{'text': system}]},
+        'generationConfig': {'maxOutputTokens': 512, 'temperature': 0.9},
+    }
+    url = f'{GEMINI_BASE}/gemini-2.0-flash:generateContent?key={GEMINI_KEY}'
+    resp = http.post(url, json=payload, timeout=30)
+    resp.raise_for_status()
+    result = resp.json()
+
+    text = ''
+    for candidate in result.get('candidates', []):
+        for part in candidate.get('content', {}).get('parts', []):
+            if 'text' in part:
+                text += part['text']
+    return text.strip()
+
+
+def _generate_imagen(model, prompt, aspect='1:1'):
     """predict-based models (Imagen 4, etc.) — text-to-image only"""
     payload = {
         'instances': [{'prompt': prompt}],
-        'parameters': {'sampleCount': 1},
+        'parameters': {'sampleCount': 1, 'aspectRatio': aspect},
     }
     url = f'{GEMINI_BASE}/{model}:predict?key={GEMINI_KEY}'
     resp = http.post(url, json=payload, timeout=90)
@@ -128,10 +187,12 @@ def generate_image():
     if not prompt:
         return jsonify({'error': 'prompt is required'}), 400
 
+    aspect = (data.get('aspect') or '1:1').strip()
+
     try:
         is_imagen = model.startswith('imagen-')
         if is_imagen:
-            imgs_out, text_out = _generate_imagen(model, prompt)
+            imgs_out, text_out = _generate_imagen(model, prompt, aspect)
         else:
             imgs_out, text_out = _generate_gemini(model, prompt, images)
 
@@ -155,6 +216,35 @@ def generate_image():
         return jsonify({'error': body}), e.response.status_code if e.response else 502
     except Exception as e:
         logger.exception('Gemini image-gen error')
+        return jsonify({'error': str(e)}), 500
+
+
+@image_gen_bp.route('/api/image-gen/enhance', methods=['POST'])
+def enhance_prompt_route():
+    """Enhance a rough idea into a detailed sprayfoam merch image prompt using Gemini."""
+    if not GEMINI_KEY:
+        return jsonify({'error': 'GEMINI_API_KEY not configured on server'}), 503
+
+    data = request.get_json(silent=True) or {}
+    idea = (data.get('idea') or '').strip()
+    quality = (data.get('quality') or 'standard').strip()
+    style = (data.get('style') or '').strip()
+
+    if not idea:
+        return jsonify({'error': 'idea is required'}), 400
+
+    try:
+        enhanced = _enhance_prompt(idea, quality, style)
+        if not enhanced:
+            return jsonify({'error': 'LLM returned empty response'}), 502
+        logger.info('enhance_prompt: idea_len=%d → prompt_len=%d quality=%s', len(idea), len(enhanced), quality)
+        return jsonify({'prompt': enhanced})
+    except http.HTTPError as e:
+        body = e.response.text[:400] if e.response else str(e)
+        logger.error('enhance_prompt HTTP error: %s', body)
+        return jsonify({'error': body}), e.response.status_code if e.response else 502
+    except Exception as e:
+        logger.exception('enhance_prompt error')
         return jsonify({'error': str(e)}), 500
 
 
