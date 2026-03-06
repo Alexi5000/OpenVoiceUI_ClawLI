@@ -1440,9 +1440,9 @@ inject();
             timeDomainData: null,
             animationId: null,
 
-            // State
-            enabled: localStorage.getItem('visualizerEnabled') !== 'false',
-            autoplayEnabled: localStorage.getItem('musicAutoplay') === 'true',
+            // State — defaults, overridden from server profile in init()
+            enabled: true,
+            autoplayEnabled: false,
             currentPlaylist: 'generated',
 
             // Beat detection - EXACT from ai-eyes
@@ -1471,6 +1471,9 @@ inject();
 
             async init() {
                 console.log('VisualizerModule initializing...');
+                // Load from server profile (set by ProviderManager.init), localStorage fallback
+                this.enabled = window._serverProfile?.ui?.visualizer_enabled ?? (localStorage.getItem('visualizerEnabled') !== 'false');
+                this.autoplayEnabled = window._serverProfile?.ui?.music_autoplay ?? (localStorage.getItem('musicAutoplay') === 'true');
                 this.createVisualizerBars();
                 this.initPartyEffects();
                 this.updateToggleUI();
@@ -1951,6 +1954,12 @@ inject();
             setEnabled(enabled) {
                 this.enabled = enabled;
                 localStorage.setItem('visualizerEnabled', enabled);
+                // Persist to server profile
+                const pid = window.providerManager?._activeProfileId || 'default';
+                fetch('/api/profiles/' + pid, {
+                    method: 'PUT', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ ui: { visualizer_enabled: enabled } })
+                }).catch(() => {});
                 this.updateToggleUI();
                 if (!enabled) this.stopAnimation();
             },
@@ -1958,6 +1967,12 @@ inject();
             setAutoplay(enabled) {
                 this.autoplayEnabled = enabled;
                 localStorage.setItem('musicAutoplay', enabled);
+                // Persist to server profile
+                const pid = window.providerManager?._activeProfileId || 'default';
+                fetch('/api/profiles/' + pid, {
+                    method: 'PUT', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ ui: { music_autoplay: enabled } })
+                }).catch(() => {});
                 this.updateToggleUI();
             }
         };
@@ -3826,6 +3841,16 @@ inject();
                             }
                         }
                         this.clawdbotMode._ttsPlaying = true;
+                        // Reset guard timer — TTS is now actually playing, give it a fresh 20s window
+                        if (this.clawdbotMode._ttsGuardTimer) clearTimeout(this.clawdbotMode._ttsGuardTimer);
+                        this.clawdbotMode._ttsGuardTimer = setTimeout(() => {
+                            if (this.clawdbotMode._ttsPlaying && this.clawdbotMode._voiceActive) {
+                                console.warn('[STT] Hard timeout: _ttsPlaying stuck for 20s — force-clearing');
+                                this.clawdbotMode._ttsPlaying = false;
+                                if (this.clawdbotMode.stt?.resume) this.clawdbotMode.stt.resume();
+                                this.clawdbotMode.callbacks.onListening();
+                            }
+                        }, 20000);
                     },
                     onListening: () => {
                         StatusModule.update('listening', 'LISTENING');
@@ -3834,6 +3859,8 @@ inject();
                         WaveformModule.setAmplitude(0);
                         MusicModule.duck(false);
                         document.getElementById('stop-button').style.display = 'none';
+                        // Cancel guard timer — TTS finished normally
+                        if (this.clawdbotMode._ttsGuardTimer) { clearTimeout(this.clawdbotMode._ttsGuardTimer); this.clawdbotMode._ttsGuardTimer = null; }
                         // _ttsPlaying stays true through the delay window to block echo
                         setTimeout(() => {
                             this.clawdbotMode._ttsPlaying = false;
@@ -3958,8 +3985,13 @@ inject();
                     this.clawdbotMode.connect();
                 }
 
-                // Save preference to localStorage
+                // Save to localStorage + server profile
                 localStorage.setItem('voice_mode', mode);
+                const pid = window.providerManager?._activeProfileId || 'default';
+                fetch('/api/profiles/' + pid, {
+                    method: 'PUT', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ ui: { voice_mode: mode } })
+                }).catch(() => {});
             },
 
             getCurrentMode() {
@@ -5245,20 +5277,21 @@ inject();
             FaceModule.startRandomBehavior();
             DJSoundboard.init();
             await MusicModule.init();
-            await VisualizerModule.init();
             CanvasControl.init();
             TranscriptPanel.init();
             ActionConsole.init();
             await CanvasMenu.init();
 
-            // Initialize Theme & Settings modules
+            // Initialize Provider Manager — sets window._serverProfile
+            // which FaceRenderer, VisualizerModule, etc. read for persisted settings
+            await ProviderManager.init();
+
+            // Initialize modules that depend on server profile (after profile is loaded)
+            await VisualizerModule.init();
             window.ThemeManager?.init();
             window.FaceRenderer?.init();
             window.SettingsPanel?.init();
             window.QuickSettings?.init();
-
-            // Initialize Provider Manager first
-            await ProviderManager.init();
 
             // Initialize Voice Conversation system (Web Speech STT + TTS)
             console.log('Initializing VoiceConversation system...');
@@ -5271,7 +5304,7 @@ inject();
             // Restore saved mode (default to supertonic).
             // savedMode may be a profile ID (e.g. 'default') or a transport
             // mode ('supertonic', 'hume'). Map profile IDs → transport mode.
-            const savedMode = localStorage.getItem('voice_mode') || 'supertonic';
+            const savedMode = window._serverProfile?.ui?.voice_mode || localStorage.getItem('voice_mode') || 'supertonic';
             const savedTransport = (savedMode === 'hume' || savedMode === 'hume-evi') ? 'hume' : 'supertonic';
             if (savedTransport !== ModeManager.currentMode) {
                 setTimeout(() => {
@@ -5385,6 +5418,18 @@ inject();
                         }
                     }
                     if (ModeManager.clawdbotMode) ModeManager.clawdbotMode._ttsPlaying = true;
+                    // Reset guard timer — TTS is now actually playing, give it a fresh 20s window
+                    if (ModeManager.clawdbotMode?._ttsGuardTimer) clearTimeout(ModeManager.clawdbotMode._ttsGuardTimer);
+                    if (ModeManager.clawdbotMode) {
+                        ModeManager.clawdbotMode._ttsGuardTimer = setTimeout(() => {
+                            if (ModeManager.clawdbotMode?._ttsPlaying && ModeManager.clawdbotMode?._voiceActive) {
+                                console.warn('[STT] Hard timeout: _ttsPlaying stuck for 20s — force-clearing');
+                                ModeManager.clawdbotMode._ttsPlaying = false;
+                                if (ModeManager.clawdbotMode.stt?.resume) ModeManager.clawdbotMode.stt.resume();
+                                ModeManager.clawdbotMode.callbacks.onListening();
+                            }
+                        }, 20000);
+                    }
                 },
                 onListening: () => {
                     StatusModule.update('listening', 'LISTENING');
@@ -5392,6 +5437,8 @@ inject();
                     WaveformModule.setAmplitude(0);
                     MusicModule.duck(false);
                     document.getElementById('stop-button').style.display = 'none';
+                    // Cancel guard timer — TTS finished normally
+                    if (ModeManager.clawdbotMode?._ttsGuardTimer) { clearTimeout(ModeManager.clawdbotMode._ttsGuardTimer); ModeManager.clawdbotMode._ttsGuardTimer = null; }
                     // _ttsPlaying stays true through the delay window to block echo
                     setTimeout(() => {
                         if (ModeManager.clawdbotMode) ModeManager.clawdbotMode._ttsPlaying = false;

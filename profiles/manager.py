@@ -94,11 +94,15 @@ class UIConfig:
     theme: str = "dark"
     theme_preset: Optional[str] = None
     face_enabled: bool = True
+    face_mode: str = "halo-smoke"
     face_mood: str = "neutral"
     transcript_panel: bool = True
     thought_bubbles: bool = True
     show_mode_badge: bool = False
     mode_badge_text: Optional[str] = None
+    voice_mode: str = "supertonic"
+    visualizer_enabled: bool = True
+    music_autoplay: bool = False
 
 
 @dataclass
