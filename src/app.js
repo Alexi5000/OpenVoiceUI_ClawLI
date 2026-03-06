@@ -1440,9 +1440,9 @@ inject();
             timeDomainData: null,
             animationId: null,
 
-            // State
-            enabled: localStorage.getItem('visualizerEnabled') !== 'false',
-            autoplayEnabled: localStorage.getItem('musicAutoplay') === 'true',
+            // State — defaults, overridden from server profile in init()
+            enabled: true,
+            autoplayEnabled: false,
             currentPlaylist: 'generated',
 
             // Beat detection - EXACT from ai-eyes
@@ -1471,6 +1471,9 @@ inject();
 
             async init() {
                 console.log('VisualizerModule initializing...');
+                // Load from server profile (set by ProviderManager.init), localStorage fallback
+                this.enabled = window._serverProfile?.ui?.visualizer_enabled ?? (localStorage.getItem('visualizerEnabled') !== 'false');
+                this.autoplayEnabled = window._serverProfile?.ui?.music_autoplay ?? (localStorage.getItem('musicAutoplay') === 'true');
                 this.createVisualizerBars();
                 this.initPartyEffects();
                 this.updateToggleUI();
@@ -1951,6 +1954,12 @@ inject();
             setEnabled(enabled) {
                 this.enabled = enabled;
                 localStorage.setItem('visualizerEnabled', enabled);
+                // Persist to server profile
+                const pid = window.providerManager?._activeProfileId || 'default';
+                fetch('/api/profiles/' + pid, {
+                    method: 'PUT', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ ui: { visualizer_enabled: enabled } })
+                }).catch(() => {});
                 this.updateToggleUI();
                 if (!enabled) this.stopAnimation();
             },
@@ -1958,6 +1967,12 @@ inject();
             setAutoplay(enabled) {
                 this.autoplayEnabled = enabled;
                 localStorage.setItem('musicAutoplay', enabled);
+                // Persist to server profile
+                const pid = window.providerManager?._activeProfileId || 'default';
+                fetch('/api/profiles/' + pid, {
+                    method: 'PUT', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ ui: { music_autoplay: enabled } })
+                }).catch(() => {});
                 this.updateToggleUI();
             }
         };
@@ -2302,13 +2317,15 @@ inject();
 
                 // VAD (Voice Activity Detection) settings
                 this.silenceTimer = null;
-                this.silenceDelayMs = 3000; // 3s silence = end of speech (profile can override)
-                this.vadThreshold = 35;     // FFT average amplitude threshold (profile can override)
+                this.silenceDelayMs = 3500; // 3.5s silence = end of speech (profile can override)
+                this.vadThreshold = 50;     // FFT average amplitude threshold (profile can override)
+                this.minSpeechMs = 300;     // Must sustain above threshold for this long before counting as speech
                 this.maxRecordingMs = 45000; // 45s max recording before auto-chunk (profile can override)
                 this.maxRecordingTimer = null;
                 this.isSpeaking = false;
                 this.stoppingRecorder = false;  // Flag to prevent duplicate stop attempts
                 this.hadSpeechInChunk = false;  // Track if real speech happened in this chunk
+                this._speechStartTime = 0; // When sustained speech started
             }
 
             isSupported() {
@@ -2354,7 +2371,7 @@ inject();
                         this.audioChunks = [];
 
                         // Skip if no real speech was detected in this chunk or audio too small
-                        if (!this.hadSpeechInChunk || audioBlob.size < 5000) {
+                        if (!this.hadSpeechInChunk || audioBlob.size < 10000) {
                             console.log('Skipping Whisper - no speech or audio too small (' + audioBlob.size + ' bytes)');
                             this.isProcessing = false;
                             this.stoppingRecorder = false;
@@ -2420,9 +2437,21 @@ inject();
                         const isSpeakingNow = average > this.vadThreshold;
 
                         if (isSpeakingNow && !this.isSpeaking) {
-                            // Started speaking
+                            // Potential speech — check minimum duration before confirming
+                            const now = Date.now();
+                            if (!this._speechStartTime) {
+                                this._speechStartTime = now;
+                            }
+                            if (now - this._speechStartTime < this.minSpeechMs) {
+                                // Still below minimum — keep checking
+                                requestAnimationFrame(checkAudioLevel);
+                                return;
+                            }
+
+                            // Speech confirmed (sustained above threshold for minSpeechMs)
                             this.isSpeaking = true;
                             this.hadSpeechInChunk = true;
+                            this._speechStartTime = 0;
                             console.log('🎤 Speech detected');
 
                             // Clear silence timer
@@ -2444,6 +2473,9 @@ inject();
                                     }
                                 }, this.maxRecordingMs);
                             }
+                        } else if (!isSpeakingNow && !this.isSpeaking) {
+                            // Below threshold and not yet confirmed — reset speech start timer
+                            this._speechStartTime = 0;
                         } else if (!isSpeakingNow && this.isSpeaking && !this.isProcessing && !this.stoppingRecorder) {
                             // Stopped speaking - start silence timer (ONLY if not already processing or stopping)
                             if (!this.silenceTimer) {
@@ -3126,6 +3158,13 @@ inject();
                             try {
                                 const data = JSON.parse(line);
 
+                                // Filtered: server rejected garbage STT — silently resume
+                                if (data.type === 'filtered') {
+                                    console.log('[stream] Garbage STT filtered by server:', data.reason);
+                                    this._lastStreamFiltered = true;
+                                    continue;
+                                }
+
                                 // Delta: new text chunk from agent (arrives in real-time)
                                 if (data.type === 'delta') {
                                     streamingText += data.text;
@@ -3187,6 +3226,14 @@ inject();
 
                                     // Empty response fallback — show message and re-enable mic
                                     if (!displayText || !displayText.trim()) {
+                                        // If server filtered garbage STT, silently resume mic
+                                        if (this._lastStreamFiltered) {
+                                            console.log('[text_done] Filtered garbage STT — silent resume');
+                                            this._lastStreamFiltered = false;
+                                            TranscriptPanel.finalizeStreaming(null);
+                                            reader.cancel();
+                                            return;
+                                        }
                                         console.warn('[text_done] Empty response — showing fallback');
                                         const fallback = "Sorry, I couldn't process that. Could you try again?";
                                         TranscriptPanel.finalizeStreaming(fallback);
@@ -3794,6 +3841,16 @@ inject();
                             }
                         }
                         this.clawdbotMode._ttsPlaying = true;
+                        // Reset guard timer — TTS is now actually playing, give it a fresh 20s window
+                        if (this.clawdbotMode._ttsGuardTimer) clearTimeout(this.clawdbotMode._ttsGuardTimer);
+                        this.clawdbotMode._ttsGuardTimer = setTimeout(() => {
+                            if (this.clawdbotMode._ttsPlaying && this.clawdbotMode._voiceActive) {
+                                console.warn('[STT] Hard timeout: _ttsPlaying stuck for 20s — force-clearing');
+                                this.clawdbotMode._ttsPlaying = false;
+                                if (this.clawdbotMode.stt?.resume) this.clawdbotMode.stt.resume();
+                                this.clawdbotMode.callbacks.onListening();
+                            }
+                        }, 20000);
                     },
                     onListening: () => {
                         StatusModule.update('listening', 'LISTENING');
@@ -3802,6 +3859,8 @@ inject();
                         WaveformModule.setAmplitude(0);
                         MusicModule.duck(false);
                         document.getElementById('stop-button').style.display = 'none';
+                        // Cancel guard timer — TTS finished normally
+                        if (this.clawdbotMode._ttsGuardTimer) { clearTimeout(this.clawdbotMode._ttsGuardTimer); this.clawdbotMode._ttsGuardTimer = null; }
                         // _ttsPlaying stays true through the delay window to block echo
                         setTimeout(() => {
                             this.clawdbotMode._ttsPlaying = false;
@@ -3926,8 +3985,13 @@ inject();
                     this.clawdbotMode.connect();
                 }
 
-                // Save preference to localStorage
+                // Save to localStorage + server profile
                 localStorage.setItem('voice_mode', mode);
+                const pid = window.providerManager?._activeProfileId || 'default';
+                fetch('/api/profiles/' + pid, {
+                    method: 'PUT', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ ui: { voice_mode: mode } })
+                }).catch(() => {});
             },
 
             getCurrentMode() {
@@ -5213,20 +5277,21 @@ inject();
             FaceModule.startRandomBehavior();
             DJSoundboard.init();
             await MusicModule.init();
-            await VisualizerModule.init();
             CanvasControl.init();
             TranscriptPanel.init();
             ActionConsole.init();
             await CanvasMenu.init();
 
-            // Initialize Theme & Settings modules
+            // Initialize Provider Manager — sets window._serverProfile
+            // which FaceRenderer, VisualizerModule, etc. read for persisted settings
+            await ProviderManager.init();
+
+            // Initialize modules that depend on server profile (after profile is loaded)
+            await VisualizerModule.init();
             window.ThemeManager?.init();
             window.FaceRenderer?.init();
             window.SettingsPanel?.init();
             window.QuickSettings?.init();
-
-            // Initialize Provider Manager first
-            await ProviderManager.init();
 
             // Initialize Voice Conversation system (Web Speech STT + TTS)
             console.log('Initializing VoiceConversation system...');
@@ -5239,7 +5304,7 @@ inject();
             // Restore saved mode (default to supertonic).
             // savedMode may be a profile ID (e.g. 'default') or a transport
             // mode ('supertonic', 'hume'). Map profile IDs → transport mode.
-            const savedMode = localStorage.getItem('voice_mode') || 'supertonic';
+            const savedMode = window._serverProfile?.ui?.voice_mode || localStorage.getItem('voice_mode') || 'supertonic';
             const savedTransport = (savedMode === 'hume' || savedMode === 'hume-evi') ? 'hume' : 'supertonic';
             if (savedTransport !== ModeManager.currentMode) {
                 setTimeout(() => {
@@ -5353,6 +5418,18 @@ inject();
                         }
                     }
                     if (ModeManager.clawdbotMode) ModeManager.clawdbotMode._ttsPlaying = true;
+                    // Reset guard timer — TTS is now actually playing, give it a fresh 20s window
+                    if (ModeManager.clawdbotMode?._ttsGuardTimer) clearTimeout(ModeManager.clawdbotMode._ttsGuardTimer);
+                    if (ModeManager.clawdbotMode) {
+                        ModeManager.clawdbotMode._ttsGuardTimer = setTimeout(() => {
+                            if (ModeManager.clawdbotMode?._ttsPlaying && ModeManager.clawdbotMode?._voiceActive) {
+                                console.warn('[STT] Hard timeout: _ttsPlaying stuck for 20s — force-clearing');
+                                ModeManager.clawdbotMode._ttsPlaying = false;
+                                if (ModeManager.clawdbotMode.stt?.resume) ModeManager.clawdbotMode.stt.resume();
+                                ModeManager.clawdbotMode.callbacks.onListening();
+                            }
+                        }, 20000);
+                    }
                 },
                 onListening: () => {
                     StatusModule.update('listening', 'LISTENING');
@@ -5360,6 +5437,8 @@ inject();
                     WaveformModule.setAmplitude(0);
                     MusicModule.duck(false);
                     document.getElementById('stop-button').style.display = 'none';
+                    // Cancel guard timer — TTS finished normally
+                    if (ModeManager.clawdbotMode?._ttsGuardTimer) { clearTimeout(ModeManager.clawdbotMode._ttsGuardTimer); ModeManager.clawdbotMode._ttsGuardTimer = null; }
                     // _ttsPlaying stays true through the delay window to block echo
                     setTimeout(() => {
                         if (ModeManager.clawdbotMode) ModeManager.clawdbotMode._ttsPlaying = false;

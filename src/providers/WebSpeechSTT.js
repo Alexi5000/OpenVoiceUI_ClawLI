@@ -57,6 +57,13 @@ class WebSpeechSTT {
         this.recognition.onresult = (event) => {
             if (this.isProcessing) return;
 
+            // ANY result (interim or final) means the user is still speaking.
+            // Reset the silence timer on every event so we never cut off mid-speech.
+            if (this.silenceTimer) {
+                clearTimeout(this.silenceTimer);
+                this.silenceTimer = null;
+            }
+
             let finalTranscript = '';
             for (let i = event.resultIndex; i < event.results.length; i++) {
                 if (event.results[i].isFinal) {
@@ -65,19 +72,26 @@ class WebSpeechSTT {
             }
 
             if (finalTranscript.trim()) {
-                if (this.silenceTimer) {
-                    clearTimeout(this.silenceTimer);
-                    this.silenceTimer = null;
-                }
+                // APPEND — user can speak across multiple Chrome final results
+                this.accumulatedText = this.accumulatedText
+                    ? this.accumulatedText + ' ' + finalTranscript.trim()
+                    : finalTranscript.trim();
+                console.log('STT Final:', finalTranscript, '| Accumulated:', this.accumulatedText);
+            }
 
-                this.accumulatedText = finalTranscript;
-                console.log('STT Final:', finalTranscript);
-
+            // Start/restart silence timer — only fires when Chrome stops sending ANY results
+            if (this.accumulatedText) {
                 this.silenceTimer = setTimeout(() => {
-                    if (this.accumulatedText.trim() && !this.isProcessing) {
-                        console.log('Sending to AI:', this.accumulatedText);
+                    const text = this.accumulatedText.trim();
+                    // Filter out garbage: punctuation-only, single words under 3 chars
+                    const meaningful = text.replace(/[^a-zA-Z0-9]/g, '');
+                    if (text && meaningful.length >= 2 && !this.isProcessing) {
+                        console.log('Sending to AI:', text);
                         this.isProcessing = true;
-                        if (this.onResult) this.onResult(this.accumulatedText);
+                        if (this.onResult) this.onResult(text);
+                        this.accumulatedText = '';
+                    } else if (text) {
+                        console.log('STT filtered garbage:', text);
                         this.accumulatedText = '';
                     }
                 }, this.silenceDelayMs);

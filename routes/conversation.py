@@ -519,6 +519,17 @@ def _conversation_inner():
     if not user_message:
         return jsonify({'error': 'No message provided'}), 400
 
+    # Filter garbage STT fragments — punctuation-only, single short words, noise
+    import re as _re
+    _meaningful_chars = _re.sub(r'[^a-zA-Z0-9]', '', user_message)
+    if len(_meaningful_chars) < 3:
+        logger.info(f'### FILTERED garbage STT: "{user_message}" ({len(_meaningful_chars)} meaningful chars)')
+        # Return a no-op stream that ends cleanly — no fallback message shown
+        def _noop_stream():
+            yield "data: " + json.dumps({"type": "filtered", "reason": "garbage_stt"}) + "\n\n"
+            yield "data: " + json.dumps({"type": "text_done", "response": " "}) + "\n\n"
+        return Response(_noop_stream(), mimetype='text/event-stream')
+
     # Input length guard (P7-T3 security audit)
     if len(user_message) > 4000:
         return jsonify({'error': 'Message too long (max 4000 characters)'}), 400
@@ -627,16 +638,17 @@ def _conversation_inner():
             from routes.music import get_music_files
             _lib_tracks = get_music_files('library')
             _gen_tracks = get_music_files('generated')
-            _track_names = []
-            for t in _lib_tracks:
-                _track_names.append(t.get('title') or t.get('name', ''))
-            for t in _gen_tracks:
-                _track_names.append(t.get('title') or t.get('name', ''))
-            _track_names = [n for n in _track_names if n]
-            if _track_names:
-                context_parts.append(
-                    f'[Available tracks: {", ".join(_track_names[:30])}]'
-                )
+            _lib_names = [t.get('title') or t.get('name', '') for t in _lib_tracks]
+            _gen_names = [t.get('title') or t.get('name', '') for t in _gen_tracks]
+            _lib_names = [n for n in _lib_names if n]
+            _gen_names = [n for n in _gen_names if n]
+            _parts = []
+            if _lib_names:
+                _parts.append(f'Library ({len(_lib_names)}): {", ".join(_lib_names)}')
+            if _gen_names:
+                _parts.append(f'Generated ({len(_gen_names)}): {", ".join(_gen_names)}')
+            if _parts:
+                context_parts.append(f'[Available tracks — {" | ".join(_parts)}]')
         except Exception:
             pass
 
