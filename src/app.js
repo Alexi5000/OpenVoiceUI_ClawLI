@@ -3263,6 +3263,15 @@ inject();
                                             reader.cancel();
                                             return;
                                         }
+                                        // Session start empty response — agent just wasn't ready yet.
+                                        // Don't show "Sorry" — user hasn't said anything. Just resume silently.
+                                        if (isSystemTrigger) {
+                                            console.warn('[text_done] Empty response on session_start — silent resume');
+                                            TranscriptPanel.finalizeStreaming(null);
+                                            ActionConsole.addEntry('error', 'Empty response from agent');
+                                            reader.cancel();
+                                            return;
+                                        }
                                         console.warn('[text_done] Empty response — showing fallback');
                                         const fallback = "Sorry, I couldn't process that. Could you try again?";
                                         TranscriptPanel.finalizeStreaming(fallback);
@@ -6971,7 +6980,17 @@ inject();
                 for (const action of actions) {
                     if (action.type === 'tool') {
                         const phase = action.phase === 'result' ? '✓' : '→';
-                        this.addEntry('tool', `${phase} Tool: ${action.name}`, action.result || '', action.ts);
+                        // Build a readable detail line from the input parameters
+                        let detail = '';
+                        if (action.phase !== 'result' && action.input) {
+                            const inp = action.input;
+                            detail = inp.path || inp.command || inp.query || inp.url ||
+                                     inp.file_path || inp.pattern || inp.content?.slice?.(0, 60) ||
+                                     JSON.stringify(inp).slice(0, 80);
+                        } else if (action.phase === 'result') {
+                            detail = action.result || '';
+                        }
+                        this.addEntry('tool', `${phase} Tool: ${action.name}`, detail, action.ts);
                     } else if (action.type === 'lifecycle') {
                         const label = action.phase === 'start' ? 'Agent started processing' :
                                       action.phase === 'end' ? 'Agent finished' : `Lifecycle: ${action.phase}`;

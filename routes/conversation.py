@@ -1119,7 +1119,23 @@ def _conversation_inner():
                                 # Tell the client to wait — don't show fallback
                                 yield json.dumps({'type': 'retrying'}) + '\n'
                                 time.sleep(2)
-                                # Re-send the same message through the gateway
+                                # Re-send the same message through the gateway on the same key.
+                                # Openclaw removed the orphaned message on the first attempt.
+                                # If this is session_start, also clear the session file to eliminate
+                                # any further stale state before the retry.
+                                if user_message == '__session_start__':
+                                    try:
+                                        _sessions_dir = Path('/home/node/.openclaw/agents/openvoiceui/sessions')
+                                        _sessions_map = json.loads((_sessions_dir / 'sessions.json').read_text())
+                                        _oclaw_key = f'agent:openvoiceui:{_session_key}'
+                                        _sid = _sessions_map.get(_oclaw_key, {}).get('sessionId')
+                                        if _sid:
+                                            _sf = _sessions_dir / f'{_sid}.jsonl'
+                                            if _sf.exists():
+                                                _sf.write_text('[]')
+                                                logger.info(f'### RETRY session_start: cleared stale session {_sid}')
+                                    except Exception as _e:
+                                        logger.warning(f'### RETRY session_start: could not clear session: {_e}')
                                 retry_queue = queue.Queue()
                                 captured_actions.clear()
                                 def _retry_gateway():
@@ -1451,6 +1467,40 @@ def conversation_reset():
     session_id = body.get('session_id', 'default')
     conversation_histories.pop(session_id, None)
     return jsonify({'status': 'ok', 'message': 'Conversation history cleared'})
+
+
+# ---------------------------------------------------------------------------
+# POST /api/session/reset  — manual session reset from UI actions panel
+# ---------------------------------------------------------------------------
+
+@conversation_bp.route('/api/session/reset', methods=['POST'])
+def session_reset():
+    """Clear the corrupted openclaw session state and return a fresh session key.
+    Called by the Reset button in the UI actions panel.
+    Clears the openclaw session JSONL file so orphaned messages don't cascade,
+    then bumps the voice session key so the next request starts completely fresh."""
+    old_key = get_voice_session_key()
+    # Find and clear the openclaw session file for the current session key
+    try:
+        sessions_dir = Path('/home/node/.openclaw/agents/openvoiceui/sessions')
+        sessions_json = sessions_dir / 'sessions.json'
+        if sessions_json.exists():
+            import json as _json
+            sessions_map = _json.loads(sessions_json.read_text())
+            # The openclaw session key format is "agent:openvoiceui:<voice_key>"
+            oclaw_key = f'agent:openvoiceui:{old_key}'
+            session_info = sessions_map.get(oclaw_key, {})
+            session_id = session_info.get('sessionId')
+            if session_id:
+                session_file = sessions_dir / f'{session_id}.jsonl'
+                if session_file.exists():
+                    session_file.write_text('[]')
+                    logger.info(f'### SESSION RESET: cleared openclaw session file {session_id}.jsonl')
+    except Exception as e:
+        logger.warning(f'### SESSION RESET: could not clear openclaw session file: {e}')
+    new_key = bump_voice_session()
+    return jsonify({'status': 'ok', 'old': old_key, 'new': new_key})
+
 
 # ---------------------------------------------------------------------------
 # GET /api/tts/providers

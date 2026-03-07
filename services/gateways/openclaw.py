@@ -659,6 +659,7 @@ class GatewayConnection:
                         'phase': phase,
                         'name': tool_data.get('name', 'unknown'),
                         'toolCallId': tool_data.get('toolCallId', ''),
+                        'input': tool_data.get('input', {}),
                         'ts': time.time()
                     }
                     if phase == 'result':
