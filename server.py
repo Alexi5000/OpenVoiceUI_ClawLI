@@ -1164,11 +1164,18 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
+    try:
+        from services.gateways.openclaw import OPENCLAW_TESTED_VERSION
+        _oc_ver = OPENCLAW_TESTED_VERSION
+    except ImportError:
+        _oc_ver = "unknown"
+
     logger.info(f"OpenVoiceUI starting on port {port}")
     logger.info(f"  Frontend  → http://localhost:{port}/")
     logger.info(f"  Health    → http://localhost:{port}/health/ready")
     logger.info(f"  Admin     → http://localhost:{port}/src/admin.html")
     logger.info(f"  Gateway   → {os.getenv('CLAWDBOT_GATEWAY_URL', 'ws://127.0.0.1:18791')}")
+    logger.info(f"  Tested OpenClaw version: {_oc_ver}")
 
     host = os.getenv("HOST", "127.0.0.1")  # Docker sets HOST=0.0.0.0; VPS stays loopback
     app.run(host=host, port=port, debug=False, threaded=True)
