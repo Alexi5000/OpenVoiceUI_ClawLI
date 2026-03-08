@@ -37,7 +37,7 @@ class GroqSTT {
         // VAD (Voice Activity Detection) settings
         this.silenceTimer = null;
         this.silenceDelayMs = 2500;     // 2.5s silence = end of speech (profile can override)
-        this.accumulationDelayMs = 2000; // Window to merge consecutive chunks before sending to AI
+        this.accumulationDelayMs = config.accumulationDelayMs || 4500; // Window to merge consecutive chunks before sending to AI (profile can override)
         this.vadThreshold = 50;         // FFT average amplitude threshold (profile can override)
         this.minSpeechMs = 300;         // Must sustain above threshold for this long before counting as speech
         this.maxRecordingMs = 45000;    // 45s max before auto-chunk (profile can override)
