@@ -10,6 +10,10 @@
  */
 export function inject() {
     document.body.insertAdjacentHTML('afterbegin', SHELL_HTML);
+    // Activity chip style — light grey on dark grey, no backdrop-filter
+    const chipStyle = document.createElement('style');
+    chipStyle.textContent = `.agent-activity-chip{background:rgba(50,55,65,0.95)!important;border:1px solid rgba(180,190,210,0.3)!important;color:#e8eaed!important;backdrop-filter:none!important;box-shadow:0 2px 12px rgba(0,0,0,0.6),inset 0 1px 0 rgba(255,255,255,0.07)!important;overflow:hidden!important;}`;
+    document.head.appendChild(chipStyle);
 }
 
 const SHELL_HTML = `
