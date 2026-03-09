@@ -13,6 +13,7 @@ inject();
 
         import { WebSpeechSTT, WakeWordDetector } from '/src/providers/WebSpeechSTT.js';
         import { GroqSTT, GroqWakeWordDetector } from '/src/providers/GroqSTT.js';
+        import { DeepgramSTT, DeepgramWakeWordDetector } from '/src/providers/DeepgramSTT.js';
 
         // ===== CONFIGURATION =====
         const CONFIG = {
@@ -37,6 +38,13 @@ inject();
         // Map is injected by Flask from DEVSITE_MAP env var (set per user in compose/.env).
         // Example: {"dev-tenant-l.jam-bot.com": "https://tenant-l.jam-bot.com/devsite-example-web-2/"}
         function resolveCanvasUrl(url) {
+            // Block private/internal IPs — browser can never reach Docker internals
+            // Matches 10.x, 172.16-31.x, 192.168.x, localhost, 127.x
+            const privateIpPattern = /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?\//i;
+            if (privateIpPattern.test(url)) {
+                console.warn('[resolveCanvasUrl] Blocked private/internal URL:', url);
+                return null;
+            }
             const map = window.AGENT_CONFIG?.devsiteMap || {};
             for (const [from, to] of Object.entries(map)) {
                 const fromUrl = from.includes('://') ? from : 'https://' + from;
@@ -2042,13 +2050,18 @@ inject();
         };
 
         // ===== AGENT ACTIVITY CHIP =====
-        // Floating pill (bottom-right) that replaces itself with each agent action.
-        // Uses the same real-time action/tag events already flowing through the SSE stream.
+        // Cycling activity ticker — queues tool events and cycles through them
+        // so the user can read what the agent is actually doing.
         window.AgentActivityChip = {
             _el: null,
             _iconEl: null,
             _textEl: null,
             _hideTimer: null,
+            _queue: [],          // [[tag, text], ...] pending items to cycle through
+            _cycleTimer: null,
+            _cycling: false,
+            _endPending: false,  // hide after queue drains
+            _CYCLE_MS: 1800,     // ms each item is shown before cycling to next
 
             init() {
                 this._el = document.getElementById('agent-activity-chip');
@@ -2056,22 +2069,15 @@ inject();
                 this._textEl = document.getElementById('chip-text');
             },
 
-            show(icon, text) {
+            // Immediate override — used for speaking state, clears queue
+            show(tag, text) {
                 if (!this._el) return;
-                if (this._hideTimer) { clearTimeout(this._hideTimer); this._hideTimer = null; }
-                // Set display:flex before animating — avoids scrollbar from hidden flex element
-                this._el.style.display = 'flex';
-                requestAnimationFrame(() => {
-                    if (this._el.classList.contains('visible')) {
-                        this._el.classList.remove('updating');
-                        void this._el.offsetWidth;
-                        this._el.classList.add('updating');
-                        setTimeout(() => this._el?.classList.remove('updating'), 220);
-                    }
-                    this._iconEl.textContent = icon;
-                    this._textEl.textContent = text;
-                    this._el.classList.add('visible');
-                });
+                clearTimeout(this._hideTimer); this._hideTimer = null;
+                clearTimeout(this._cycleTimer); this._cycleTimer = null;
+                this._queue = [];
+                this._cycling = false;
+                this._endPending = false;
+                this._setContent(tag, text);
             },
 
             hide(delay = 0) {
@@ -2079,7 +2085,6 @@ inject();
                 if (this._hideTimer) clearTimeout(this._hideTimer);
                 this._hideTimer = setTimeout(() => {
                     this._el?.classList.remove('visible');
-                    // After CSS transition completes, truly remove from layout
                     setTimeout(() => {
                         if (this._el && !this._el.classList.contains('visible')) {
                             this._el.style.display = 'none';
@@ -2089,77 +2094,128 @@ inject();
                 }, delay);
             },
 
-            // Map OpenClaw stream action → chip display
+            _setContent(tag, text) {
+                if (!this._el) return;
+                this._el.style.display = 'flex';
+                if (this._el.classList.contains('visible')) {
+                    this._el.classList.remove('updating');
+                    void this._el.offsetWidth;
+                    this._el.classList.add('updating');
+                    setTimeout(() => this._el?.classList.remove('updating'), 220);
+                }
+                this._iconEl.textContent = tag;
+                this._textEl.textContent = text;
+                requestAnimationFrame(() => this._el?.classList.add('visible'));
+            },
+
+            // Add item to cycle queue, start cycling if idle
+            _push(tag, text) {
+                if (!this._el) return;
+                clearTimeout(this._hideTimer); this._hideTimer = null;
+                this._endPending = false;
+                this._queue.push([tag, text]);
+                if (!this._cycling) {
+                    this._cycling = true;
+                    this._next();
+                }
+            },
+
+            _next() {
+                clearTimeout(this._cycleTimer);
+                if (this._queue.length === 0) {
+                    this._cycling = false;
+                    if (this._endPending) {
+                        this._endPending = false;
+                        this.hide(1200);
+                    }
+                    return;
+                }
+                const [tag, text] = this._queue.shift();
+                this._setContent(tag, text);
+                this._cycleTimer = setTimeout(() => this._next(), this._CYCLE_MS);
+            },
+
+            // Signal agent work done — let queue drain then hide
+            _signalEnd() {
+                if (this._cycling) {
+                    this._endPending = true; // hide after queue drains
+                } else {
+                    this.hide(1200);
+                }
+            },
+
+            // Map OpenClaw stream action → cycling queue entry
             handleAction(action) {
-                const { type, phase, name, input } = action || {};
+                const { type, phase, name } = action || {};
+                const inp = action?.args || action?.input || {};
+                const sp = p => { if (!p) return '?'; const s = String(p).split('/'); return s[s.length - 1] || String(p); };
+                const su = u => { try { return new URL(u).hostname; } catch { return String(u).substring(0, 28); } };
+                const c  = s => s ? String(s).substring(0, 38) : '';
 
                 if (type === 'lifecycle') {
-                    if (phase === 'start') this.show('🔄', 'Thinking...');
-                    else if (phase === 'end' || phase === 'error') this.hide(0);
+                    if (phase === 'start') this._push('···', 'thinking');
+                    else if (phase === 'end' || phase === 'error') this._signalEnd();
                     return;
                 }
 
                 if (type === 'subagent') {
-                    if (phase === 'spawning' || phase === 'start') this.show('🤖', 'Working...');
-                    else if (phase === 'end') this.hide(0);
+                    if (phase === 'spawning') this._push('AGT', 'spawning sub-agent');
+                    else if (phase === 'start') this._push('AGT', 'sub-agent active');
+                    // subagent end — don't hide; main lifecycle still controls
                     return;
                 }
 
                 if (type === 'tool' && phase === 'start') {
                     const n = (name || '').toLowerCase().replace(/[_-]/g, '');
-                    const inp = input || {};
-                    const shortPath = p => { if (!p) return ''; const s = String(p).split('/'); return s[s.length - 1] || String(p); };
-                    const shortUrl  = u => { try { return new URL(u).hostname; } catch { return String(u).substring(0, 30); } };
-                    const cap40    = s => s ? String(s).substring(0, 40) : '';
-
                     const toolMap = {
-                        read:            ['📖', () => `Reading ${shortPath(inp.file_path || inp.path)}`],
-                        write:           ['✏️',  () => `Writing ${shortPath(inp.file_path || inp.path)}`],
-                        edit:            ['✏️',  () => `Editing ${shortPath(inp.file_path || inp.path)}`],
-                        glob:            ['🔍', () => `Files: ${cap40(inp.pattern)}`],
-                        grep:            ['🔍', () => `Search: "${cap40(inp.pattern)}"`],
-                        bash:            ['⚡', () => `Run: ${cap40(inp.command)}`],
-                        exec:            ['⚡', () => `Run: ${cap40(inp.command)}`],
-                        webfetch:        ['🌐', () => `Fetch: ${shortUrl(inp.url)}`],
-                        websearch:       ['🌐', () => `Search: "${cap40(inp.query)}"`],
-                        agent:           ['🤖', () => 'Working...'],
-                        task:            ['🤖', () => `Task: ${cap40(inp.description)}`],
-                        todowrite:       ['📋', () => 'Updating...'],
-                        notebookedit:    ['📓', () => `Notebook: ${shortPath(inp.notebook_path)}`],
-                        askuserquestion: ['❓', () => 'Waiting for input...'],
+                        read:            ['RD',   () => sp(inp.file_path || inp.path)],
+                        write:           ['WR',   () => sp(inp.file_path || inp.path)],
+                        edit:            ['ED',   () => sp(inp.file_path || inp.path)],
+                        glob:            ['GLOB', () => c(inp.pattern)],
+                        grep:            ['SRC',  () => c(inp.pattern)],
+                        bash:            ['RUN',  () => c(inp.command)],
+                        exec:            ['RUN',  () => c(inp.command)],
+                        webfetch:        ['GET',  () => su(inp.url)],
+                        websearch:       ['WEB',  () => c(inp.query)],
+                        agent:           ['AGT',  () => 'spawning agent'],
+                        task:            ['TSK',  () => c(inp.description)],
+                        todowrite:       ['TODO', () => 'updating list'],
+                        notebookedit:    ['NB',   () => sp(inp.notebook_path)],
+                        askuserquestion: ['ASK',  () => 'waiting for input'],
                     };
-
                     const lookup = Object.keys(toolMap).find(k => n.includes(k));
-                    const [icon, getText] = toolMap[lookup] || ['🔧', () => `Tool: ${name}`];
-                    this.show(icon, getText());
+                    const [tag, getText] = toolMap[lookup] || ['TOOL', () => name || '?'];
+                    const detail = getText();
+                    this._push(tag, detail || name || '?');
                 }
             },
 
-            // Map response tags → chip display
+            // Map response tags → immediate chip update (not queued)
             handleTag(tag, detail) {
                 const d = detail ? String(detail) : '';
+                const su = u => { try { return new URL(u).hostname; } catch { return String(u).substring(0, 28); } };
                 const tagMap = {
-                    suno:          ['🎵', d ? `Generating: "${d.substring(0, 40)}"` : 'Generating music...'],
-                    canvas:        ['🖼️',  d ? `Opening ${d}` : 'Opening canvas...'],
-                    canvas_url:    ['🖼️',  d ? `Loading ${d.substring(0, 35)}` : 'Loading canvas...'],
-                    canvas_menu:   ['🖼️',  'Opening canvas menu...'],
-                    music_play:    ['▶️',  d ? `Playing "${d}"` : 'Playing music...'],
-                    music_stop:    ['⏹️', 'Stopping music...'],
-                    music_next:    ['⏭️', 'Next track...'],
-                    spotify:       ['🎧', d ? `Spotify: "${d}"` : 'Playing Spotify...'],
-                    sound:         ['🔔', d ? `Sound: ${d}` : 'Playing sound...'],
-                    register_face: ['👤', d ? `Registering: ${d}` : 'Registering face...'],
-                    sleep:         ['😴', 'Going to sleep...'],
-                    session_reset: ['🔄', 'Resetting session...'],
-                    html_canvas:   ['⚡', 'Building canvas page...'],
+                    suno:          ['SND',  d ? `generating: ${d.substring(0, 35)}` : 'generating music'],
+                    canvas:        ['CVS',  d ? `opening ${d}` : 'opening canvas'],
+                    canvas_url:    ['CVS',  d ? `loading ${su(d)}` : 'loading canvas'],
+                    canvas_menu:   ['CVS',  'opening canvas menu'],
+                    music_play:    ['▶',    d ? `"${d}"` : 'playing music'],
+                    music_stop:    ['■',    'music stopped'],
+                    music_next:    ['▶▶',   'next track'],
+                    spotify:       ['SPT',  d ? `"${d}"` : 'playing spotify'],
+                    sound:         ['SFX',  d || 'playing sound'],
+                    register_face: ['FACE', d ? `registering ${d}` : 'registering face'],
+                    sleep:         ['ZZZ',  'going to sleep'],
+                    session_reset: ['RST',  'resetting session'],
+                    html_canvas:   ['CVS',  'building canvas page'],
                 };
                 const entry = tagMap[tag];
                 if (entry) this.show(entry[0], entry[1]);
             },
 
-            // Called by onSpeaking/onListening — show "Speaking" during TTS, hide when done
+            // Speaking state — immediate override, clears cycling
             setSpeaking(speaking) {
-                if (speaking) this.show('🔊', 'Speaking...');
+                if (speaking) this.show('▶', 'speaking');
                 else this.hide(0);
             },
         };
@@ -3339,11 +3395,16 @@ inject();
                             canvasCommandsProcessed.add('CANVAS_URL');
                             const externalUrl = canvasUrlMatch[1].trim();
                             const resolvedUrl = resolveCanvasUrl(externalUrl);
-                            console.log('[Canvas] External URL trigger:', externalUrl, resolvedUrl !== externalUrl ? `→ ${resolvedUrl}` : '');
-                            ActionConsole.addEntry('system', `Canvas: loading ${resolvedUrl}`);
-                            AgentActivityChip.handleTag('canvas_url', resolvedUrl);
-                            const iframe = document.getElementById('canvas-iframe');
-                            if (iframe) { iframe.src = resolvedUrl; CanvasControl.show(); }
+                            if (resolvedUrl) {
+                                console.log('[Canvas] External URL trigger:', externalUrl, resolvedUrl !== externalUrl ? `→ ${resolvedUrl}` : '');
+                                ActionConsole.addEntry('system', `Canvas: loading ${resolvedUrl}`);
+                                AgentActivityChip.handleTag('canvas_url', resolvedUrl);
+                                const iframe = document.getElementById('canvas-iframe');
+                                if (iframe) { iframe.src = resolvedUrl; CanvasControl.show(); }
+                            } else {
+                                console.warn('[Canvas] Blocked private/internal URL from agent:', externalUrl);
+                                ActionConsole.addEntry('system', `Canvas: blocked private URL — agent should use the public dev URL`);
+                            }
                         }
                         // Check for [SLEEP] — agent-initiated return to wake-word mode
                         if (/\[SLEEP\]/i.test(text) && !canvasCommandsProcessed.has('SLEEP')) {
@@ -4343,7 +4404,18 @@ inject();
                 this.config = config;
                 this.isConnected = false;
                 this.isProcessing = false;
-                this.stt = new WebSpeechSTT();
+                // Select STT provider from server profile (default: webspeech)
+                const sttProvider = window._serverProfile?.stt?.provider || 'webspeech';
+                if (sttProvider === 'deepgram') {
+                    this.stt = new DeepgramSTT();
+                    console.log('STT provider: Deepgram Nova-2');
+                } else if (sttProvider === 'groq') {
+                    this.stt = new GroqSTT();
+                    console.log('STT provider: Groq Whisper');
+                } else {
+                    this.stt = new WebSpeechSTT();
+                    console.log('STT provider: Chrome Web Speech');
+                }
                 this.ttsProvider = 'supertonic';
                 this.ttsVoice = 'F3';
                 this.audioContext = null;
@@ -4668,10 +4740,15 @@ inject();
                 if (canvasUrlMatch) {
                     const externalUrl = canvasUrlMatch[1].trim();
                     const resolvedUrl = resolveCanvasUrl(externalUrl);
-                    console.log('[Canvas] External URL trigger:', externalUrl, resolvedUrl !== externalUrl ? `→ ${resolvedUrl}` : '');
-                    ActionConsole.addEntry('system', `Canvas: loading ${resolvedUrl}`);
-                    const iframe = document.getElementById('canvas-iframe');
-                    if (iframe) { iframe.src = resolvedUrl; CanvasControl.show(); }
+                    if (resolvedUrl) {
+                        console.log('[Canvas] External URL trigger:', externalUrl, resolvedUrl !== externalUrl ? `→ ${resolvedUrl}` : '');
+                        ActionConsole.addEntry('system', `Canvas: loading ${resolvedUrl}`);
+                        const iframe = document.getElementById('canvas-iframe');
+                        if (iframe) { iframe.src = resolvedUrl; CanvasControl.show(); }
+                    } else {
+                        console.warn('[Canvas] Blocked private/internal URL from agent:', externalUrl);
+                        ActionConsole.addEntry('system', `Canvas: blocked private URL — agent should use the public dev URL`);
+                    }
                 }
                 // [MUSIC_PLAY] or [MUSIC_PLAY:track]
                 const musicPlay = text.match(/\[MUSIC_PLAY(?::([^\]]+))?\]/i);
@@ -5581,9 +5658,12 @@ inject();
             // localStorage — do NOT override it here. voiceConversation.setTTSProvider()
             // below will apply it correctly.
 
-            // Initialize Wake Word Detector (Chrome Web Speech API — free, no hallucinations)
+            // Initialize Wake Word Detector — matches STT provider
             console.log('Initializing WakeWordDetector...');
-            const wakeDetector = new WakeWordDetector();
+            const _sttProv = window._serverProfile?.stt?.provider || 'webspeech';
+            const wakeDetector = _sttProv === 'deepgram' ? new DeepgramWakeWordDetector()
+                               : _sttProv === 'groq' ? new GroqWakeWordDetector()
+                               : new WakeWordDetector();
             window.wakeDetector = wakeDetector;
 
             // Set up wake word callback to auto-trigger call button
@@ -7905,6 +7985,7 @@ inject();
             _toggleMode() {
                 this.pttMode = !this.pttMode;
                 this.button.classList.toggle('ptt-mode', this.pttMode);
+                void this.button.offsetHeight; // force repaint on iOS Safari (prevents stale paint after e.preventDefault on pointerdown)
                 const stt = this._getSTT();
 
                 if (this.pttMode) {
@@ -8239,7 +8320,8 @@ inject();
                 clearInterval(_sttExposePoll);
                 stt._exposed = true;
 
-                console.log('STT exposed (WebSpeechSTT — Chrome native)');
+                const _sttName = stt instanceof DeepgramSTT ? 'Deepgram Nova-2' : stt instanceof GroqSTT ? 'Groq Whisper' : 'Chrome Web Speech';
+                console.log(`STT exposed (${_sttName})`);
                 // Apply any profile settings that were deferred (profile loaded before STT existed)
                 if (window._activeProfileData) {
                     const ms = window._activeProfileData?.stt?.silence_timeout_ms;

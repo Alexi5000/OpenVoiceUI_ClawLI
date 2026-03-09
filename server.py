@@ -341,6 +341,7 @@ def serve_index():
     html = pathlib.Path("index.html").read_text()
     server_url = os.environ.get("AGENT_SERVER_URL", "").strip().rstrip("/")
     clerk_key = (os.environ.get("CLERK_PUBLISHABLE_KEY") or os.environ.get("VITE_CLERK_PUBLISHABLE_KEY", "")).strip()
+    client_name = os.environ.get("CLIENT_NAME", "").strip()
     import json as _json
     devsite_map_raw = os.environ.get("DEVSITE_MAP", "{}").strip()
     try:
@@ -353,8 +354,14 @@ def serve_index():
         config_parts.append(f'clerkPublishableKey:"{clerk_key}"')
     if devsite_map:
         config_parts.append(f'devsiteMap:{_json.dumps(devsite_map)}')
+    if client_name:
+        config_parts.append(f'clientName:{_json.dumps(client_name)}')
     config_block = f'<script>window.AGENT_CONFIG={{{",".join(config_parts)}}};</script>'
     html = html.replace("<head>", f"<head>\n  {config_block}", 1)
+    # Replace PWA title and apple-mobile-web-app-title with client name
+    if client_name:
+        html = html.replace("<title>OpenVoiceUI</title>", f"<title>{client_name}</title>")
+        html = html.replace('content="OpenVoiceUI"', f'content="{client_name}"')
     resp = Response(html, mimetype="text/html")
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return resp
@@ -663,6 +670,93 @@ def groq_stt():
         return jsonify({"transcript": text, "success": True})
     except Exception as e:
         logger.error(f"Groq STT error: {e}")
+        return jsonify({"error": "Speech-to-text failed"}), 500
+
+
+@app.route("/api/stt/deepgram", methods=["POST"])
+def deepgram_stt():
+    """Transcribe audio using Deepgram Nova-2 API (reliable, low-cost)."""
+    import re as _re
+
+    if "audio" not in request.files:
+        return jsonify({"error": "No audio file provided"}), 400
+
+    api_key = os.environ.get("DEEPGRAM_API_KEY", "")
+    if not api_key:
+        return jsonify({"error": "DEEPGRAM_API_KEY not configured"}), 500
+
+    audio_file = request.files["audio"]
+    try:
+        audio_bytes = audio_file.read()
+        content_type = audio_file.content_type or "audio/webm"
+
+        import requests as _requests
+        resp = _requests.post(
+            "https://api.deepgram.com/v1/listen",
+            params={
+                "model": "nova-2",
+                "language": "en",
+                "smart_format": "true",
+                "punctuate": "true",
+            },
+            headers={
+                "Authorization": f"Token {api_key}",
+                "Content-Type": content_type,
+            },
+            data=audio_bytes,
+            timeout=15,
+        )
+
+        if resp.status_code != 200:
+            logger.error(f"Deepgram API error {resp.status_code}: {resp.text[:300]}")
+            return jsonify({"error": f"Deepgram API error: {resp.status_code}"}), 502
+
+        result = resp.json()
+        channels = result.get("results", {}).get("channels", [])
+        if not channels:
+            return jsonify({"transcript": "", "success": True})
+
+        alt = channels[0].get("alternatives", [{}])[0]
+        text = alt.get("transcript", "").strip()
+        confidence = alt.get("confidence", 0)
+
+        logger.info(f"Deepgram STT: {text!r} (confidence={confidence:.2f})")
+
+        # Low confidence filter
+        if confidence < 0.3 and text:
+            logger.info(f"Deepgram STT: FILTERED low confidence ({confidence:.2f}): {text!r}")
+            return jsonify({"transcript": "", "success": True, "filtered": True})
+
+        # Hallucination filtering (same as Groq)
+        _HALLUCINATIONS = {
+            "thank you", "thanks for watching", "thanks for listening",
+            "subscribe", "please subscribe", "like and subscribe",
+            "the end", "subtitles by", "translated by", "closed captioning",
+            "voice command for ai assistant", "voice command for ai",
+            "thanks", "thank you so much",
+        }
+        _HALLUCINATION_SUBSTRINGS = [
+            "voice command for ai", "thanks for watching", "thanks for listening",
+            "like and subscribe", "please subscribe",
+            "subtitles by", "translated by", "closed captioning",
+        ]
+        text_lower = text.lower().rstrip('.!?,;:')
+        meaningful = _re.sub(r'[^a-zA-Z0-9]', '', text)
+
+        if text_lower in _HALLUCINATIONS:
+            logger.info(f"Deepgram STT: FILTERED hallucination: {text!r}")
+            return jsonify({"transcript": "", "success": True, "filtered": True})
+        if len(meaningful) < 3:
+            logger.info(f"Deepgram STT: FILTERED too short: {text!r}")
+            return jsonify({"transcript": "", "success": True, "filtered": True})
+        for sub in _HALLUCINATION_SUBSTRINGS:
+            if sub in text_lower:
+                logger.info(f"Deepgram STT: FILTERED hallucination substring: {text!r}")
+                return jsonify({"transcript": "", "success": True, "filtered": True})
+
+        return jsonify({"transcript": text, "success": True, "confidence": confidence})
+    except Exception as e:
+        logger.error(f"Deepgram STT error: {e}")
         return jsonify({"error": "Speech-to-text failed"}), 500
 
 
@@ -998,6 +1092,34 @@ def upload_file():
     return jsonify(result)
 
 
+@app.route("/api/uploads", methods=["GET"])
+def list_uploads():
+    """List uploaded files. Optional ?type=image|text filter."""
+    file_type = request.args.get("type")  # "image", "text", or None for all
+    image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+    text_exts = {".pdf", ".txt", ".md", ".json", ".csv", ".html", ".js", ".py", ".ts", ".css"}
+
+    files = []
+    for f in sorted(UPLOADS_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if f.is_dir() or f.name.startswith("."):
+            continue
+        ext = f.suffix.lower()
+        is_image = ext in image_exts
+        kind = "image" if is_image else ("text" if ext in text_exts else "other")
+        if file_type and kind != file_type:
+            continue
+        stat = f.stat()
+        files.append({
+            "filename": f.name,
+            "url": f"/uploads/{f.name}",
+            "type": kind,
+            "size": stat.st_size,
+            "modified": stat.st_mtime,
+        })
+
+    return jsonify({"files": files, "count": len(files)})
+
+
 # ---------------------------------------------------------------------------
 # WebSocket — Gateway proxy (/ws/clawdbot)
 # ---------------------------------------------------------------------------
@@ -1145,6 +1267,86 @@ def clawdbot_websocket(ws):
         asyncio.run(_run())
     except Exception as e:
         logger.error(f"Fatal WebSocket error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# OpenClaw Control UI — WebSocket proxy
+# ---------------------------------------------------------------------------
+# Accepts browser WS (Clerk-authed via __session cookie), connects to the
+# internal openclaw gateway, and relays all frames bidirectionally.
+# Transparently injects the gateway auth token into the connect handshake
+# so the user never has to enter it.
+
+@sock.route("/openclaw-ui")
+def openclaw_ui_websocket(ws):
+    """WebSocket proxy for OpenClaw Control UI behind Clerk auth."""
+    from services.auth import verify_clerk_token, get_token_from_request
+    token = get_token_from_request()
+    user_id = verify_clerk_token(token) if token else None
+    if not user_id:
+        logger.warning("OpenClaw UI WebSocket rejected — no valid Clerk token")
+        ws.send(json.dumps({"type": "error", "message": "Unauthorized"}))
+        ws.close()
+        return
+    logger.info(f"OpenClaw UI WebSocket authenticated: user_id={user_id}")
+
+    gateway_url = os.getenv("CLAWDBOT_GATEWAY_URL", "ws://127.0.0.1:18789")
+    auth_token = os.getenv("CLAWDBOT_AUTH_TOKEN")
+
+    if not auth_token:
+        logger.error("CLAWDBOT_AUTH_TOKEN not set — OpenClaw UI WebSocket rejected")
+        ws.send(json.dumps({"type": "error", "message": "Server configuration error"}))
+        ws.close()
+        return
+
+    async def _run():
+        try:
+            async with websockets.connect(gateway_url) as gw:
+                logger.info(f"OpenClaw UI: connected to Gateway at {gateway_url}")
+
+                async def _from_client():
+                    """Relay browser → openclaw, injecting auth token on connect."""
+                    while True:
+                        msg = ws.receive()
+                        if not msg:
+                            break
+                        try:
+                            data = json.loads(msg)
+                            if data.get("type") == "req" and data.get("method") == "connect":
+                                if "params" not in data:
+                                    data["params"] = {}
+                                data["params"]["auth"] = {"token": auth_token}
+                                msg = json.dumps(data)
+                        except (json.JSONDecodeError, TypeError):
+                            pass  # Non-JSON frame — relay as-is
+                        await gw.send(msg)
+
+                async def _from_gateway():
+                    """Relay openclaw → browser (raw, no transformation)."""
+                    while True:
+                        try:
+                            msg = await asyncio.wait_for(gw.recv(), timeout=300.0)
+                            ws.send(msg)
+                        except asyncio.TimeoutError:
+                            logger.warning("OpenClaw UI: gateway recv() timed out")
+                            ws.send(json.dumps({"type": "error", "message": "Gateway timeout"}))
+                            return
+
+                await asyncio.gather(_from_client(), _from_gateway())
+
+        except (ConnectionRefusedError, OSError) as e:
+            logger.error(f"OpenClaw UI: cannot reach Gateway at {gateway_url}: {e}")
+            ws.send(json.dumps({"type": "error", "message": "Cannot connect to Gateway"}))
+            ws.close()
+        except Exception as e:
+            logger.error(f"OpenClaw UI WebSocket error: {e}")
+            ws.send(json.dumps({"type": "error", "message": "Connection error"}))
+            ws.close()
+
+    try:
+        asyncio.run(_run())
+    except Exception as e:
+        logger.error(f"OpenClaw UI: fatal WebSocket error: {e}")
 
 
 # ---------------------------------------------------------------------------

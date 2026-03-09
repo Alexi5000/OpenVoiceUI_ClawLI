@@ -92,7 +92,7 @@ _VOICE_INSTRUCTIONS = (
     "[OPENVOICEUI SYSTEM INSTRUCTIONS: "
 
     # --- Voice & Tone ---
-    "You are a voice AI assistant. Always respond in English. "
+    "You are a voice AI assistant. ALWAYS respond in English — never Chinese or any other language. "
     "Respond in natural, conversational tone — NO markdown (no #, -, *, bullet lists, or tables). "
     "Be brief and direct. Never sound like a call center agent or a search engine. "
     "BANNED OPENERS — never start a response with: 'Hey there', 'Great question', 'Absolutely', "
@@ -514,6 +514,7 @@ def clean_for_tts(text: str) -> str:
     # Remove canvas/task/music triggers (handled by frontend, not spoken)
     text = re.sub(r'\[CANVAS_MENU\]', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\[CANVAS:[^\]]*\]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\[CANVAS_URL:[^\]]*\]', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\[MUSIC_PLAY(?::[^\]]*)?\]', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\[MUSIC_STOP\]', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\[MUSIC_NEXT\]', '', text, flags=re.IGNORECASE)
