@@ -3,6 +3,7 @@
 **Date:** 2026-02-28
 **Observed on:** tenant-a (tenant-a.jam-bot.com), likely all client domains
 **Priority:** Low — nothing is leaking, but worth addressing
+**GitHub:** #167
 
 ## What's Happening
 
