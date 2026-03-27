@@ -2,8 +2,8 @@
 
 **Date:** 2026-02-28
 **Observed on:** tenant-a (tenant-a.jam-bot.com), likely all client domains
-**Priority:** Low — nothing is leaking, but worth addressing
-**GitHub:** #167
+**Priority:** Low — nothing is leaking
+**GitHub:** #167 (closed)
 
 ## What's Happening
 
