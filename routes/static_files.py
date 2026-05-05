@@ -13,7 +13,6 @@ Registers routes:
 import logging
 import random
 import re
-import subprocess
 from pathlib import Path
 
 from flask import Blueprint, Response, jsonify, request, send_file
@@ -305,23 +304,21 @@ def upload_file():
 
     # --- HEIC/HEIF → JPG auto-conversion ---
     # Browsers can't display HEIC natively. Convert on ingest so the file is
-    # immediately usable. ImageMagick + libheif1 are present on the host image.
+    # immediately usable. Uses pillow-heif (in requirements.txt).
     if ext in ('.heic', '.heif'):
         jpg_name = f"{stem_safe}__{uuid.uuid4().hex[:8]}.jpg"
         jpg_dest = UPLOADS_DIR / jpg_name
         try:
-            result = subprocess.run(
-                ['convert', f'{dest}[0]', str(jpg_dest)],
-                capture_output=True, timeout=30
-            )
-            if result.returncode == 0 and jpg_dest.exists():
-                dest.rename(dest.parent / (dest.stem + '.heic.original'))
-                dest = jpg_dest
-                safe_name = jpg_name
-                ext = '.jpg'
-                logger.info(f'### HEIC→JPG conversion ok: {jpg_name}')
-            else:
-                logger.warning(f'### HEIC→JPG conversion failed (rc={result.returncode}): {result.stderr.decode()[:200]}')
+            import pillow_heif
+            from PIL import Image as _Image
+            pillow_heif.register_heif_opener()
+            with _Image.open(str(dest)) as _img:
+                _img.convert('RGB').save(str(jpg_dest), 'JPEG', quality=90)
+            dest.rename(dest.parent / (dest.stem + '.heic.original'))
+            dest = jpg_dest
+            safe_name = jpg_name
+            ext = '.jpg'
+            logger.info(f'### HEIC→JPG conversion ok: {jpg_name}')
         except Exception as _e:
             logger.warning(f'### HEIC→JPG conversion error: {_e}')
 
