@@ -468,9 +468,13 @@ def _build_recovery_prime(max_turns: int = 6) -> str | None:
             # usually None) — only the steer/interject routes explicitly
             # write session_id='default'. Include both so the prime
             # reflects the actual recent conversation.
+            # Time-filter: only inject turns from the last 10 minutes so stale
+            # context from previous sessions (hours/days old) can't poison a
+            # fresh recovery. Recovery is immediate so old turns are irrelevant.
             rows = _c.execute(
                 'SELECT role, message FROM conversation_log '
-                "WHERE session_id = 'default' OR session_id IS NULL "
+                "WHERE (session_id = 'default' OR session_id IS NULL) "
+                "AND created_at >= datetime('now', '-10 minutes') "
                 'ORDER BY id DESC LIMIT ?',
                 (max_turns,),
             ).fetchall()
@@ -525,10 +529,9 @@ def _enter_session_recovery():
     agent behaves like a brand-new conversation and users experience
     'context lost' after a recovery.
 
-    IMPORTANT: Uses a STABLE key ('recovery') not a timestamped one.
-    Timestamped keys (recovery-<epoch>) created a new openclaw session
-    every time, piling up zombie sessions that never got cleaned.
-    A stable key reuses the same recovery session each time."""
+    Uses a timestamped key so that if the recovery session ITSELF poisons
+    later, a new recovery-<epoch> session can be spun up cleanly. The
+    last-exited cooldown prevents rapid thrashing."""
     global _session_recovery_key, _recovery_entered_at, _recovery_last_activity_at, _recovery_context_prime
     # Cooldown: prevent re-entering recovery within 10s of a previous SUCCESSFUL
     # exit. Pre-Fix-F this was measured against _recovery_entered_at which
@@ -1432,8 +1435,13 @@ def _conversation_inner():
             # After a double-empty that flipped us to the 'recovery' key,
             # prepend a compressed history summary to the very FIRST request
             # so the fresh openclaw session has memory of the prior turns.
+            # Skip on __session_start__: injecting old context onto a greeting
+            # request causes the agent to pick up stale work instead of greeting.
             _recovery_prime = consume_recovery_prime()
-            if _recovery_prime:
+            if _recovery_prime and user_message == '__session_start__':
+                logger.info('### Suppressing recovery prime on __session_start__ (greeting takes priority)')
+                _recovery_prime = None
+            elif _recovery_prime:
                 logger.info(f'### Injecting session-recovery prime ({len(_recovery_prime)} chars)')
 
             def _run_gateway():
