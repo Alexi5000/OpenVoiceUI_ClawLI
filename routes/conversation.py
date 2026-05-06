@@ -468,9 +468,13 @@ def _build_recovery_prime(max_turns: int = 6) -> str | None:
             # usually None) — only the steer/interject routes explicitly
             # write session_id='default'. Include both so the prime
             # reflects the actual recent conversation.
+            # Time-filter: only inject turns from the last 10 minutes so stale
+            # context from previous sessions (hours/days old) can't poison a
+            # fresh recovery. Recovery is immediate so old turns are irrelevant.
             rows = _c.execute(
                 'SELECT role, message FROM conversation_log '
-                "WHERE session_id = 'default' OR session_id IS NULL "
+                "WHERE (session_id = 'default' OR session_id IS NULL) "
+                "AND created_at >= datetime('now', '-10 minutes') "
                 'ORDER BY id DESC LIMIT ?',
                 (max_turns,),
             ).fetchall()
@@ -525,10 +529,9 @@ def _enter_session_recovery():
     agent behaves like a brand-new conversation and users experience
     'context lost' after a recovery.
 
-    IMPORTANT: Uses a STABLE key ('recovery') not a timestamped one.
-    Timestamped keys (recovery-<epoch>) created a new openclaw session
-    every time, piling up zombie sessions that never got cleaned.
-    A stable key reuses the same recovery session each time."""
+    Uses a timestamped key so that if the recovery session ITSELF poisons
+    later, a new recovery-<epoch> session can be spun up cleanly. The
+    last-exited cooldown prevents rapid thrashing."""
     global _session_recovery_key, _recovery_entered_at, _recovery_last_activity_at, _recovery_context_prime
     # Cooldown: prevent re-entering recovery within 10s of a previous SUCCESSFUL
     # exit. Pre-Fix-F this was measured against _recovery_entered_at which
@@ -1249,6 +1252,20 @@ def _conversation_inner():
         except Exception:
             pass
 
+        # Recently FAILED Suno generations — agent must tell user something went wrong
+        try:
+            from routes.suno import failed_songs_queue
+            if failed_songs_queue:
+                _failed = failed_songs_queue[-3:]
+                _failed_lines = []
+                for f in _failed:
+                    label = f.get('brand') or f.get('title') or 'a track'
+                    reason = f.get('reason', 'unknown error')
+                    _failed_lines.append(f'{label!r} — {reason}')
+                context_parts.append(f'[Suno generation FAILED: {"; ".join(_failed_lines)} — apologize to user and offer to try again]')
+        except Exception:
+            pass
+
         # Available canvas pages (agent needs IDs for [CANVAS:page-id])
         try:
             from routes.canvas import load_canvas_manifest
@@ -1269,6 +1286,7 @@ def _conversation_inner():
     _min_sentence_chars = 40  # default — prevents choppy short TTS fragments
     _parallel_sentences = True  # default — fire all TTS in parallel threads
     _inter_sentence_gap_ms = 0  # default — no gap between audio chunks
+    _prof = None  # default — referenced again in __session_start__ greeting branch below
     try:
         from profiles.manager import get_profile_manager
         from routes.profiles import _active_profile_id
@@ -1320,11 +1338,36 @@ def _conversation_inner():
     # Replace the legacy __session_start__ sentinel with a natural-language greeting
     # prompt so the LLM produces a real greeting instead of a system sentinel ("NO").
     # user_message is kept as-is so the sentinel suppression logic still works.
+    #
+    # If the active profile defines a verbatim conversation.greeting, the LLM is
+    # instructed to say it EXACTLY — no improvisation, no "Welcome back, ready
+    # when you are" drift. This makes the on-screen greeting deterministic across
+    # restarts. Profiles without a greeting fall back to the open-ended prompt.
     if user_message == '__session_start__':
         logger.info(f"### CALL_START session={session_id}")
         _face = identified_person or {}
         _face_name = _face.get('name', '') if _face.get('name', '') != 'unknown' else ''
-        if _face_name:
+        _profile_greeting = ''
+        try:
+            if _prof and getattr(_prof, 'conversation', None):
+                _profile_greeting = (getattr(_prof.conversation, 'greeting', '') or '').strip()
+        except Exception:
+            _profile_greeting = ''
+        if _profile_greeting:
+            if _face_name:
+                _gateway_message = (
+                    f'A new voice session has just started. The person in front of the camera '
+                    f'has been identified as {_face_name}. Say EXACTLY this sentence as your '
+                    f'entire response — do not add or remove anything, do not rephrase, do not '
+                    f'append qualifiers: "{_profile_greeting}"'
+                )
+            else:
+                _gateway_message = (
+                    f'A new voice session has just started. Say EXACTLY this sentence as your '
+                    f'entire response — do not add or remove anything, do not rephrase, do not '
+                    f'append qualifiers: "{_profile_greeting}"'
+                )
+        elif _face_name:
             _gateway_message = (
                 f'A new voice session has just started. The person in front of the camera '
                 f'has been identified as {_face_name}. Greet them by name — '
@@ -1392,8 +1435,13 @@ def _conversation_inner():
             # After a double-empty that flipped us to the 'recovery' key,
             # prepend a compressed history summary to the very FIRST request
             # so the fresh openclaw session has memory of the prior turns.
+            # Skip on __session_start__: injecting old context onto a greeting
+            # request causes the agent to pick up stale work instead of greeting.
             _recovery_prime = consume_recovery_prime()
-            if _recovery_prime:
+            if _recovery_prime and user_message == '__session_start__':
+                logger.info('### Suppressing recovery prime on __session_start__ (greeting takes priority)')
+                _recovery_prime = None
+            elif _recovery_prime:
                 logger.info(f'### Injecting session-recovery prime ({len(_recovery_prime)} chars)')
 
             def _run_gateway():
