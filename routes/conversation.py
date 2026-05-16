@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import queue
+import random
 import re
 import sqlite3
 import threading
@@ -234,6 +235,27 @@ _VOICE_INSTRUCTIONS = (
 
     "]"
 )
+
+
+# Spoken fallbacks for __session_start__ when the LLM returns nothing usable.
+# The current temporary primary model (zai/glm-5-turbo — see
+# memory/glm-primary-temporary-swap) returns empty / bare-"NO" completions on
+# the first turn of a session noticeably more often than MiniMax did. When that
+# happens we substitute one of these so the user always hears a greeting on
+# connect instead of dead air. (A profile-defined conversation.greeting wins
+# over these — see the __session_start__ handling in _conversation_inner.)
+_SESSION_START_FALLBACK_GREETINGS = (
+    "Hey — I'm here. What can I do for you?",
+    "Hi there. What's on your mind?",
+    "I'm listening — what do you need?",
+    "Hey, I'm here. What's up?",
+    "Ready when you are — what can I help with?",
+)
+
+
+def _pick_session_start_greeting() -> str:
+    """Pick a varied generic greeting for the empty-__session_start__ fallback."""
+    return random.choice(_SESSION_START_FALLBACK_GREETINGS)
 
 
 def _is_vision_request(msg: str) -> bool:
@@ -468,9 +490,13 @@ def _build_recovery_prime(max_turns: int = 6) -> str | None:
             # usually None) — only the steer/interject routes explicitly
             # write session_id='default'. Include both so the prime
             # reflects the actual recent conversation.
+            # Time-filter: only inject turns from the last 10 minutes so stale
+            # context from previous sessions (hours/days old) can't poison a
+            # fresh recovery. Recovery is immediate so old turns are irrelevant.
             rows = _c.execute(
                 'SELECT role, message FROM conversation_log '
-                "WHERE session_id = 'default' OR session_id IS NULL "
+                "WHERE (session_id = 'default' OR session_id IS NULL) "
+                "AND created_at >= datetime('now', '-10 minutes') "
                 'ORDER BY id DESC LIMIT ?',
                 (max_turns,),
             ).fetchall()
@@ -525,10 +551,9 @@ def _enter_session_recovery():
     agent behaves like a brand-new conversation and users experience
     'context lost' after a recovery.
 
-    IMPORTANT: Uses a STABLE key ('recovery') not a timestamped one.
-    Timestamped keys (recovery-<epoch>) created a new openclaw session
-    every time, piling up zombie sessions that never got cleaned.
-    A stable key reuses the same recovery session each time."""
+    Uses a timestamped key so that if the recovery session ITSELF poisons
+    later, a new recovery-<epoch> session can be spun up cleanly. The
+    last-exited cooldown prevents rapid thrashing."""
     global _session_recovery_key, _recovery_entered_at, _recovery_last_activity_at, _recovery_context_prime
     # Cooldown: prevent re-entering recovery within 10s of a previous SUCCESSFUL
     # exit. Pre-Fix-F this was measured against _recovery_entered_at which
@@ -1249,6 +1274,20 @@ def _conversation_inner():
         except Exception:
             pass
 
+        # Recently FAILED Suno generations — agent must tell user something went wrong
+        try:
+            from routes.suno import failed_songs_queue
+            if failed_songs_queue:
+                _failed = failed_songs_queue[-3:]
+                _failed_lines = []
+                for f in _failed:
+                    label = f.get('brand') or f.get('title') or 'a track'
+                    reason = f.get('reason', 'unknown error')
+                    _failed_lines.append(f'{label!r} — {reason}')
+                context_parts.append(f'[Suno generation FAILED: {"; ".join(_failed_lines)} — apologize to user and offer to try again]')
+        except Exception:
+            pass
+
         # Available canvas pages (agent needs IDs for [CANVAS:page-id])
         try:
             from routes.canvas import load_canvas_manifest
@@ -1269,6 +1308,9 @@ def _conversation_inner():
     _min_sentence_chars = 40  # default — prevents choppy short TTS fragments
     _parallel_sentences = True  # default — fire all TTS in parallel threads
     _inter_sentence_gap_ms = 0  # default — no gap between audio chunks
+    _prof = None  # default — referenced again in __session_start__ greeting branch below
+    _profile_greeting = ''  # default — set in the __session_start__ branch; read by the
+                            # empty-greeting fallback in stream_response (closure capture)
     try:
         from profiles.manager import get_profile_manager
         from routes.profiles import _active_profile_id
@@ -1300,6 +1342,23 @@ def _conversation_inner():
         if _user_tag:
             context_parts.append(_user_tag)
             logger.info(f'### CURRENT_USER injected: clerk_uid={_clerk_uid} tenant={_tenant}')
+
+        # Mesh-access gate — refresh the .mesh-admin-session marker on every
+        # turn where the admin (Mike) is the authenticated Clerk user. The
+        # mesh-send/mesh-recv wrappers in voice tenants check this marker
+        # (300s TTL) before allowing any mesh operation. Voice tenants serving
+        # a non-admin customer get NO mesh access; admin sessions get full
+        # both-direction access. host/test-dev/webtops bypass the gate.
+        # See /mnt/system/base/skills/agent-mesh/bin/mesh-gate-check.
+        ADMIN_CLERK_ID = 'user_ADMIN_ID_FROM_ENV'
+        if _clerk_uid == ADMIN_CLERK_ID:
+            try:
+                _gate_path = '/app/runtime/uploads/.mesh-admin-session'
+                _ts_iso = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                with open(_gate_path, 'w', encoding='utf-8') as _gf:
+                    _gf.write(f'admin={_clerk_uid}\nrefreshed_at={_ts_iso}\nsource=conversation.py auto-refresh\n')
+            except Exception as _ge:
+                logger.warning(f'mesh-gate refresh failed (non-fatal): {_ge}')
     except Exception as _e:
         logger.warning(f'CURRENT_USER injection failed (non-fatal): {_e}')
 
@@ -1320,11 +1379,36 @@ def _conversation_inner():
     # Replace the legacy __session_start__ sentinel with a natural-language greeting
     # prompt so the LLM produces a real greeting instead of a system sentinel ("NO").
     # user_message is kept as-is so the sentinel suppression logic still works.
+    #
+    # If the active profile defines a verbatim conversation.greeting, the LLM is
+    # instructed to say it EXACTLY — no improvisation, no "Welcome back, ready
+    # when you are" drift. This makes the on-screen greeting deterministic across
+    # restarts. Profiles without a greeting fall back to the open-ended prompt.
     if user_message == '__session_start__':
         logger.info(f"### CALL_START session={session_id}")
         _face = identified_person or {}
         _face_name = _face.get('name', '') if _face.get('name', '') != 'unknown' else ''
-        if _face_name:
+        _profile_greeting = ''
+        try:
+            if _prof and getattr(_prof, 'conversation', None):
+                _profile_greeting = (getattr(_prof.conversation, 'greeting', '') or '').strip()
+        except Exception:
+            _profile_greeting = ''
+        if _profile_greeting:
+            if _face_name:
+                _gateway_message = (
+                    f'A new voice session has just started. The person in front of the camera '
+                    f'has been identified as {_face_name}. Say EXACTLY this sentence as your '
+                    f'entire response — do not add or remove anything, do not rephrase, do not '
+                    f'append qualifiers: "{_profile_greeting}"'
+                )
+            else:
+                _gateway_message = (
+                    f'A new voice session has just started. Say EXACTLY this sentence as your '
+                    f'entire response — do not add or remove anything, do not rephrase, do not '
+                    f'append qualifiers: "{_profile_greeting}"'
+                )
+        elif _face_name:
             _gateway_message = (
                 f'A new voice session has just started. The person in front of the camera '
                 f'has been identified as {_face_name}. Greet them by name — '
@@ -1392,8 +1476,13 @@ def _conversation_inner():
             # After a double-empty that flipped us to the 'recovery' key,
             # prepend a compressed history summary to the very FIRST request
             # so the fresh openclaw session has memory of the prior turns.
+            # Skip on __session_start__: injecting old context onto a greeting
+            # request causes the agent to pick up stale work instead of greeting.
             _recovery_prime = consume_recovery_prime()
-            if _recovery_prime:
+            if _recovery_prime and user_message == '__session_start__':
+                logger.info('### Suppressing recovery prime on __session_start__ (greeting takes priority)')
+                _recovery_prime = None
+            elif _recovery_prime:
                 logger.info(f'### Injecting session-recovery prime ({len(_recovery_prime)} chars)')
 
             def _run_gateway():
@@ -1764,9 +1853,14 @@ def _conversation_inner():
                                 full_response = _truncate_at_sentence(full_response, max_response_chars)
 
                             # Suppress bare NO/YES sentinel responses to system triggers
-                            # (gateway returns "NO" for wake-word checks on __session_start__)
+                            # (gateway returns "NO" for wake-word checks on some triggers).
+                            # __session_start__ is the exception: a bare NO/YES there is the
+                            # same broken-greeting case as an empty reply, and silently
+                            # `break`-ing here means the user connects the call and hears
+                            # nothing. So let __session_start__ fall through to the
+                            # empty-greeting fallback below instead of dead-ending.
                             _is_system_trigger = user_message.startswith('__')
-                            if _is_system_trigger and full_response and \
+                            if _is_system_trigger and user_message != '__session_start__' and full_response and \
                                     full_response.strip().upper() in ('NO', 'NO.', 'YES', 'YES.'):
                                 logger.info(f'Suppressing sentinel "{full_response.strip()}" for system trigger')
                                 yield json.dumps({'type': 'no_audio'}) + '\n'
@@ -2142,6 +2236,40 @@ def _conversation_inner():
                                     f"### TIMEOUT EMPTY ({metrics['llm_inference_ms']}ms) — "
                                     f"graceful fallback, no session recovery"
                                 )
+
+                            # ── __session_start__ must ALWAYS produce a spoken greeting ──
+                            # GLM-5-turbo (current temporary primary, see
+                            # memory/glm-primary-temporary-swap) returns empty / bare-"NO" /
+                            # tag-only completions on the first turn of a session noticeably
+                            # more than MiniMax did. The gateway already retried once
+                            # internally (openclaw.py EMPTY-FINAL retry); the double-empty
+                            # breaker and the conversation.py retry both deliberately skip
+                            # __ system triggers; and the timeout-empty branch above only
+                            # covers >30s runs. So a 5–30s empty greeting falls through to
+                            # here with full_response = None — and an empty text_done makes
+                            # app.js "silent resume" (user connects the call, hears dead air,
+                            # has to speak first). Substitute a real greeting instead: the
+                            # profile's verbatim conversation.greeting if it defines one,
+                            # otherwise a varied generic one. The agent's openclaw session is
+                            # still warmed by the empty turn, so the conversation continues
+                            # normally from the user's next message.
+                            if user_message == '__session_start__':
+                                _gs = (full_response or '').strip()
+                                _gs_norm = _gs.upper().rstrip('.!?')
+                                _gs_tag_only = bool(_gs) and re.match(r'^\s*(\[[^\]]+\]\s*)+$', _gs)
+                                if (not _gs) or _gs_norm in ('NO', 'YES') or _gs_tag_only:
+                                    _fb_greeting = (_profile_greeting or '').strip() or _pick_session_start_greeting()
+                                    logger.warning(
+                                        f"### SESSION_START produced no usable greeting "
+                                        f"(was {full_response!r}, {metrics.get('llm_inference_ms')}ms) "
+                                        f"— substituting fallback greeting: {_fb_greeting!r}"
+                                    )
+                                    full_response = _fb_greeting
+                                    metrics['fallback_used'] = 1
+                                    # Drop any partial / bare-token TTS buffered from the
+                                    # broken turn so only the fallback greeting is spoken.
+                                    _tts_buf = ''
+                                    _tts_pending.clear()
 
                             # ── Final safety net: bare "NO" / "YES" must NEVER reach the user ──
                             # Catches any degenerate single-token response that slipped past
