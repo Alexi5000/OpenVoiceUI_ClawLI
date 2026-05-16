@@ -269,7 +269,7 @@ OpenVoiceUI has a plugin system for community-built extensions. Plugins can incl
 | Plugin | Type | Description |
 |--------|------|-------------|
 | [**BHB Animated Characters**](https://github.com/MCERQUA/openvoiceui-plugins) | Face Pack | Animated BigHead Billionaires character avatars with lip-sync, mood expressions, and show lore. By [BHaleyart](https://github.com/BHALEYART) |
-| **Hermes Agent** | Gateway | Self-improving AI agent with auto-generated skills, deep memory search, and autonomous tasks. Adds OpenClaw+Hermes hybrid and Hermes-only modes |
+| [**Hermes Agent**](https://github.com/MCERQUA/openvoiceui-plugins/tree/main/hermes-agent) | Gateway | Self-improving AI agent ([Hermes v0.13.0 / `nousresearch/hermes-agent:v2026.5.7`](https://github.com/NousResearch/hermes-agent/releases/tag/v2026.5.7), pegged — never `:latest`) with auto-generated skills, deep memory search, autonomous tasks, multi-agent Kanban, goal-locking, video analysis, voice cloning. Adds OpenClaw+Hermes hybrid and Hermes-only modes |
 | **SEO Platform** | Canvas Page | Full SEO dashboard powered by DataForSEO — keyword research, rank tracking, backlink analysis, site audits, AI visibility, and local SEO |
 | **Twenty CRM** | Canvas Page | Connect to a Twenty CRM instance for contact, company, deal, and task management with embedded CRM view and setup wizard |
 
