@@ -578,8 +578,11 @@ connectAiradio();
                 }
                 this.currentMood = mood;
 
-                // Propagate mood to BigHeadFace if active
+                // Propagate mood to BigHeadFace + HaloSmokeFace if active.
+                // HaloSmoke collapses non-'thinking' moods to its idle state,
+                // which is how it clears the dots animation when a turn ends.
                 window.BigHeadFace?.setMood(mood);
+                window.HaloSmokeFace?.setMood(mood);
             },
 
             blink() {
@@ -8286,6 +8289,13 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
 
             addMessage(role, text, opts = {}) {
                 if (!this.messages || !text) return;
+
+                // Remove any stale thinking bubble before appending an assistant
+                // response. The streaming path (startStreaming/finalizeStreaming)
+                // already does this, but the non-streaming response path
+                // (data.response → addMessage) was leaving the dots floating
+                // above the rendered reply.
+                if (role === 'assistant') this.removeThinking();
 
                 const msg = document.createElement('div');
                 msg.className = `tp-msg ${role === 'user' ? 'user' : 'assistant'}`;
