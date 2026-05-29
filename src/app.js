@@ -3995,10 +3995,15 @@ connectAiradio();
                     const decoder = new TextDecoder();
                     let buffer = '';
 
-                    // Inactivity timeout: abort if no data received for 60s
-                    // (heartbeats arrive every 10-15s during tool execution)
+                    // Inactivity timeout: abort if no data received for this long.
+                    // MUST be >= the server-side run budget (openclaw gateway
+                    // timeout = 300s) so the client never gives up before the
+                    // server does — otherwise long silent work (subagent spawns,
+                    // batch ops) gets cut at the client and shows a false
+                    // "stream timed out". Heartbeats normally arrive every 5-10s
+                    // and reset this; 300s is the hard backstop matching the server.
                     // _inactivityTimer declared in outer scope so finally{} can clear it
-                    const INACTIVITY_TIMEOUT_MS = 60000;
+                    const INACTIVITY_TIMEOUT_MS = 300000;
                     const _resetInactivity = () => {
                         if (_inactivityTimer) clearTimeout(_inactivityTimer);
                         _inactivityTimer = setTimeout(() => {
