@@ -3788,6 +3788,7 @@ connectAiradio();
                 if (this._ttsGuardTimer) { clearTimeout(this._ttsGuardTimer); this._ttsGuardTimer = null; }
                 // Abort any in-flight fetch so streaming stops immediately
                 if (this._fetchAbortController) {
+                    this._abortReason = 'stop';
                     this._fetchAbortController.abort();
                     this._fetchAbortController = null;
                     // Tell server to abort the openclaw run (fire-and-forget)
@@ -3860,6 +3861,7 @@ connectAiradio();
                         // instead: abort the tail, then fall through to the normal
                         // sendMessage path.
                         console.warn(`↩ POST-TEXT_DONE message — treating as fresh request: "${text.substring(0,30)}"`);
+                        this._abortReason = 'user';
                         this._fetchAbortController.abort();
                         this._fetchAbortController = null;
                         fetch(`${this.config.serverUrl}${convPath('abort')}`, {
@@ -3870,6 +3872,7 @@ connectAiradio();
                         this.stopAudio();
                     } else if (this._ttsPlaying) {
                         // Agent already responded, TTS playing → ABORT
+                        this._abortReason = 'user';
                         this._fetchAbortController.abort();
                         this._fetchAbortController = null;
                         console.warn(`⛔ ABORT source: ClawdbotMode.sendMessage (TTS playing, new msg: "${text.substring(0,30)}")`);
@@ -4000,6 +4003,7 @@ connectAiradio();
                         if (_inactivityTimer) clearTimeout(_inactivityTimer);
                         _inactivityTimer = setTimeout(() => {
                             console.warn('[Stream] No data for 60s — aborting');
+                            this._abortReason = 'inactivity';
                             this._fetchAbortController?.abort();
                         }, INACTIVITY_TIMEOUT_MS);
                     };
@@ -4598,11 +4602,25 @@ connectAiradio();
                         FaceModule.setMood('neutral');
                         StatusModule.update('idle', 'READY');
                         TranscriptPanel.removeThinking();
-                        // If agent was mid-task (had heartbeats), note the redirect
-                        if (this._wasAgentic) {
-                            this._wasAgentic = false;
+                        // Label the abort by its ACTUAL cause — only an explicit
+                        // user interrupt is "redirected by user". An inactivity
+                        // timeout (agent went silent during long work) or a call
+                        // stop is NOT a user redirect, and mislabeling it confused
+                        // users ("why does it say redirected when I didn't?").
+                        const _reason = this._abortReason;
+                        this._abortReason = null;
+                        const _wasAgentic = this._wasAgentic;
+                        this._wasAgentic = false;
+                        if (_reason === 'user') {
                             TranscriptPanel.finalizeStreaming('🔀 Redirected.');
                             ActionConsole.addEntry('system', 'Task redirected by user');
+                        } else if (_reason === 'inactivity') {
+                            TranscriptPanel.finalizeStreaming('⏳ Agent went quiet — stream timed out.');
+                            ActionConsole.addEntry('system', 'Stream timed out (agent silent 60s) — not a user action');
+                        } else if (_wasAgentic && !_reason) {
+                            // Unknown-source abort during agentic work — don't blame
+                            // the user; just close the stream quietly.
+                            TranscriptPanel.finalizeStreaming(null);
                         } else {
                             TranscriptPanel.finalizeStreaming(null);
                         }
