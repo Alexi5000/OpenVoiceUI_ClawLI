@@ -5,7 +5,7 @@ Provides endpoints for generating songs via Suno API (sunoapi.org).
 Generated songs land in generated_music/ and show up in the music player.
 
 Endpoints:
-  GET/POST  /api/suno              (action: generate|status|list|credits)
+  GET/POST  /api/suno              (action: generate|jingle|sfx|status|list|credits)
   POST      /api/suno/callback     (webhook from sunoapi.org)
   GET/POST  /api/suno/completed    (frontend polls for completed songs)
 
@@ -262,6 +262,9 @@ def handle_suno():
         elif action == 'jingle':
             return _action_jingle(_q, body)
 
+        elif action == 'sfx':
+            return _action_sfx(_q, body)
+
         elif action == 'list_jingles':
             return _action_list_jingles()
 
@@ -279,7 +282,7 @@ def handle_suno():
             return _action_credits()
 
         else:
-            return jsonify({'action': 'error', 'response': f"Unknown action '{action}'. Use: generate, jingle, list_jingles, jingle_styles, status, list, credits"})
+            return jsonify({'action': 'error', 'response': f"Unknown action '{action}'. Use: generate, jingle, sfx, list_jingles, jingle_styles, status, list, credits"})
 
     except Exception as exc:
         logger.exception('Suno endpoint error')
@@ -402,6 +405,106 @@ def _action_generate(_q, body: dict):
                 return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
         else:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+
+    except http_requests.RequestException as exc:
+        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+
+
+def _action_sfx(_q, body: dict):
+    """Generate a short non-vocal sound effect / ambient stinger.
+
+    Wraps sunoapi.org's "Sounds Generation (V5)" endpoint
+    (POST /api/v1/generate/sounds, 2.5 credits). This is NOT a jingle or a song
+    — it produces game SFX, UI blips, stingers, ambient beds, etc. with no
+    vocals. Returns a taskId in the same shape as /generate, so the normal
+    `action=status` poller downloads + saves the clip when ready.
+
+    Inputs:
+      prompt   — required, what the sound should be (max 500 chars).
+                 e.g. "retro 8-bit coin pickup blip", "wooden mallet thwack",
+                 "ominous low brass sting", "arcade game-over jingle no vocals"
+      title    — optional label used for the saved filename + metadata.
+      loop     — optional bool; soundLoop (seamless looping bed). Default false.
+      tempo    — optional int 1-300; soundTempo (BPM). Omit for auto.
+      key      — optional musical key (Any, Cm, C#m, ... B). Omit for Any.
+    """
+    prompt = (_q('prompt') or body.get('prompt', '')).strip()
+    if not prompt:
+        return jsonify({'action': 'error', 'response': "Need a description of the sound — e.g. 'retro 8-bit coin pickup blip'."})
+    prompt = prompt[:500]
+
+    title = (_q('title') or body.get('title', '')).strip()
+
+    loop_raw = _q('loop') or body.get('loop', False)
+    if isinstance(loop_raw, bool):
+        sound_loop = loop_raw
+    else:
+        sound_loop = str(loop_raw).lower() in ('true', '1', 'yes')
+
+    request_body = {
+        'prompt': prompt,
+        # V5_5 matches the proven story.py path (routes/story.py gen_suno_sound,
+        # shipped 2026-05-28). sunoapi.org docs say "V5 only" for this endpoint
+        # but production uses V5_5 successfully with better quality — match it.
+        'model': 'V5_5',
+        'soundLoop': sound_loop,
+    }
+
+    # Optional tempo (BPM 1-300)
+    tempo_raw = _q('tempo') or body.get('tempo', '')
+    if tempo_raw not in (None, ''):
+        try:
+            tempo = int(tempo_raw)
+            if 1 <= tempo <= 300:
+                request_body['soundTempo'] = tempo
+        except (TypeError, ValueError):
+            pass
+
+    # Optional musical key
+    key = (_q('key') or body.get('key', '')).strip()
+    if key and key.lower() != 'any':
+        request_body['soundKey'] = key
+
+    if SUNO_CALLBACK_URL:
+        request_body['callBackUrl'] = SUNO_CALLBACK_URL
+
+    logger.info(f'Suno sfx: loop={sound_loop} prompt={prompt[:80]}')
+
+    try:
+        resp = http_requests.post(
+            f'{SUNO_API_BASE}/api/v1/generate/sounds',
+            headers={'Authorization': f'Bearer {SUNO_API_KEY}', 'Content-Type': 'application/json'},
+            json=request_body,
+            timeout=30,
+        )
+        logger.info(f'Suno sfx response: {resp.status_code} {resp.text[:300]}')
+
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('code') == 200 and data.get('data', {}).get('taskId'):
+                task_id = data['data']['taskId']
+                job_id = str(uuid.uuid4())
+                suno_jobs[job_id] = {
+                    'status': 'generating',
+                    'prompt': prompt,
+                    'title': title or prompt[:60],
+                    'style': 'sfx',
+                    'kind': 'sfx',
+                    'task_id': task_id,
+                    'created_at': time.time(),
+                }
+                return jsonify({
+                    'action': 'generating',
+                    'job_id': job_id,
+                    'task_id': task_id,
+                    'kind': 'sfx',
+                    'response': f"Generating sound: '{title or prompt[:40]}' — check back in ~20-40 seconds.",
+                    'estimated_seconds': 30,
+                })
+            else:
+                return jsonify({'action': 'error', 'response': f"Suno SFX error: {data.get('msg', 'Unknown error')}"})
+        else:
+            return jsonify({'action': 'error', 'response': f'Suno SFX HTTP {resp.status_code}: {resp.text[:200]}'})
 
     except http_requests.RequestException as exc:
         return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
@@ -645,7 +748,11 @@ def _action_status(job_id: str):
                     # Suno returns 2 clips per generation — only take the first one
                     songs = songs[:1] if songs else []
                     for song in songs:
-                        audio_url = song.get('audioUrl') or song.get('audio_url')
+                        # sourceAudioUrl is the original/high-quality URL the
+                        # sounds endpoint returns (see routes/story.py); kept as
+                        # a fallback so SFX jobs download correctly. Additive —
+                        # songs/jingles still prefer audioUrl, unchanged.
+                        audio_url = song.get('audioUrl') or song.get('audio_url') or song.get('sourceAudioUrl')
                         if not audio_url:
                             continue
                         song_id = song.get('id', task_id)
