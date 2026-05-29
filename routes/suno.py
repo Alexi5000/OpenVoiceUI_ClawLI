@@ -40,6 +40,13 @@ from services.paths import GENERATED_MUSIC_DIR
 GENERATED_MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 GENERATED_METADATA_FILE = GENERATED_MUSIC_DIR / 'generated_metadata.json'
 
+# SFX (action=sfx) land in a dedicated subdir so they are NOT mixed in with the
+# music library/player. Kept under generated_music/ so it's already mounted +
+# web-served (/generated_music/sfx/<file>) with no compose/mount changes. The
+# music list (_action_list) and music metadata/queue intentionally skip these.
+GENERATED_SOUNDS_DIR = GENERATED_MUSIC_DIR / 'sfx'
+GENERATED_SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
+
 SUNO_API_KEY = os.environ.get('SUNO_API_KEY', '')
 SUNO_API_BASE = 'https://api.sunoapi.org'
 SUNO_WEBHOOK_SECRET = os.environ.get('SUNO_WEBHOOK_SECRET', '')
@@ -465,8 +472,10 @@ def _action_sfx(_q, body: dict):
     if key and key.lower() != 'any':
         request_body['soundKey'] = key
 
-    if SUNO_CALLBACK_URL:
-        request_body['callBackUrl'] = SUNO_CALLBACK_URL
+    # NOTE: deliberately NO callBackUrl for SFX. SFX complete via polling
+    # (action=status), which routes them to the sounds subdir and keeps them out
+    # of the music library. The webhook callback path registers results as music,
+    # so skipping it prevents SFX from leaking into the music player.
 
     logger.info(f'Suno sfx: loop={sound_loop} prompt={prompt[:80]}')
 
@@ -764,8 +773,12 @@ def _action_status(job_id: str):
                             song_title = job.get('title') or job.get('prompt', '')[:60] or 'Generated Track'
                         duration = song.get('duration', 0)
                         slug = _slugify_title(song_title)
-                        filename = _unique_filename(GENERATED_MUSIC_DIR, slug)
-                        save_path = GENERATED_MUSIC_DIR / filename
+                        # SFX go to the dedicated sounds subdir, separate from music.
+                        _is_sfx = job.get('kind') == 'sfx'
+                        _dir = GENERATED_SOUNDS_DIR if _is_sfx else GENERATED_MUSIC_DIR
+                        _url_base = '/generated_music/sfx' if _is_sfx else '/generated_music'
+                        filename = _unique_filename(_dir, slug)
+                        save_path = _dir / filename
 
                         if not save_path.exists():
                             if not _is_safe_download_url(audio_url):
@@ -791,49 +804,54 @@ def _action_status(job_id: str):
                                 logger.warning(f'Suno download failed: {audio_resp.status_code}')
                                 continue
 
-                        # Save metadata — propagate jingle fields if this was a jingle job
                         kind = job.get('kind', 'song')
-                        extra = {}
-                        if kind == 'jingle':
-                            extra = {
-                                'brand': job.get('brand', ''),
-                                'style_key': job.get('style_key', ''),
-                                'vocal_gender': job.get('vocal_gender', ''),
-                                'instrumental': job.get('instrumental', False),
-                            }
-                        # Capture lyrics from Suno response if present
                         song_lyrics = song.get('prompt', '') or song.get('lyrics', '')
-                        if song_lyrics:
-                            extra['lyrics'] = song_lyrics
-                        _add_song_to_metadata(
-                            filename=filename,
-                            title=song_title,
-                            prompt=job.get('prompt', ''),
-                            style=job.get('style', ''),
-                            duration=duration,
-                            song_id=song_id,
-                            kind=kind,
-                            extra=extra,
-                        )
+
+                        # SFX are NOT music — keep them out of the music metadata
+                        # AND the music player's completed-songs queue so they
+                        # don't pollute the music library. The status response
+                        # below still returns the URL so the caller gets the clip.
+                        if not _is_sfx:
+                            extra = {}
+                            if kind == 'jingle':
+                                extra = {
+                                    'brand': job.get('brand', ''),
+                                    'style_key': job.get('style_key', ''),
+                                    'vocal_gender': job.get('vocal_gender', ''),
+                                    'instrumental': job.get('instrumental', False),
+                                }
+                            if song_lyrics:
+                                extra['lyrics'] = song_lyrics
+                            _add_song_to_metadata(
+                                filename=filename,
+                                title=song_title,
+                                prompt=job.get('prompt', ''),
+                                style=job.get('style', ''),
+                                duration=duration,
+                                song_id=song_id,
+                                kind=kind,
+                                extra=extra,
+                            )
 
                         # Update job
                         job['status'] = 'complete'
                         job['song_id'] = song_id
                         job['title'] = song_title
-                        job['url'] = f'/generated_music/{filename}'
+                        job['url'] = f'{_url_base}/{filename}'
 
-                        # Notify frontend poller
-                        completed_songs_queue.append({
-                            'song_id': song_id,
-                            'filename': filename,
-                            'title': song_title,
-                            'job_id': job_id,
-                            'kind': kind,
-                            'url': f'/generated_music/{filename}',
-                            'completed_at': datetime.now().isoformat(),
-                            'prompt': job.get('prompt', ''),
-                            'lyrics': song_lyrics,
-                        })
+                        # Notify frontend poller — music only (SFX skip the music queue)
+                        if not _is_sfx:
+                            completed_songs_queue.append({
+                                'song_id': song_id,
+                                'filename': filename,
+                                'title': song_title,
+                                'job_id': job_id,
+                                'kind': kind,
+                                'url': f'{_url_base}/{filename}',
+                                'completed_at': datetime.now().isoformat(),
+                                'prompt': job.get('prompt', ''),
+                                'lyrics': song_lyrics,
+                            })
 
                         return jsonify({
                             'action': 'complete',
@@ -841,7 +859,7 @@ def _action_status(job_id: str):
                             'job_id': job_id,
                             'song_id': song_id,
                             'title': song_title,
-                            'url': f'/generated_music/{filename}',
+                            'url': f'{_url_base}/{filename}',
                             'response': f"Done! '{song_title}' is ready to spin!",
                         })
 
