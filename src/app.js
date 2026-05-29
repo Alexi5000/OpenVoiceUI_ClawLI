@@ -2735,7 +2735,19 @@ connectAiradio();
                             context: this._gatherContext(),
                         }),
                     });
-                    const data = await res.json();
+                    // Guard: a non-JSON body (e.g. an HTML error/login page) would
+                    // make res.json() throw the cryptic "Unexpected token '<'" error.
+                    // Surface a clean message based on status instead.
+                    let data;
+                    try {
+                        data = await res.json();
+                    } catch (_) {
+                        throw new Error(
+                            res.status === 401 || res.status === 403
+                                ? 'Not signed in — please sign in and try again.'
+                                : `Server returned ${res.status}. Please try again.`
+                        );
+                    }
                     if (data.ok) {
                         if (this._statusEl) { this._statusEl.textContent = '✓ Report submitted. Thank you!'; this._statusEl.className = 'irm-status success'; }
                         setTimeout(() => this.close(), 1800);
