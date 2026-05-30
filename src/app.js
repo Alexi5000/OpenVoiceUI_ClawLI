@@ -578,8 +578,11 @@ connectAiradio();
                 }
                 this.currentMood = mood;
 
-                // Propagate mood to BigHeadFace if active
+                // Propagate mood to BigHeadFace + HaloSmokeFace if active.
+                // HaloSmoke collapses non-'thinking' moods to its idle state,
+                // which is how it clears the dots animation when a turn ends.
                 window.BigHeadFace?.setMood(mood);
+                window.HaloSmokeFace?.setMood(mood);
             },
 
             blink() {
@@ -2732,7 +2735,19 @@ connectAiradio();
                             context: this._gatherContext(),
                         }),
                     });
-                    const data = await res.json();
+                    // Guard: a non-JSON body (e.g. an HTML error/login page) would
+                    // make res.json() throw the cryptic "Unexpected token '<'" error.
+                    // Surface a clean message based on status instead.
+                    let data;
+                    try {
+                        data = await res.json();
+                    } catch (_) {
+                        throw new Error(
+                            res.status === 401 || res.status === 403
+                                ? 'Not signed in — please sign in and try again.'
+                                : `Server returned ${res.status}. Please try again.`
+                        );
+                    }
                     if (data.ok) {
                         if (this._statusEl) { this._statusEl.textContent = '✓ Report submitted. Thank you!'; this._statusEl.className = 'irm-status success'; }
                         setTimeout(() => this.close(), 1800);
@@ -3782,6 +3797,7 @@ connectAiradio();
                 if (this._ttsGuardTimer) { clearTimeout(this._ttsGuardTimer); this._ttsGuardTimer = null; }
                 // Abort any in-flight fetch so streaming stops immediately
                 if (this._fetchAbortController) {
+                    this._abortReason = 'stop';
                     this._fetchAbortController.abort();
                     this._fetchAbortController = null;
                     // Tell server to abort the openclaw run (fire-and-forget)
@@ -3854,6 +3870,7 @@ connectAiradio();
                         // instead: abort the tail, then fall through to the normal
                         // sendMessage path.
                         console.warn(`↩ POST-TEXT_DONE message — treating as fresh request: "${text.substring(0,30)}"`);
+                        this._abortReason = 'user';
                         this._fetchAbortController.abort();
                         this._fetchAbortController = null;
                         fetch(`${this.config.serverUrl}${convPath('abort')}`, {
@@ -3864,6 +3881,7 @@ connectAiradio();
                         this.stopAudio();
                     } else if (this._ttsPlaying) {
                         // Agent already responded, TTS playing → ABORT
+                        this._abortReason = 'user';
                         this._fetchAbortController.abort();
                         this._fetchAbortController = null;
                         console.warn(`⛔ ABORT source: ClawdbotMode.sendMessage (TTS playing, new msg: "${text.substring(0,30)}")`);
@@ -3987,14 +4005,20 @@ connectAiradio();
                     const decoder = new TextDecoder();
                     let buffer = '';
 
-                    // Inactivity timeout: abort if no data received for 60s
-                    // (heartbeats arrive every 10-15s during tool execution)
+                    // Inactivity timeout: abort if no data received for this long.
+                    // MUST be >= the server-side run budget (openclaw gateway
+                    // timeout = 300s) so the client never gives up before the
+                    // server does — otherwise long silent work (subagent spawns,
+                    // batch ops) gets cut at the client and shows a false
+                    // "stream timed out". Heartbeats normally arrive every 5-10s
+                    // and reset this; 300s is the hard backstop matching the server.
                     // _inactivityTimer declared in outer scope so finally{} can clear it
-                    const INACTIVITY_TIMEOUT_MS = 60000;
+                    const INACTIVITY_TIMEOUT_MS = 300000;
                     const _resetInactivity = () => {
                         if (_inactivityTimer) clearTimeout(_inactivityTimer);
                         _inactivityTimer = setTimeout(() => {
                             console.warn('[Stream] No data for 60s — aborting');
+                            this._abortReason = 'inactivity';
                             this._fetchAbortController?.abort();
                         }, INACTIVITY_TIMEOUT_MS);
                     };
@@ -4593,11 +4617,25 @@ connectAiradio();
                         FaceModule.setMood('neutral');
                         StatusModule.update('idle', 'READY');
                         TranscriptPanel.removeThinking();
-                        // If agent was mid-task (had heartbeats), note the redirect
-                        if (this._wasAgentic) {
-                            this._wasAgentic = false;
+                        // Label the abort by its ACTUAL cause — only an explicit
+                        // user interrupt is "redirected by user". An inactivity
+                        // timeout (agent went silent during long work) or a call
+                        // stop is NOT a user redirect, and mislabeling it confused
+                        // users ("why does it say redirected when I didn't?").
+                        const _reason = this._abortReason;
+                        this._abortReason = null;
+                        const _wasAgentic = this._wasAgentic;
+                        this._wasAgentic = false;
+                        if (_reason === 'user') {
                             TranscriptPanel.finalizeStreaming('🔀 Redirected.');
                             ActionConsole.addEntry('system', 'Task redirected by user');
+                        } else if (_reason === 'inactivity') {
+                            TranscriptPanel.finalizeStreaming('⏳ Agent went quiet — stream timed out.');
+                            ActionConsole.addEntry('system', 'Stream timed out (agent silent 60s) — not a user action');
+                        } else if (_wasAgentic && !_reason) {
+                            // Unknown-source abort during agentic work — don't blame
+                            // the user; just close the stream quietly.
+                            TranscriptPanel.finalizeStreaming(null);
                         } else {
                             TranscriptPanel.finalizeStreaming(null);
                         }
@@ -8317,6 +8355,13 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
 
             addMessage(role, text, opts = {}) {
                 if (!this.messages || !text) return;
+
+                // Remove any stale thinking bubble before appending an assistant
+                // response. The streaming path (startStreaming/finalizeStreaming)
+                // already does this, but the non-streaming response path
+                // (data.response → addMessage) was leaving the dots floating
+                // above the rendered reply.
+                if (role === 'assistant') this.removeThinking();
 
                 const msg = document.createElement('div');
                 msg.className = `tp-msg ${role === 'user' ? 'user' : 'assistant'}`;
