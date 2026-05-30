@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "target": "es2022",
+    "checkJs": false,
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["src/core/*"],
+      "@ui/*": ["src/ui/*"],
+      "@providers/*": ["src/providers/*"],
+      "@shell/*": ["src/shell/*"],
+      "@features/*": ["src/features/*"],
+      "@adapters/*": ["src/adapters/*"],
+      "@face/*": ["src/face/*"]
+    }
+  },
+  "include": ["src/**/*.js", "cli/**/*.js"],
+  "exclude": ["node_modules", "static", "website", "tests"]
+}
