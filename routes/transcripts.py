@@ -20,9 +20,14 @@ from flask import Blueprint, jsonify, request
 
 transcripts_bp = Blueprint('transcripts', __name__)
 
-from services.paths import TRANSCRIPTS_DIR as _TRANSCRIPTS_DIR_PATH
+from services.paths import TRANSCRIPTS_DIR as _TRANSCRIPTS_DIR_PATH, RUNTIME_DIR as _RUNTIME_DIR
 
 TRANSCRIPTS_DIR = str(_TRANSCRIPTS_DIR_PATH)
+
+# SMS ledger lives in the openclaw agent workspace, mounted read-only into the
+# OVU container at /app/runtime/workspace/Agent. Each message is one markdown
+# file under ledger/sms/<YYYY-MM-DD>/<HH-MM-SS>-<in|out>-<sid>.md.
+SMS_LEDGER_DIR = str(_RUNTIME_DIR / 'workspace' / 'Agent' / 'ledger' / 'sms')
 
 
 def _slug(title: str) -> str:
@@ -170,6 +175,119 @@ def conversation_history():
             break
 
     return jsonify({'turns': turns, 'total': len(turns), 'days': days})
+
+
+def _parse_sms_file(text: str) -> dict:
+    """Parse one SMS ledger markdown file into a dict.
+
+    Format:
+        # SMS — in — 2026-05-18T18:28:49.793999+00:00
+        - tenant: test-dev
+        - from: +15555550100
+        - to: +15555550199
+        - twilio_sid: (local)
+
+        ## Body
+
+        <message text>
+    """
+    direction = ''
+    timestamp = ''
+    fields = {}
+    body_lines = []
+    in_body = False
+    for raw in text.splitlines():
+        line = raw.rstrip('\n')
+        if not in_body and line.startswith('# SMS'):
+            # Split on em-dash (—) or hyphen surrounded by spaces.
+            parts = re.split(r'\s+[—-]\s+', line)
+            if len(parts) >= 3:
+                direction = parts[1].strip().lower()
+                timestamp = parts[2].strip()
+            continue
+        if not in_body and line.strip() == '## Body':
+            in_body = True
+            continue
+        if not in_body and line.startswith('- '):
+            kv = line[2:].split(':', 1)
+            if len(kv) == 2:
+                fields[kv[0].strip().lower()] = kv[1].strip()
+            continue
+        if in_body:
+            body_lines.append(line)
+    body = '\n'.join(body_lines).strip()
+    return {
+        'direction': direction or 'out',
+        'timestamp': timestamp,
+        'from': fields.get('from', ''),
+        'to': fields.get('to', ''),
+        'body': body,
+    }
+
+
+@transcripts_bp.route('/api/sms-history', methods=['GET'])
+def sms_history():
+    """Return this client's SMS messages (to and from the agent).
+
+    Reads the openclaw agent's SMS ledger. Each returned message carries its
+    direction ('in' = from the user's phone, 'out' = from the agent), the phone
+    numbers, body, and timestamp — shaped to merge into the conversation view.
+
+    Query params:
+      days   — how many days back (default 30, max 365)
+      limit  — max messages to return (default 500, max 2000)
+      date   — filter to a specific date YYYY-MM-DD
+    """
+    days  = min(int(request.args.get('days', 30)), 365)
+    limit = min(int(request.args.get('limit', 500)), 2000)
+    date_filter = request.args.get('date', '')
+
+    from datetime import timedelta as _td
+    cutoff = (datetime.now() - _td(days=days)).strftime('%Y-%m-%d')
+
+    messages = []
+    if not os.path.isdir(SMS_LEDGER_DIR):
+        return jsonify({'messages': [], 'total': 0, 'days': days})
+
+    for date_dir in sorted(os.listdir(SMS_LEDGER_DIR), reverse=True):
+        if date_dir < cutoff:
+            break
+        if date_filter and date_dir != date_filter:
+            continue
+        day_path = os.path.join(SMS_LEDGER_DIR, date_dir)
+        if not os.path.isdir(day_path):
+            continue
+        for fname in sorted(os.listdir(day_path)):
+            if not fname.endswith('.md'):
+                continue
+            fpath = os.path.join(day_path, fname)
+            try:
+                parsed = _parse_sms_file(Path(fpath).read_text(encoding='utf-8'))
+                if not parsed['body']:
+                    continue
+                # Derive a HH:MM:SS from the filename prefix (HH-MM-SS-...) as a fallback.
+                time_str = '00:00:00'
+                m = re.match(r'(\d{2})-(\d{2})-(\d{2})', fname)
+                if m:
+                    time_str = f'{m.group(1)}:{m.group(2)}:{m.group(3)}'
+                messages.append({
+                    'type':      'sms',
+                    'date':      date_dir,
+                    'time':      time_str,
+                    'timestamp': parsed['timestamp'],
+                    'direction': parsed['direction'],
+                    'from':      parsed['from'],
+                    'to':        parsed['to'],
+                    'body':      parsed['body'][:1000],
+                })
+                if len(messages) >= limit:
+                    break
+            except Exception:
+                pass
+        if len(messages) >= limit:
+            break
+
+    return jsonify({'messages': messages, 'total': len(messages), 'days': days})
 
 
 @transcripts_bp.route('/api/transcripts/<date_dir>/<filename>', methods=['GET'])
