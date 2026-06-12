@@ -347,6 +347,19 @@ def save_conversation_turn(
         ai_words = len(ai_response.split()) if ai_response else 0
         key = session_key or 'unknown'
 
+        # Resolve the registered user's NAME from clerk_user_id so every transcript carries
+        # WHO it was — not just an opaque id (Mike 2026-06-12: "names via clerk id EVERYWHERE,
+        # no unknown user"). identity-registry is the complete Clerk roster. Fail-open.
+        user_name = None
+        if clerk_user_id:
+            try:
+                from services.identity import resolve as _resolve_identity
+                _ident = _resolve_identity(clerk_user_id)
+                if _ident:
+                    user_name = _ident.get('name')
+            except Exception:
+                pass
+
         payload = {
             'schema': 'v1',
             'session_id': session_id,
@@ -362,6 +375,7 @@ def save_conversation_turn(
             'tools': tools,
             'identified_person': identified_person,
             'clerk_user_id': clerk_user_id,
+            'user_name': user_name,
             'word_count': {'user': user_words, 'assistant': ai_words},
         }
 
