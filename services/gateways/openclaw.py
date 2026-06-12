@@ -1006,6 +1006,29 @@ class GatewayConnection:
                         if content and content.strip():
                             final_text = content
 
+                    # Diagnostic (log-only): classify no-visible-text finals.
+                    # GLM occasionally returns a completion whose content is
+                    # ONLY thinking block(s) — the known "thinking-only" empty
+                    # class (thinkingDefault:"off" reduces but doesn't
+                    # eliminate it). Tag these distinctly so log analysis can
+                    # separate them from true zero-content finals.
+                    if not final_text:
+                        try:
+                            _raw_content = (payload.get('message') or {}).get('content')
+                            if isinstance(_raw_content, list):
+                                _think_chars = sum(
+                                    len(b.get('thinking') or b.get('text') or '')
+                                    for b in _raw_content
+                                    if isinstance(b, dict) and b.get('type') == 'thinking'
+                                )
+                                if _think_chars:
+                                    logger.warning(
+                                        f"### THINKING-ONLY FINAL: {_think_chars} chars of "
+                                        f"thinking, zero visible text (GLM thinking leak)"
+                                    )
+                        except Exception:
+                            pass  # diagnostic only — never affect the flow
+
                     if final_text:
                         if is_system_response(final_text):
                             logger.info(f"### Suppressing system response (chat final): {final_text!r}")
