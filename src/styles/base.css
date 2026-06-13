@@ -161,11 +161,17 @@
             border-right: none;
             border-radius: var(--radius-lg) 0 0 var(--radius-lg);
         }
-        .edge-tab:hover {
-            background: rgba(0, 136, 255, 0.18);
-            border-color: var(--blue-bright);
-            box-shadow: 0 0 15px rgba(0, 136, 255, 0.2);
-            width: 52px;
+        /* Hover-capable pointers only — on touch devices a tap leaves the element
+           in a sticky :hover state that overrides state classes (e.g. .ptt-mode
+           orange) until the user taps elsewhere. @media (hover: hover) keeps
+           hover styling off phones/tablets entirely. */
+        @media (hover: hover) {
+            .edge-tab:hover {
+                background: rgba(0, 136, 255, 0.18);
+                border-color: var(--blue-bright);
+                box-shadow: 0 0 15px rgba(0, 136, 255, 0.2);
+                width: 52px;
+            }
         }
 
         /* Active states per button type */
@@ -557,7 +563,12 @@
 
         /* Apply preset to edge tabs and listen panel accent colour */
         body[data-theme-preset] .edge-tab { background: rgba(var(--theme-accent),0.08); border-color: rgba(var(--theme-accent),0.25); color: var(--theme-accent-hex); }
-        body[data-theme-preset] .edge-tab:hover { background: rgba(var(--theme-accent),0.14); border-color: rgba(var(--theme-accent),0.5); }
+        /* (hover: hover) — this rule's specificity (0,3,1) beats state classes like
+           .ptt-button.ptt-mode (0,3,0), so a sticky touch-hover here masked the PTT
+           orange state on mobile until the next tap elsewhere. */
+        @media (hover: hover) {
+            body[data-theme-preset] .edge-tab:hover { background: rgba(var(--theme-accent),0.14); border-color: rgba(var(--theme-accent),0.5); }
+        }
         body[data-theme-preset] .listen-panel { border-color: rgba(var(--theme-accent),0.35); }
 
         /* ── Profile mode badge ── */
@@ -923,7 +934,9 @@
                 min-height: 48px;
                 font-size: 16px;
             }
-            .edge-tab:hover { width: 48px; }
+            @media (hover: hover) {
+                .edge-tab:hover { width: 48px; }
+            }
             #canvas-menu-button {
                 width: 36px;
                 height: 36px;
