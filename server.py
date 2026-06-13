@@ -35,7 +35,7 @@ from pathlib import Path
 
 import websockets
 from dotenv import load_dotenv
-from flask import Response, request, jsonify
+from flask import Response, g, request, jsonify
 
 faulthandler.enable()  # print traceback on hard crashes (SIGSEGV etc.)
 
@@ -461,6 +461,15 @@ if _package_file.exists():
     except Exception:
         pass
 _VERSION_INFO["version"] = _PACKAGE_VERSION
+
+
+@app.route("/api/config", methods=["GET"])
+def get_public_config():
+    """Public client config — only values safe to expose pre-auth.
+    admin.html bootstraps Clerk from this (it is served statically and does not
+    get the window.AGENT_CONFIG injection index.html gets)."""
+    clerk_key = (os.getenv("CLERK_PUBLISHABLE_KEY") or os.getenv("VITE_CLERK_PUBLISHABLE_KEY", "")).strip()
+    return jsonify({"clerkPublishableKey": clerk_key})
 
 
 @app.route("/api/version", methods=["GET"])

@@ -115,7 +115,9 @@ def create_app(config_override: dict = None):
             '/api/upload',    # file upload — canvas pages lose Clerk JWT on long sessions; files are non-sensitive
             '/api/uploads',   # uploads list — files are already public at /uploads/, listing is fine
             '/api/profiles',  # read-only profile config — loaded before Clerk init
-            '/api/plugins',   # Plugin system — asset loading, install/uninstall
+            '/api/plugins/assets',  # Plugin face scripts/CSS — fetched by index.html before login.
+                                    # All other /api/plugins routes (install/uninstall/restart/config)
+                                    # are state-changing admin operations and require admin auth below.
             '/api/vault/oauth/callback/',  # OAuth callbacks — redirected from external providers
             '/plugins/',      # Plugin static assets — face scripts, CSS, previews
             '/api/chat',      # LLM proxy (Groq) — used by canvas pages for inline AI
@@ -140,6 +142,7 @@ def create_app(config_override: dict = None):
             '/api/auth/check',      # Auth check endpoint — does its own token verification
             '/api/suno/callback',   # Suno's servers POST here from external IPs (no Clerk token)
             '/api/version',         # Version check — loaded before auth to show update banner
+            '/api/config',          # Public client config (Clerk publishable key) — admin.html bootstrap
             '/sw.js',           # PWA service worker — browser fetches this before auth
             '/manifest.json',   # PWA manifest — browser fetches this before auth
             '/favicon.ico',     # Browser favicon request — before auth
@@ -156,6 +159,20 @@ def create_app(config_override: dict = None):
         # without a Clerk JWT. Set AGENT_API_KEY in the container .env.
         _agent_api_key = os.getenv('AGENT_API_KEY', '').strip()
 
+        # Privileged surfaces — require an admin user (services.auth.ADMIN_USER_IDS),
+        # not just any allowlisted tenant user. ALLOWED_USER_IDS gates the voice app;
+        # these endpoints can rewrite vault credentials, openclaw.json (incl. provider
+        # baseUrl/apiKey), agent workspace files, and inject into the live agent session.
+        _ADMIN_ONLY_PREFIXES = (
+            '/api/admin/',
+            '/api/vault/',      # oauth callback is exempted via _PUBLIC_PREFIXES above
+            '/api/workspace/',
+            '/api/refactor/',
+            '/api/server-stats',
+            '/api/plugins/',    # install/uninstall/restart/config (assets exempted above)
+            '/api/plugins',     # bare list endpoint
+        )
+
         @app.before_request
         def require_auth():
             """Block unauthenticated requests to all non-exempt routes.
@@ -167,6 +184,19 @@ def create_app(config_override: dict = None):
                 return  # No Clerk configured — open access (single-user / self-hosted)
 
             path = request.path
+
+            # CSRF guard: state-changing browser requests must come from our own
+            # origin. Cookie (__session) auth makes cross-site request forgery
+            # possible; a mismatched Origin header is the reliable browser signal.
+            # Non-browser clients (agents, server-to-server callbacks like Suno's)
+            # send no Origin header and pass through untouched.
+            if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
+                _origin = request.headers.get('Origin', '')
+                if _origin and not request.headers.get('Authorization', '').startswith('Bearer '):
+                    from urllib.parse import urlparse
+                    _origin_host = urlparse(_origin).netloc
+                    if _origin_host and _origin_host != request.host:
+                        return jsonify({'error': 'Cross-origin request blocked', 'code': 'csrf_blocked'}), 403
 
             # Always allow health probes and static assets
             if path in _PUBLIC_EXACT:
@@ -196,6 +226,16 @@ def create_app(config_override: dict = None):
             # Stash for downstream routes (e.g. conversation.py reads g.clerk_user_id
             # to inject a [CURRENT_USER: ...] tag into the gateway message context).
             g.clerk_user_id = user_id
+
+            # Admin authorization — being an allowlisted voice user does NOT grant
+            # access to the admin dashboard or privileged APIs.
+            if path == '/admin' or path.startswith('/admin/') or any(path.startswith(p) for p in _ADMIN_ONLY_PREFIXES):
+                from services.auth import is_admin_user
+                if not is_admin_user(user_id):
+                    logger.warning('Admin authz denied: user_id=%s path=%s', user_id, path)
+                    if path.startswith('/api/'):
+                        return jsonify({'error': 'Admin access required', 'code': 'admin_required'}), 403
+                    return redirect('/')
 
     # ── JSON error handler for 413 (file too large) ────────────────────────
     @app.errorhandler(413)

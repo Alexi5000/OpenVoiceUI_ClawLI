@@ -49,6 +49,20 @@ _JWKS_CACHE_TTL = 3600  # refresh keys every 60 minutes
 _raw_allowed = os.getenv('ALLOWED_USER_IDS', '')
 _ALLOWED_USER_IDS: set[str] = {uid.strip() for uid in _raw_allowed.split(',') if uid.strip()}
 
+# Admin users — server-side authorization for the admin dashboard and privileged
+# APIs (/admin, /api/admin/*, /api/vault/*, /api/workspace/*, /api/plugins/*, ...).
+# Set ADMIN_USER_IDS=user_abc,user_xyz in .env to grant tenant owners access.
+# Defaults to the platform admin so multi-user tenants never expose the dashboard
+# to every allowlisted voice user (ALLOWED_USER_IDS gates the app, not admin ops).
+_PLATFORM_ADMIN_ID = 'user_ADMIN_ID_FROM_ENV'
+_raw_admins = os.getenv('ADMIN_USER_IDS', '')
+_ADMIN_USER_IDS: set[str] = {uid.strip() for uid in _raw_admins.split(',') if uid.strip()} or {_PLATFORM_ADMIN_ID}
+
+
+def is_admin_user(user_id: Optional[str]) -> bool:
+    """True if this Clerk user may use the admin dashboard + privileged APIs."""
+    return bool(user_id) and user_id in _ADMIN_USER_IDS
+
 # ---------------------------------------------------------------------------
 # JWKS cache
 # ---------------------------------------------------------------------------
