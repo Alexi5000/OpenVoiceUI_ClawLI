@@ -543,13 +543,12 @@ class GatewayConnection:
     async def _ensure_connected(self):
         async with self._ws_lock:
             if self._connected and self._ws is not None:
-                try:
-                    pong_waiter = await self._ws.ping()
-                    await asyncio.wait_for(pong_waiter, timeout=5.0)
-                    return
-                except Exception:
-                    logger.warning("### Persistent WS ping failed, reconnecting...")
-                    await self._disconnect()
+                # No pre-send liveness ping: it serialized a full ping/pong
+                # roundtrip (worst case 5s) ahead of EVERY chat.send on the
+                # hot path. A dead socket is caught on send/recv instead —
+                # _do_stream catches _WSClosedError/ConnectionClosed, then
+                # disconnects, reconnects, and re-sends the same message.
+                return
 
             backoff = self.BACKOFF_DELAYS[min(self._backoff_idx, len(self.BACKOFF_DELAYS) - 1)]
             elapsed = time.time() - self._last_disconnect_time

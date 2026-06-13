@@ -1425,6 +1425,13 @@ def _conversation_inner():
     except Exception:
         pass  # Profile system not available — skip gracefully
 
+    # Greetings are short by design ("Hey, what's up?") — with the 40-char
+    # minimum they never hit a mid-stream sentence boundary, so greeting TTS
+    # only fired at text_done (issue #81: 5-38s first-audio latency on
+    # session start). Fire on the first complete sentence regardless of length.
+    if user_message == '__session_start__':
+        _min_sentence_chars = 1
+
     # Inject [CURRENT_USER: ...] so the agent knows WHO is actually logged in
     # right now (regardless of which tenant account they're using). When Mike
     # the developer pops into a client tenant to debug, the agent should treat
@@ -1723,6 +1730,15 @@ def _conversation_inner():
                                 result['error'] = str(e)
                             finally:
                                 done.set()
+                                # Wake the stream loop NOW so finished audio is
+                                # flushed immediately instead of sitting in
+                                # _tts_pending until the next gateway event or
+                                # queue-poll timeout (up to 10s during quiet
+                                # tool runs). Handled as a no-op flush trigger.
+                                try:
+                                    event_queue.put({'type': 'tts_ready'})
+                                except Exception:
+                                    pass
                         if _parallel_sentences:
                             threading.Thread(target=_run, daemon=True).start()
                         else:
@@ -1791,6 +1807,19 @@ def _conversation_inner():
                             metrics['handshake_ms'] = evt['ms']
                             continue
 
+                        if evt['type'] == 'tts_ready':
+                            # A TTS thread finished — flush any audio that's ready,
+                            # in order, without waiting for gateway event cadence.
+                            while _tts_pending and _tts_pending[0][0].is_set():
+                                _done_evt, _res = _tts_pending.pop(0)
+                                if _res.get('error'):
+                                    yield _tts_error_event(_res['error'])
+                                elif _res.get('audio'):
+                                    yield _audio_event(_res['audio'], _chunks_sent)
+                                    _chunks_sent += 1
+                                    _last_audio_time = time.time()
+                            continue
+
                         if evt['type'] == 'heartbeat':
                             logger.info(f"### HEARTBEAT → browser ({evt.get('elapsed', 0)}s)")
                             yield json.dumps({'type': 'heartbeat', 'elapsed': evt.get('elapsed', 0)}) + '\n'
@@ -1822,12 +1851,14 @@ def _conversation_inner():
                                         _last_tool_name, _tools_seen, _silence_secs
                                     )
                                     logger.info(f"### STATUS TTS ({_status_tts_count}): '{_status_text}' (silence={_silence_secs:.0f}s)")
-                                    _status_done, _status_res = _fire_tts(_status_text)
-                                    _status_done.wait(timeout=10)
-                                    if _status_res.get('audio'):
-                                        yield _audio_event(_status_res['audio'], _chunks_sent)
-                                        _chunks_sent += 1
-                                        _last_audio_time = time.time()
+                                    # Non-blocking: queue it like a normal sentence and
+                                    # let the tts_ready flush deliver it. Blocking here
+                                    # held the whole stream (deltas, real audio) hostage
+                                    # for up to 10s while filler audio generated.
+                                    _tts_pending.append(_fire_tts(_status_text))
+                                    # Reset the silence clock at fire time so the next
+                                    # heartbeat doesn't double-fire while this generates.
+                                    _last_audio_time = time.time()
                                     _status_tts_count += 1
                             continue
 
