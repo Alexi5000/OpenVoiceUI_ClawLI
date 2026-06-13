@@ -24,7 +24,7 @@ import socket
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -70,6 +70,35 @@ failed_songs_queue: list = []     # [{job_id, kind, brand, reason, failed_at}, .
 _suno_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Per-call provider receipt (JamFlow Watch live pulse)
+#
+# Host-side provider calls emit one JSONL row per call via provider-call-log.sh
+# so the Watch map lights the provider node the instant a call happens. This
+# container can't reach the host's canonical provider-calls dir, but the
+# monitoring-events mount (host: /home/user/monitoring/events) is RW — receipts
+# drop into a provider-calls/ subdir there, same one-line schema, and the Watch
+# tailer scans that drop dir too. Best-effort: NEVER blocks or fails a
+# generation; on containers without the mount the write is invisible/harmless.
+# ---------------------------------------------------------------------------
+PROVIDER_RECEIPTS_DIR = Path(os.environ.get(
+    'PROVIDER_RECEIPTS_DIR', '/app/runtime/monitoring-events/provider-calls'))
+_RECEIPT_TENANT = os.environ.get('JAMBOT_TENANT') or os.environ.get('HOST_TENANT', '') or 'unknown'
+
+
+def _provider_receipt(op: str, units: str = '1') -> None:
+    """Append one {ts,provider,tenant,op,units} receipt row — fire-and-forget."""
+    try:
+        PROVIDER_RECEIPTS_DIR.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        row = json.dumps({'ts': now.isoformat(timespec='seconds'),
+                          'provider': 'suno', 'tenant': _RECEIPT_TENANT,
+                          'op': op, 'units': units})
+        with open(PROVIDER_RECEIPTS_DIR / f"suno-{now.strftime('%Y-%m-%d')}.jsonl", 'a') as f:
+            f.write(row + '\n')
+    except Exception:  # never let telemetry touch the generation path
+        pass
 
 # ---------------------------------------------------------------------------
 # Jingle style presets — proven 2026-05-05. The recipe is:
@@ -401,6 +430,7 @@ def _action_generate(_q, body: dict):
                     'task_id': task_id,
                     'created_at': time.time(),
                 }
+                _provider_receipt('song')   # live Watch pulse — task accepted, credits committed
                 return jsonify({
                     'action': 'generating',
                     'job_id': job_id,
@@ -502,6 +532,7 @@ def _action_sfx(_q, body: dict):
                     'task_id': task_id,
                     'created_at': time.time(),
                 }
+                _provider_receipt('sfx')   # live Watch pulse — task accepted, credits committed
                 return jsonify({
                     'action': 'generating',
                     'job_id': job_id,
@@ -650,6 +681,7 @@ def _action_jingle(_q, body: dict):
             'instrumental': instrumental,
             'repeat': repeat,
         }
+        _provider_receipt('jingle')   # live Watch pulse — task accepted, credits committed
         return jsonify({
             'action': 'generating',
             'job_id': job_id,
