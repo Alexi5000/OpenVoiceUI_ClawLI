@@ -157,9 +157,13 @@ ALLOWED_RPC_METHODS = frozenset({
     'sessions.list',
     'sessions.history',
     'sessions.abort',
-    # Chat operations
-    'chat.abort',
-    'chat.send',
+    # Chat operations: 'chat.send' / 'chat.abort' intentionally NOT proxied here.
+    # The voice app issues these directly over its own gateway WebSocket
+    # (server.py / clawdbot_provider.py), never through this admin HTTP proxy.
+    # Exposing them via the proxy would allow arbitrary message injection into /
+    # aborting of the live agent session — and finding (a) showed the agent key
+    # also reaches this proxy. 'sessions.abort' remains for legitimate admin
+    # session control. (Removed 2026-06-13, ovu-security-followups.)
     # Diagnostic
     'ping',
     'status',

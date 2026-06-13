@@ -208,8 +208,23 @@ def create_app(config_override: dict = None):
             if path.startswith('/pages/') or path.startswith('/canvas-proxy') or path.startswith('/website-dev'):
                 return
 
-            # Internal agent API key — openclaw agents calling Flask APIs from inside Docker network
-            if _agent_api_key and request.headers.get('X-Agent-Key') == _agent_api_key:
+            # Admin-only surfaces are NEVER reachable with the internal agent key.
+            # The agent key authorizes Docker-network service calls (canvas,
+            # conversation, /api/session/reset, song-tagger, etc.), but a
+            # prompt-injected agent must NOT be able to rewrite vault creds /
+            # openclaw.json provider baseUrl / workspace files, or inject into the
+            # live session via the admin RPC proxy. Without this carve-out the
+            # agent-key `return` short-circuited BEFORE the admin gate below,
+            # defeating the a957449 admin-authz lockdown. Same admin test as the
+            # Clerk-path gate (single source of truth).
+            _is_admin_path = (
+                path == '/admin' or path.startswith('/admin/')
+                or any(path.startswith(p) for p in _ADMIN_ONLY_PREFIXES)
+            )
+
+            # Internal agent API key — openclaw agents calling NON-admin Flask APIs
+            # from inside the Docker network.
+            if not _is_admin_path and _agent_api_key and request.headers.get('X-Agent-Key') == _agent_api_key:
                 return
 
             from services.auth import get_token_from_request, verify_clerk_token
@@ -229,7 +244,7 @@ def create_app(config_override: dict = None):
 
             # Admin authorization — being an allowlisted voice user does NOT grant
             # access to the admin dashboard or privileged APIs.
-            if path == '/admin' or path.startswith('/admin/') or any(path.startswith(p) for p in _ADMIN_ONLY_PREFIXES):
+            if _is_admin_path:
                 from services.auth import is_admin_user
                 if not is_admin_user(user_id):
                     logger.warning('Admin authz denied: user_id=%s path=%s', user_id, path)
