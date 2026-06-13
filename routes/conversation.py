@@ -328,6 +328,39 @@ _session_key_lock = threading.Lock()
 _session_recovery_key: str | None = None  # Set after double-empty to escape poisoned session
 
 # ---------------------------------------------------------------------------
+# Per-turn context: cached music-track NAME lists (voice-latency finding #6).
+# get_music_files() does a full dir iterdir() + per-file stat() + metadata load
+# every call, and the agent context build calls it twice (library+generated)
+# on EVERY turn. On big-library tenants that adds avoidable per-turn latency.
+# This 10s TTL cache is scoped ONLY to the agent's "[Available tracks ...]"
+# context string — the music UI/API endpoints keep calling get_music_files()
+# directly, so they stay fully fresh. 10s staleness in the agent's track list
+# is immaterial (Suno completions are announced separately via the
+# completed/failed queues), and matches the existing FIND-0x perf caching.
+_music_names_cache: dict = {}          # playlist -> {'ts': float, 'names': list[str]}
+_music_names_lock = threading.Lock()
+_MUSIC_NAMES_TTL_SECONDS: float = 10.0
+
+
+def _cached_music_names(playlist: str) -> list[str]:
+    """Track display-names for `playlist`, cached for _MUSIC_NAMES_TTL_SECONDS.
+    Fail-soft: any error returns []. Used only by the per-turn context build."""
+    now = time.time()
+    with _music_names_lock:
+        ent = _music_names_cache.get(playlist)
+        if ent and (now - ent['ts']) < _MUSIC_NAMES_TTL_SECONDS:
+            return ent['names']
+    try:
+        from routes.music import get_music_files
+        tracks = get_music_files(playlist)
+        names = [n for n in (t.get('title') or t.get('name', '') for t in tracks) if n]
+    except Exception:  # noqa: BLE001
+        names = []
+    with _music_names_lock:
+        _music_names_cache[playlist] = {'ts': now, 'names': names}
+    return names
+
+# ---------------------------------------------------------------------------
 # Conversation state (module-level singletons)
 # ---------------------------------------------------------------------------
 
@@ -1342,14 +1375,11 @@ def _conversation_inner():
             context_parts.append(f'[Music PLAYING: {track}]')
 
         # Available music tracks (so agent can use [MUSIC_PLAY:exact name])
+        # Names come from a 10s TTL cache (_cached_music_names) so a full
+        # dir-scan isn't paid on every turn — voice-latency finding #6.
         try:
-            from routes.music import get_music_files
-            _lib_tracks = get_music_files('library')
-            _gen_tracks = get_music_files('generated')
-            _lib_names = [t.get('title') or t.get('name', '') for t in _lib_tracks]
-            _gen_names = [t.get('title') or t.get('name', '') for t in _gen_tracks]
-            _lib_names = [n for n in _lib_names if n]
-            _gen_names = [n for n in _gen_names if n]
+            _lib_names = _cached_music_names('library')
+            _gen_names = _cached_music_names('generated')
             _parts = []
             if _lib_names:
                 _parts.append(f'Library ({len(_lib_names)}): {_cap_list(_lib_names, max_chars=2000)}')

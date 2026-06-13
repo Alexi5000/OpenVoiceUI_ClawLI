@@ -5,6 +5,31 @@ From the Fable conversation-flow review. The low-risk set already shipped
 non-blocking status TTS, mic echoCancellation). These remaining items are
 REAL but need measurement or a bigger refactor — do not blind-tune them.
 
+## Status update — 2026-06-13 (After-23 pass, host)
+- **#6 SHIPPED** (the one safe, no-decision win): added a 10s-TTL cache
+  (`_cached_music_names`) scoped to the agent's per-turn `[Available tracks…]`
+  context build in `routes/conversation.py`, so `get_music_files()`'s full
+  dir-scan + per-file stat is no longer paid twice on every turn. The music
+  UI/API still call `get_music_files()` directly (always fresh). Note: the
+  *canvas manifest* half of #6 was already mtime-cached (`load_canvas_manifest`),
+  so only the music read needed fixing. LIVE on test-dev (canary, hotpatch);
+  source committed; rolls to fleet with the next OVU image rebuild.
+- **#1, #2, #3, #4, #5, #7 remain telemetry/decision-gated** exactly as written
+  below. They are NOT blind-tunes — each needs the named measurement or design
+  decision first. Concrete next-step for each:
+  - #1 — persist an empty-response **rate** metric (the counter
+    `_consecutive_empty_responses` already exists) and A/B the 200ms settle vs a
+    ~50ms asyncio.Event before changing it.
+  - #2 — the live path was confirmed `WebSpeechSTT.js:41 = 1500ms`; add cutoff
+    telemetry, then gate the conjunction/filler guard on it.
+  - #3 — build the server-side STT-vs-just-spoken-TTS fuzzy-match content filter
+    BEFORE shortening the 2500ms echo blackout; measure whether the shipped
+    echoCancellation already reduced false echoes.
+  - #4 — needs an explicit server "all-audio-flushed" event after the final TTS
+    flush before `drainMs` can drop; gating on `_textDoneReceived` alone is unsafe.
+  - #5 — verbatim-greeting pre-gen needs LLM-echo suppression to avoid double-speak.
+  - #7 — revisit text_interim blocking flush only if interim turns feel laggy.
+
 ## 1. Abort-before-send settle (openclaw.py `_send_and_stream` ~line 1100)
 On barge-in (stale sub exists) we poll sub-clearance at 100ms granularity
 (up to 2s) then sleep an unconditional 200ms "settle". Adds 0.2–2.2s to the
