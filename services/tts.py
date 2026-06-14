@@ -38,6 +38,13 @@ def get_groq_client():
             try:
                 from groq import Groq
                 _groq_client = Groq(api_key=api_key)
+                # JamBot Books: record Groq STT/TTS/vision calls (file-drop leg,
+                # tailed by the host scraper). Fully guarded — never breaks voice.
+                try:
+                    from services.jambot_books_hook import attach_groq
+                    attach_groq(_groq_client)
+                except Exception:
+                    pass
                 logger.info("Groq TTS client initialized")
             except ImportError:
                 logger.warning("groq package not installed — Groq TTS unavailable")

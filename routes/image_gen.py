@@ -218,6 +218,13 @@ def _generate_huggingface(model_id, prompt, quality='standard', aspect='1:1'):
         'Content-Type': 'application/json',
     }
     resp = http.post(url, json=payload, headers=headers, timeout=120)
+    # JamBot Books: record the Hugging Face inference call (guarded).
+    try:
+        from services.jambot_books_hook import record_provider_call
+        record_provider_call('hf', endpoint='/' + model_id, status=resp.status_code,
+                             model=model_id)
+    except Exception:
+        pass
     resp.raise_for_status()
 
     # HF Inference API returns raw image bytes

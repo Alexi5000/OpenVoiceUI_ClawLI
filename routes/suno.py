@@ -99,6 +99,13 @@ def _provider_receipt(op: str, units: str = '1') -> None:
             f.write(row + '\n')
     except Exception:  # never let telemetry touch the generation path
         pass
+    # JamBot Books: also record as an api_call to the host-tailed books queue
+    # (the receipt path above is unmounted on most containers; this one isn't).
+    try:
+        from services.jambot_books_hook import record_provider_call
+        record_provider_call('suno', endpoint='/generate', op=op, units=units)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # Jingle style presets — proven 2026-05-05. The recipe is:
