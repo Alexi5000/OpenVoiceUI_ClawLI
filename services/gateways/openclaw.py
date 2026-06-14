@@ -1119,6 +1119,9 @@ class GatewayConnection:
         ws = self._ws
         chat_id = str(uuid.uuid4())
         sub = self._dispatcher.subscribe(chat_id, session_key)
+        _cleanup_ids = []  # MUST init before the try — the finally below iterates it;
+        # if chat.send (inside the try, below) throws before the old in-try init,
+        # the finally hit UnboundLocalError and masked the real error (fix 2026-06-14).
         try:
             full_message = _PROMPT_ARMOR + message
             logger.debug(f"[GW] Sending to gateway ({len(full_message)} chars). User part: {repr(message[:120])}")
@@ -1134,7 +1137,6 @@ class GatewayConnection:
             }
             logger.info(f"### Sending chat message (agent={agent_id or 'main'}): {message[:100]}")
             await self._dispatcher.send(ws, chat_request)
-            _cleanup_ids = []
             result = await self._stream_events(
                 sub, event_queue, session_key,
                 captured_actions, agent_id=agent_id,
