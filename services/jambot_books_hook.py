@@ -124,6 +124,7 @@ _PROVIDER_HOST = {
     "hf": "router.huggingface.co",
     "resemble": "f.cluster.resemble.ai",
     "deepgram": "api.deepgram.com",
+    "supertonic": "supertonic-tts",  # shared local container (jambot-shared net), cost 0
 }
 
 

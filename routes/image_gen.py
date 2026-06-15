@@ -115,6 +115,13 @@ def _generate_gemini(model, prompt, images):
     }
     url = f'{GEMINI_BASE}/{model}:generateContent?key={GEMINI_KEY}'
     resp = http.post(url, json=payload, timeout=90)
+    # JamBot Books: in-container Gemini image gen (requests, no SDK to attach).
+    try:
+        from services.jambot_books_hook import record_provider_call
+        record_provider_call('gemini', endpoint=f'/{model}:generateContent', op='image',
+                             units='1', status=resp.status_code, model=model)
+    except Exception:
+        pass
     resp.raise_for_status()
     result = resp.json()
 
@@ -244,6 +251,13 @@ def _generate_imagen(model, prompt, aspect='1:1'):
     }
     url = f'{GEMINI_BASE}/{model}:predict?key={GEMINI_KEY}'
     resp = http.post(url, json=payload, timeout=90)
+    # JamBot Books: in-container Imagen gen (same Google generativelanguage API + key).
+    try:
+        from services.jambot_books_hook import record_provider_call
+        record_provider_call('gemini', endpoint=f'/{model}:predict', op='image',
+                             units='1', status=resp.status_code, model=model)
+    except Exception:
+        pass
     resp.raise_for_status()
     result = resp.json()
 
