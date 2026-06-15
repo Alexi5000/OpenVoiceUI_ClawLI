@@ -27,6 +27,21 @@ _QUEUE = os.environ.get(
     "BOOKS_QUEUE_FILE",
     "/app/runtime/canvas-pages/.jambot-books/queue.jsonl",
 )
+
+
+def _source_container() -> str:
+    """Stamp the row with a STABLE, origin-resolvable caller name.
+
+    HOSTNAME is the docker hex id (changes on recreate, and the JamFlow
+    origin-resolver can't map it to a tenant → pulse starts mid-chain). The
+    OVU container always carries JAMBOT_TENANT, so emit `openvoiceui-<tenant>`
+    which JamFlow's _books_origin maps to the tenant (OVU user) node."""
+    tenant = os.environ.get("JAMBOT_TENANT") or os.environ.get("HOST_TENANT")
+    if tenant:
+        return f"openvoiceui-{tenant}"
+    return os.environ.get("HOSTNAME", "")
+
+
 _HOSTS = {
     "api.groq.com": "groq",
     "studio-api.suno.ai": "suno",
@@ -91,7 +106,7 @@ def _record(response) -> None:
             "cached_tokens": cache,
             "latency_ms": latency_ms,
             "response_status": getattr(response, "status_code", None),
-            "source_container": os.environ.get("HOSTNAME"),
+            "source_container": _source_container(),
             "ts": _now_iso(),
             "provider_extras": {"leg": "ovu-file-drop"},
         }
@@ -132,7 +147,7 @@ def record_provider_call(provider: str, endpoint: str = "", op: str | None = Non
             "cached_tokens": None,
             "latency_ms": None,
             "response_status": status,
-            "source_container": os.environ.get("HOSTNAME"),
+            "source_container": _source_container(),
             "ts": _now_iso(),
             "provider_extras": {"leg": "ovu-file-drop", "op": op, "units": units},
         }

@@ -1032,6 +1032,16 @@ def deepgram_stt():
             timeout=15,
         )
 
+        # JamBot Books: Deepgram uses `requests` (no httpx SDK to attach), so
+        # record the STT call explicitly (file-drop leg). Fire-and-forget.
+        try:
+            from services.jambot_books_hook import record_provider_call
+            record_provider_call('deepgram', endpoint='/v1/listen', op='stt',
+                                 units=str(len(audio_bytes)), status=resp.status_code,
+                                 model='nova-2')
+        except Exception:
+            pass
+
         if resp.status_code != 200:
             logger.error(f"Deepgram API error {resp.status_code}: {resp.text[:300]}")
             return jsonify({"error": f"Deepgram API error: {resp.status_code}"}), 502
