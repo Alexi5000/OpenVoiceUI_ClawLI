@@ -116,7 +116,7 @@
 
 /* Canvas padded mode — OS-style inset for external URLs */
 #canvas-container.canvas-padded {
-    background: #111 !important;
+    background: var(--bg-deep, #0d0f1a) !important;
 }
 #canvas-container.canvas-padded #canvas-iframe {
     position: absolute !important;
@@ -124,6 +124,12 @@
     width: auto !important; height: auto !important;
     border-radius: var(--radius-lg) !important;
     box-shadow: 0 0 40px rgba(0,0,0,0.6) !important;
+}
+@media (max-width: 768px) {
+    #canvas-container.canvas-padded #canvas-iframe {
+        top: 8px !important; left: 4px !important; right: 4px !important; bottom: 4px !important;
+        border-radius: var(--radius-md) !important;
+    }
 }
 
 /* Control buttons — Edge Tabs (Concept A) */
