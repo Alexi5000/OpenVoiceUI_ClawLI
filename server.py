@@ -166,6 +166,9 @@ app.register_blueprint(greetings_bp)
 from routes.suno import suno_bp
 app.register_blueprint(suno_bp)
 
+from routes.fal import fal_bp
+app.register_blueprint(fal_bp)
+
 from routes.story import story_bp
 app.register_blueprint(story_bp)
 
