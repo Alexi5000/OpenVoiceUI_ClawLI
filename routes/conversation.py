@@ -1153,10 +1153,13 @@ def _conversation_inner():
             }) + '\n'
         return Response(_noop_stream(), mimetype='application/x-ndjson')
 
-    # Input length guard (P7-T3 security audit)
-    # Browser companion task loop sends page context (~5K) + prompt — allow 8K for those
-    # CSV/text file attachments can push messages over 4K — allow 15K for jambot sessions
-    _max_msg_len = 8000 if ui_context and ui_context.get('source') == 'jambot_extension' else 15000
+    # Input length guard (P7-T3 security audit) — raised 2026-06-25.
+    # A user's pasted prompt must NEVER be rejected for normal large pastes (text files, CSVs,
+    # docs, transcripts). The old 15K cap turned a big paste into a 400 "Message too long" API
+    # error with no response. Cap is now generous and sits well under the model's real input
+    # budget (GLM 204.8K-token context ≈ ~800K chars) — only an abusive multi-MB paste hits it.
+    # Browser-extension messages carry page context too, so they get a generous cap as well.
+    _max_msg_len = 200000 if ui_context and ui_context.get('source') == 'jambot_extension' else 500000
     if len(user_message) > _max_msg_len:
         return jsonify({'error': f'Message too long (max {_max_msg_len} characters)'}), 400
 
@@ -2757,7 +2760,7 @@ def _conversation_inner():
         except Exception as e:
             logger.error(f'Failed to call Clawdbot Gateway: {e}')
 
-    # ── FALLBACK: Z.AI direct (glm-4.5-flash, no tools) ──────────────────
+    # ── FALLBACK: Z.AI direct (glm-5-flash, no tools) ───────────────────
     if not ai_response:
         if metrics.get('profile') == 'gateway':
             logger.warning('No text response from Gateway, falling back to Z.AI flash...')
@@ -2773,7 +2776,7 @@ def _conversation_inner():
             logger.error(f'Z.AI direct call failed: {e}')
             ai_response = None
         metrics['profile'] = 'flash-direct'
-        metrics['model'] = 'glm-4.5-flash'
+        metrics['model'] = 'glm-5-flash'
         metrics['llm_inference_ms'] = int((time.time() - t_flash_start) * 1000)
 
     # ── LAST RESORT ───────────────────────────────────────────────────────
@@ -2897,7 +2900,7 @@ def conversation_steer():
         return jsonify({'ok': False, 'error': 'No message provided'}), 400
 
     # Input length guard (same as main conversation endpoint)
-    if len(message) > 4000:
+    if len(message) > 500000:  # raised 2026-06-25 — never reject a user's pasted text (steer/interject)
         return jsonify({'ok': False, 'error': 'Message too long'}), 400
 
     session_key = get_voice_session_key()
@@ -2954,7 +2957,7 @@ def conversation_interject():
 
     if not message:
         return jsonify({'ok': False, 'error': 'No message provided'}), 400
-    if len(message) > 4000:
+    if len(message) > 500000:  # raised 2026-06-25 — never reject a user's pasted text (steer/interject)
         return jsonify({'ok': False, 'error': 'Message too long'}), 400
 
     lane = classify_message(message, agent_busy=True)
