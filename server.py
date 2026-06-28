@@ -124,20 +124,27 @@ if DEFAULT_PAGES_DIR.is_dir():
         if not src.is_file():
             continue
         dest = CANVAS_PAGES_DIR / src.name
-        if not dest.exists():
-            shutil.copy2(src, dest)
-            logger.info("Seeded default page: %s", src.name)
-        else:
-            # Re-seed if the shipped version is newer than the runtime copy
-            src_ver = _extract_page_version(src)
-            if src_ver is not None:
-                dest_ver = _extract_page_version(dest)
-                if dest_ver != src_ver:
-                    shutil.copy2(src, dest)
-                    logger.info(
-                        "Re-seeded default page %s (version %s -> %s)",
-                        src.name, dest_ver, src_ver,
-                    )
+        # A single non-writable tenant page (e.g. a canvas-pages copy owned by a
+        # different uid with restrictive perms) must NOT crash the whole server boot.
+        # Log-and-skip so seeding stays best-effort. (host 2026-06-28 — fleet-roll fix:
+        # tenant-k crash-looped here when website-creator.html was uid-1000/664 vs appuser 1001.)
+        try:
+            if not dest.exists():
+                shutil.copy2(src, dest)
+                logger.info("Seeded default page: %s", src.name)
+            else:
+                # Re-seed if the shipped version is newer than the runtime copy
+                src_ver = _extract_page_version(src)
+                if src_ver is not None:
+                    dest_ver = _extract_page_version(dest)
+                    if dest_ver != src_ver:
+                        shutil.copy2(src, dest)
+                        logger.info(
+                            "Re-seeded default page %s (version %s -> %s)",
+                            src.name, dest_ver, src_ver,
+                        )
+        except (PermissionError, OSError) as _seed_exc:
+            logger.warning("Skipped seeding default page %s (non-fatal): %s", src.name, _seed_exc)
 
 from routes.static_files import static_files_bp, DJ_SOUNDS, SOUNDS_DIR
 app.register_blueprint(static_files_bp)
