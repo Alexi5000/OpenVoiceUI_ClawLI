@@ -328,6 +328,39 @@ _session_key_lock = threading.Lock()
 _session_recovery_key: str | None = None  # Set after double-empty to escape poisoned session
 
 # ---------------------------------------------------------------------------
+# Per-turn context: cached music-track NAME lists (voice-latency finding #6).
+# get_music_files() does a full dir iterdir() + per-file stat() + metadata load
+# every call, and the agent context build calls it twice (library+generated)
+# on EVERY turn. On big-library tenants that adds avoidable per-turn latency.
+# This 10s TTL cache is scoped ONLY to the agent's "[Available tracks ...]"
+# context string — the music UI/API endpoints keep calling get_music_files()
+# directly, so they stay fully fresh. 10s staleness in the agent's track list
+# is immaterial (Suno completions are announced separately via the
+# completed/failed queues), and matches the existing FIND-0x perf caching.
+_music_names_cache: dict = {}          # playlist -> {'ts': float, 'names': list[str]}
+_music_names_lock = threading.Lock()
+_MUSIC_NAMES_TTL_SECONDS: float = 10.0
+
+
+def _cached_music_names(playlist: str) -> list[str]:
+    """Track display-names for `playlist`, cached for _MUSIC_NAMES_TTL_SECONDS.
+    Fail-soft: any error returns []. Used only by the per-turn context build."""
+    now = time.time()
+    with _music_names_lock:
+        ent = _music_names_cache.get(playlist)
+        if ent and (now - ent['ts']) < _MUSIC_NAMES_TTL_SECONDS:
+            return ent['names']
+    try:
+        from routes.music import get_music_files
+        tracks = get_music_files(playlist)
+        names = [n for n in (t.get('title') or t.get('name', '') for t in tracks) if n]
+    except Exception:  # noqa: BLE001
+        names = []
+    with _music_names_lock:
+        _music_names_cache[playlist] = {'ts': now, 'names': names}
+    return names
+
+# ---------------------------------------------------------------------------
 # Conversation state (module-level singletons)
 # ---------------------------------------------------------------------------
 
@@ -400,6 +433,12 @@ def bump_voice_session() -> str:
     cache warm.
     """
     global _consecutive_empty_responses, _session_key_cache
+    # Exit session-recovery mode: a manual reset means the user wants a
+    # genuinely fresh start on the stable key. Previously the recovery key
+    # survived bump_voice_session() (nothing called _exit_session_recovery
+    # at all), so the Reset button left the app pinned to a recovery-<epoch>
+    # session forever.
+    _exit_session_recovery()
     try:
         with open(VOICE_SESSION_FILE, 'r') as f:
             counter = int(f.read().strip())
@@ -419,10 +458,26 @@ _recovery_entered_at: float = 0
 _recovery_last_activity_at: float = 0
 _recovery_last_exited_at: float = 0
 
+#: True once the current recovery session has produced at least one real
+#: (non-empty, non-fallback) response. A successful recovery session IS the
+#: new stable session (sticky-recovery design, see the text_done handler) and
+#: must NOT be idle-cleared back to the possibly-still-poisoned main key —
+#: that idle-clear was the recurrence engine behind the repeated
+#: main → double-empty → recovery loops (2 dead user turns per loop).
+_recovery_had_success: bool = False
+
 #: Context-replay prime — injected into the FIRST request on the recovery
 #: session so the fresh openclaw session has memory of the conversation that
 #: was poisoned. Cleared after one consume via :func:`consume_recovery_prime`.
 _recovery_context_prime: str | None = None
+
+#: When the current prime was built (epoch). A prime can now survive a
+#: __session_start__ greeting and failed deliveries, so it needs an age cap:
+#: if the user walks away and comes back hours later, replaying the
+#: poison-moment turns as "ongoing conversation" would be wrong. Primes older
+#: than this are discarded at consume time.
+_recovery_prime_built_at: float = 0
+_RECOVERY_PRIME_MAX_AGE_S: float = 1800.0  # 30 min
 
 #: Most recent steer/interject message per session key, with timestamp.
 #: When a user speaks mid-inference the interject is delivered fire-and-forget
@@ -460,7 +515,7 @@ def consume_recent_steer(session_key: str, max_age_s: float = 30.0) -> str | Non
     return msg
 
 
-def _build_recovery_prime(max_turns: int = 6) -> str | None:
+def _build_recovery_prime(max_turns: int = 6, window_minutes: int = 120) -> str | None:
     """Build a compressed history summary from the most recent DB turns so a
     fresh recovery session doesn't lose context.
 
@@ -471,7 +526,27 @@ def _build_recovery_prime(max_turns: int = 6) -> str | None:
     """
     try:
         from services.paths import DB_PATH
+        from datetime import timedelta
         import sqlite3
+        # Time-filter: only inject turns from the last ``window_minutes`` so
+        # stale context from previous sessions (days old) can't poison a fresh
+        # recovery.
+        #
+        # FORMAT FIX: log_conversation() writes created_at as
+        # datetime.now().isoformat() → '2026-06-12T03:46:25' (with a 'T').
+        # The old filter compared against datetime('now','-10 minutes') →
+        # '2026-06-12 03:38:25' (with a space). SQLite compares TEXT
+        # lexically and 'T' > ' ', so every same-day row passed regardless
+        # of age (fail-open) while just after UTC midnight NO row passed
+        # (fail-closed → prime=None → recovery amnesia even on the happy
+        # path). Compute the cutoff in Python in the SAME isoformat the
+        # writer uses so the comparison is exact.
+        #
+        # WINDOW: 120 min, deliberately wider than the old nominal 10 — the
+        # accidental same-day window is what made delivered primes good;
+        # a true 10-minute window would hand back an EMPTY prime whenever
+        # poisoning follows a normal conversational pause.
+        _cutoff = (datetime.now() - timedelta(minutes=window_minutes)).isoformat()
         with sqlite3.connect(str(DB_PATH), timeout=2.0) as _c:
             _c.row_factory = sqlite3.Row
             # NOTE: most rows land with session_id IS NULL (the main
@@ -479,15 +554,12 @@ def _build_recovery_prime(max_turns: int = 6) -> str | None:
             # usually None) — only the steer/interject routes explicitly
             # write session_id='default'. Include both so the prime
             # reflects the actual recent conversation.
-            # Time-filter: only inject turns from the last 10 minutes so stale
-            # context from previous sessions (hours/days old) can't poison a
-            # fresh recovery. Recovery is immediate so old turns are irrelevant.
             rows = _c.execute(
                 'SELECT role, message FROM conversation_log '
                 "WHERE (session_id = 'default' OR session_id IS NULL) "
-                "AND created_at >= datetime('now', '-10 minutes') "
+                'AND created_at >= ? '
                 'ORDER BY id DESC LIMIT ?',
-                (max_turns,),
+                (_cutoff, max_turns),
             ).fetchall()
         if not rows:
             return None
@@ -522,11 +594,56 @@ def _build_recovery_prime(max_turns: int = 6) -> str | None:
 
 
 def consume_recovery_prime() -> str | None:
-    """Return the recovery context prime once and clear it."""
+    """Return the recovery context prime once and clear it.
+    Discards primes older than :data:`_RECOVERY_PRIME_MAX_AGE_S` — a prime
+    that survived a greeting / failed deliveries must not replay hours-old
+    turns as if they were the ongoing conversation."""
     global _recovery_context_prime
     p = _recovery_context_prime
     _recovery_context_prime = None
+    if p and time.time() - _recovery_prime_built_at > _RECOVERY_PRIME_MAX_AGE_S:
+        logger.info(
+            f'### Recovery prime expired (built '
+            f'{int(time.time() - _recovery_prime_built_at)}s ago) — discarding'
+        )
+        return None
     return p
+
+
+def restore_recovery_prime(prime: str | None) -> None:
+    """Re-arm a consumed recovery prime after the turn that carried it FAILED
+    (empty response / gateway error / stream timeout).
+
+    Without this, the prime is single-consume: if the first request on the
+    recovery session dies (common — the same upstream brownout that poisoned
+    the session is usually still in progress), the conversation context is
+    lost forever and the user meets an amnesiac agent. Verified live on
+    tenant-p 2026-06-11 19:58 ("Injecting session-recovery prime (2758 chars)"
+    immediately followed by "EMPTY-FINAL RETRY FAILED: both attempts empty").
+
+    Only restores while still in recovery mode and only if no newer prime has
+    been armed in the meantime (a fresh double-empty rebuilds a newer prime —
+    never clobber it with an older one).
+    """
+    global _recovery_context_prime
+    if prime and _session_recovery_key is not None and _recovery_context_prime is None:
+        _recovery_context_prime = prime
+        logger.info(f'### Recovery prime re-armed after failed delivery ({len(prime)} chars)')
+
+
+def mark_recovery_success() -> None:
+    """Record that the current recovery session produced a real response.
+    A successful recovery session is the new stable session (sticky-recovery
+    design) — :func:`_check_recovery_timeout` must not idle-clear it back to
+    the possibly-still-poisoned main key.
+    """
+    global _recovery_had_success
+    if _session_recovery_key is not None and not _recovery_had_success:
+        _recovery_had_success = True
+        logger.info(
+            f'### SESSION RECOVERY HEALTHY: "{_session_recovery_key}" produced a real '
+            f'response — keeping it as the stable session (no idle-clear back to main)'
+        )
 
 
 def _enter_session_recovery():
@@ -543,7 +660,8 @@ def _enter_session_recovery():
     Uses a timestamped key so that if the recovery session ITSELF poisons
     later, a new recovery-<epoch> session can be spun up cleanly. The
     last-exited cooldown prevents rapid thrashing."""
-    global _session_recovery_key, _recovery_entered_at, _recovery_last_activity_at, _recovery_context_prime
+    global _session_recovery_key, _recovery_entered_at, _recovery_last_activity_at, \
+        _recovery_context_prime, _recovery_had_success, _recovery_prime_built_at
     # Cooldown: prevent re-entering recovery within 10s of a previous SUCCESSFUL
     # exit. Pre-Fix-F this was measured against _recovery_entered_at which
     # double-dutied as "last activity" after activity bumping was added —
@@ -569,9 +687,11 @@ def _enter_session_recovery():
     # enter recovery when main is genuinely broken, so a new session per
     # poisoning event is appropriate.
     _session_recovery_key = f'recovery-{int(now)}'
+    _recovery_had_success = False
     # Pull 30 turns instead of 6 — complex multi-turn icon/canvas work easily
     # exceeds 6 turns and the agent was losing all context after recovery.
     _recovery_context_prime = _build_recovery_prime(max_turns=30)
+    _recovery_prime_built_at = now
     logger.warning(
         f'### SESSION RECOVERY: switching to key "{_session_recovery_key}" '
         f'(prime={"yes" if _recovery_context_prime else "no"}, '
@@ -586,11 +706,16 @@ def _exit_session_recovery():
     Also resets the double-empty circuit breaker and records the exit
     timestamp so :func:`_enter_session_recovery` can cooldown against it
     (prevents thrash, but ALLOWS re-entry when main gets re-poisoned)."""
-    global _session_recovery_key, _double_empty_restart_count, _recovery_last_exited_at
+    global _session_recovery_key, _double_empty_restart_count, _recovery_last_exited_at, \
+        _recovery_context_prime, _recovery_had_success
     if _session_recovery_key is not None:
         old_recovery = _session_recovery_key
         _session_recovery_key = None
         _double_empty_restart_count = 0
+        _recovery_had_success = False
+        # Drop any armed-but-undelivered prime — the stable key has its own
+        # server-side history; injecting a recovery prime there duplicates it.
+        _recovery_context_prime = None
         _recovery_last_exited_at = time.time()
         stable = get_voice_session_key()
         logger.info(f'### SESSION RECOVERY CLEARED: "{old_recovery}" → back to stable key "{stable}"')
@@ -620,20 +745,35 @@ def bump_recovery_activity() -> None:
 
 
 def _check_recovery_timeout():
-    """Auto-clear stale recovery keys. Only fires if the recovery session has
-    been idle (no gateway events) longer than :data:`_RECOVERY_IDLE_TIMEOUT_S`.
-    The normal exit path is :func:`_exit_session_recovery` on first success.
+    """Auto-clear STUCK recovery keys — i.e. recovery sessions that never
+    produced a single successful response and have been idle longer than
+    :data:`_RECOVERY_IDLE_TIMEOUT_S`.
+
+    A recovery session that HAS succeeded is the new stable session
+    (sticky-recovery design — see the text_done handler) and is deliberately
+    NEVER idle-cleared. The old behavior cleared any idle recovery, dumping
+    the next conversation back onto the possibly-still-poisoned main key:
+    every >10-minute pause cost the user two dead turns (empty + retry-empty)
+    and a context switch into yet another recovery session. Verified live on
+    tenant-p 2026-06-11: TIMEOUT-clear of a healthy recovery → next interaction
+    on main → DOUBLE EMPTY → new recovery.
     """
-    global _session_recovery_key
+    global _session_recovery_key, _recovery_context_prime
     if _session_recovery_key is None:
         return
+    if _recovery_had_success:
+        return  # healthy recovery = the new stable session; never idle-clear
     idle_for = time.time() - max(_recovery_last_activity_at, _recovery_entered_at)
     if idle_for > _RECOVERY_IDLE_TIMEOUT_S:
         logger.warning(
             f'### SESSION RECOVERY TIMEOUT: "{_session_recovery_key}" '
-            f'idle for >{int(_RECOVERY_IDLE_TIMEOUT_S)}s — clearing'
+            f'idle for >{int(_RECOVERY_IDLE_TIMEOUT_S)}s with no successful '
+            f'response (stuck) — clearing'
         )
         _session_recovery_key = None
+        # The prime belonged to the abandoned recovery attempt — don't let it
+        # leak into the stable session's next turn.
+        _recovery_context_prime = None
 
 
 # ---------------------------------------------------------------------------
@@ -1013,10 +1153,13 @@ def _conversation_inner():
             }) + '\n'
         return Response(_noop_stream(), mimetype='application/x-ndjson')
 
-    # Input length guard (P7-T3 security audit)
-    # Browser companion task loop sends page context (~5K) + prompt — allow 8K for those
-    # CSV/text file attachments can push messages over 4K — allow 15K for jambot sessions
-    _max_msg_len = 8000 if ui_context and ui_context.get('source') == 'jambot_extension' else 15000
+    # Input length guard (P7-T3 security audit) — raised 2026-06-25.
+    # A user's pasted prompt must NEVER be rejected for normal large pastes (text files, CSVs,
+    # docs, transcripts). The old 15K cap turned a big paste into a 400 "Message too long" API
+    # error with no response. Cap is now generous and sits well under the model's real input
+    # budget (GLM 204.8K-token context ≈ ~800K chars) — only an abusive multi-MB paste hits it.
+    # Browser-extension messages carry page context too, so they get a generous cap as well.
+    _max_msg_len = 200000 if ui_context and ui_context.get('source') == 'jambot_extension' else 500000
     if len(user_message) > _max_msg_len:
         return jsonify({'error': f'Message too long (max {_max_msg_len} characters)'}), 400
 
@@ -1235,14 +1378,11 @@ def _conversation_inner():
             context_parts.append(f'[Music PLAYING: {track}]')
 
         # Available music tracks (so agent can use [MUSIC_PLAY:exact name])
+        # Names come from a 10s TTL cache (_cached_music_names) so a full
+        # dir-scan isn't paid on every turn — voice-latency finding #6.
         try:
-            from routes.music import get_music_files
-            _lib_tracks = get_music_files('library')
-            _gen_tracks = get_music_files('generated')
-            _lib_names = [t.get('title') or t.get('name', '') for t in _lib_tracks]
-            _gen_names = [t.get('title') or t.get('name', '') for t in _gen_tracks]
-            _lib_names = [n for n in _lib_names if n]
-            _gen_names = [n for n in _gen_names if n]
+            _lib_names = _cached_music_names('library')
+            _gen_names = _cached_music_names('generated')
             _parts = []
             if _lib_names:
                 _parts.append(f'Library ({len(_lib_names)}): {_cap_list(_lib_names, max_chars=2000)}')
@@ -1317,6 +1457,13 @@ def _conversation_inner():
                 _inter_sentence_gap_ms = _vc.inter_sentence_gap_ms
     except Exception:
         pass  # Profile system not available — skip gracefully
+
+    # Greetings are short by design ("Hey, what's up?") — with the 40-char
+    # minimum they never hit a mid-stream sentence boundary, so greeting TTS
+    # only fired at text_done (issue #81: 5-38s first-audio latency on
+    # session start). Fire on the first complete sentence regardless of length.
+    if user_message == '__session_start__':
+        _min_sentence_chars = 1
 
     # Inject [CURRENT_USER: ...] so the agent knows WHO is actually logged in
     # right now (regardless of which tenant account they're using). When Mike
@@ -1466,13 +1613,25 @@ def _conversation_inner():
             # prepend a compressed history summary to the very FIRST request
             # so the fresh openclaw session has memory of the prior turns.
             # Skip on __session_start__: injecting old context onto a greeting
-            # request causes the agent to pick up stale work instead of greeting.
-            _recovery_prime = consume_recovery_prime()
-            if _recovery_prime and user_message == '__session_start__':
-                logger.info('### Suppressing recovery prime on __session_start__ (greeting takes priority)')
-                _recovery_prime = None
-            elif _recovery_prime:
-                logger.info(f'### Injecting session-recovery prime ({len(_recovery_prime)} chars)')
+            # request causes the agent to pick up stale work instead of
+            # greeting. CRITICAL: skip means LEAVE THE PRIME ARMED, not
+            # consume-and-discard. After a drop the user's next request is
+            # almost always __session_start__ (they re-open the call) — the
+            # old consume-then-null code burned the prime on the greeting, so
+            # every turn after the "Hi, can I help you?" ran on a context-free
+            # session. That was the primary amnesia path.
+            _recovery_prime = None
+            if user_message == '__session_start__':
+                if _recovery_context_prime is not None:
+                    logger.info(
+                        '### Holding recovery prime through __session_start__ '
+                        '(greeting goes out prime-free; prime stays armed for '
+                        'the first real user turn)'
+                    )
+            else:
+                _recovery_prime = consume_recovery_prime()
+                if _recovery_prime:
+                    logger.info(f'### Injecting session-recovery prime ({len(_recovery_prime)} chars)')
 
             def _run_gateway():
                 _msg = message_with_context
@@ -1604,6 +1763,15 @@ def _conversation_inner():
                                 result['error'] = str(e)
                             finally:
                                 done.set()
+                                # Wake the stream loop NOW so finished audio is
+                                # flushed immediately instead of sitting in
+                                # _tts_pending until the next gateway event or
+                                # queue-poll timeout (up to 10s during quiet
+                                # tool runs). Handled as a no-op flush trigger.
+                                try:
+                                    event_queue.put({'type': 'tts_ready'})
+                                except Exception:
+                                    pass
                         if _parallel_sentences:
                             threading.Thread(target=_run, daemon=True).start()
                         else:
@@ -1654,6 +1822,9 @@ def _conversation_inner():
                             # connection alive (they time out at 60-100s of silence).
                             elapsed = int(time.time() - _stream_start)
                             if elapsed > _STREAM_HARD_TIMEOUT:
+                                # Re-arm a consumed recovery prime — this turn
+                                # never completed, so context must carry forward.
+                                restore_recovery_prime(_recovery_prime)
                                 yield json.dumps({'type': 'error', 'error': 'Gateway timeout'}) + '\n'
                                 break
                             yield json.dumps({'type': 'heartbeat', 'elapsed': elapsed}) + '\n'
@@ -1667,6 +1838,19 @@ def _conversation_inner():
 
                         if evt['type'] == 'handshake':
                             metrics['handshake_ms'] = evt['ms']
+                            continue
+
+                        if evt['type'] == 'tts_ready':
+                            # A TTS thread finished — flush any audio that's ready,
+                            # in order, without waiting for gateway event cadence.
+                            while _tts_pending and _tts_pending[0][0].is_set():
+                                _done_evt, _res = _tts_pending.pop(0)
+                                if _res.get('error'):
+                                    yield _tts_error_event(_res['error'])
+                                elif _res.get('audio'):
+                                    yield _audio_event(_res['audio'], _chunks_sent)
+                                    _chunks_sent += 1
+                                    _last_audio_time = time.time()
                             continue
 
                         if evt['type'] == 'heartbeat':
@@ -1700,12 +1884,14 @@ def _conversation_inner():
                                         _last_tool_name, _tools_seen, _silence_secs
                                     )
                                     logger.info(f"### STATUS TTS ({_status_tts_count}): '{_status_text}' (silence={_silence_secs:.0f}s)")
-                                    _status_done, _status_res = _fire_tts(_status_text)
-                                    _status_done.wait(timeout=10)
-                                    if _status_res.get('audio'):
-                                        yield _audio_event(_status_res['audio'], _chunks_sent)
-                                        _chunks_sent += 1
-                                        _last_audio_time = time.time()
+                                    # Non-blocking: queue it like a normal sentence and
+                                    # let the tts_ready flush deliver it. Blocking here
+                                    # held the whole stream (deltas, real audio) hostage
+                                    # for up to 10s while filler audio generated.
+                                    _tts_pending.append(_fire_tts(_status_text))
+                                    # Reset the silence clock at fire time so the next
+                                    # heartbeat doesn't double-fire while this generates.
+                                    _last_audio_time = time.time()
                                     _status_tts_count += 1
                             continue
 
@@ -1913,6 +2099,11 @@ def _conversation_inner():
                             # exits recovery now.
                             if full_response and full_response.strip() and _session_recovery_key is not None:
                                 bump_recovery_activity()
+                                # A real (non-degenerate) response marks this
+                                # recovery session healthy — it becomes the new
+                                # stable session and is exempt from idle-clear.
+                                if full_response.strip().upper().rstrip('.!?') not in ('NO', 'YES'):
+                                    mark_recovery_success()
 
                             # ── Uncommitted tool-promise detection ────────────
                             # If the assistant said "let me build X" / "I'll write Y"
@@ -2106,9 +2297,33 @@ def _conversation_inner():
                                     )
                                 retry_queue = queue.Queue()
                                 captured_actions.clear()
+                                # Rebuild the FULL outbound message for the retry:
+                                # 1. Re-attach the recovery prime + reconnect prefix —
+                                #    the old retry sent bare message_with_context, so
+                                #    when the prime-carrying first turn on a recovery
+                                #    session came back empty, the retry silently
+                                #    dropped the conversation context (amnesia hole).
+                                # 2. Append a nudge so the retry prompt is NOT
+                                #    byte-identical to the failed attempt. The
+                                #    gateway-internal EMPTY-FINAL retry already
+                                #    resent the identical prompt twice; when the
+                                #    empty is prompt-deterministic (GLM thinking-only
+                                #    completion), identical retries fail identically.
+                                _retry_msg = message_with_context
+                                if _recovery_prefix:
+                                    _retry_msg = _recovery_prefix + _retry_msg
+                                if _recovery_prime:
+                                    _retry_msg = _recovery_prime + _retry_msg
+                                _retry_msg = _retry_msg + (
+                                    '\n\n[SYSTEM: Your previous attempt at this message '
+                                    'produced no spoken text. Respond now with a normal, '
+                                    'plain spoken-text reply to the user\'s message above. '
+                                    'Do not answer with a bare YES/NO, an empty message, '
+                                    'or only action tags.]'
+                                )
                                 def _retry_gateway():
                                     gateway_manager.stream_to_queue(
-                                        retry_queue, message_with_context,
+                                        retry_queue, _retry_msg,
                                         _retry_key, captured_actions,
                                         gateway_id=gateway_id,
                                         agent_id=agent_id,
@@ -2119,12 +2334,19 @@ def _conversation_inner():
                                 t_llm_start = time.time()
                                 retry_thread.start()
                                 event_queue = retry_queue
-                                logger.info("### RETRY: re-sent message to gateway")
+                                logger.info("### RETRY: re-sent message to gateway (with anti-empty nudge)")
                                 continue  # back to event loop — text_done NOT sent yet
 
                             # ── Z.AI direct fallback after double-empty ──
                             if _is_empty and getattr(stream_response, '_retried', False):
                                 logger.warning('### DOUBLE EMPTY — session poisoned, entering recovery mode')
+
+                                # If this turn consumed a prime, re-arm it first.
+                                # _enter_session_recovery() normally rebuilds a
+                                # fresh prime (which supersedes this), but when
+                                # its 10s cooldown skips the entry, this restore
+                                # is the only thing keeping the context alive.
+                                restore_recovery_prime(_recovery_prime)
 
                                 # 1. Switch to recovery session key so NEXT request
                                 #    goes to a fresh openclaw session (not the poisoned one)
@@ -2475,6 +2697,11 @@ def _conversation_inner():
                             break
 
                         if evt['type'] == 'error':
+                            # Gateway-level failure — if this request consumed a
+                            # recovery prime, the message likely never reached
+                            # the session. Re-arm the prime so the NEXT turn
+                            # still carries the conversation context.
+                            restore_recovery_prime(_recovery_prime)
                             yield json.dumps({
                                 'type': 'error',
                                 'error': evt.get('error', 'Unknown error')
@@ -2509,6 +2736,10 @@ def _conversation_inner():
                             ai_response = normalize_action_tags(ai_response)
                     elif evt['type'] == 'handshake':
                         metrics['handshake_ms'] = evt['ms']
+                if not ai_response:
+                    # Turn failed — re-arm any consumed recovery prime so the
+                    # next request still carries the conversation context.
+                    restore_recovery_prime(_recovery_prime)
                 metrics['llm_inference_ms'] = int((time.time() - t_llm_start) * 1000)
                 metrics['tool_count'] = sum(
                     1 for a in captured_actions
@@ -2529,7 +2760,7 @@ def _conversation_inner():
         except Exception as e:
             logger.error(f'Failed to call Clawdbot Gateway: {e}')
 
-    # ── FALLBACK: Z.AI direct (glm-4.5-flash, no tools) ──────────────────
+    # ── FALLBACK: Z.AI direct (glm-5-flash, no tools) ───────────────────
     if not ai_response:
         if metrics.get('profile') == 'gateway':
             logger.warning('No text response from Gateway, falling back to Z.AI flash...')
@@ -2545,7 +2776,7 @@ def _conversation_inner():
             logger.error(f'Z.AI direct call failed: {e}')
             ai_response = None
         metrics['profile'] = 'flash-direct'
-        metrics['model'] = 'glm-4.5-flash'
+        metrics['model'] = 'glm-5-flash'
         metrics['llm_inference_ms'] = int((time.time() - t_flash_start) * 1000)
 
     # ── LAST RESORT ───────────────────────────────────────────────────────
@@ -2669,7 +2900,7 @@ def conversation_steer():
         return jsonify({'ok': False, 'error': 'No message provided'}), 400
 
     # Input length guard (same as main conversation endpoint)
-    if len(message) > 4000:
+    if len(message) > 500000:  # raised 2026-06-25 — never reject a user's pasted text (steer/interject)
         return jsonify({'ok': False, 'error': 'Message too long'}), 400
 
     session_key = get_voice_session_key()
@@ -2726,7 +2957,7 @@ def conversation_interject():
 
     if not message:
         return jsonify({'ok': False, 'error': 'No message provided'}), 400
-    if len(message) > 4000:
+    if len(message) > 500000:  # raised 2026-06-25 — never reject a user's pasted text (steer/interject)
         return jsonify({'ok': False, 'error': 'Message too long'}), 400
 
     lane = classify_message(message, agent_busy=True)

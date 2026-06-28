@@ -38,6 +38,13 @@ def get_groq_client():
             try:
                 from groq import Groq
                 _groq_client = Groq(api_key=api_key)
+                # JamBot Books: record Groq STT/TTS/vision calls (file-drop leg,
+                # tailed by the host scraper). Fully guarded — never breaks voice.
+                try:
+                    from services.jambot_books_hook import attach_groq
+                    attach_groq(_groq_client)
+                except Exception:
+                    pass
                 logger.info("Groq TTS client initialized")
             except ImportError:
                 logger.warning("groq package not installed — Groq TTS unavailable")
@@ -67,7 +74,7 @@ def generate_groq_tts(text: str, voice: str = 'autumn') -> bytes:
         model="canopylabs/orpheus-v1-english",
         input=text,
         voice=voice,
-        response_format="mp3"
+        response_format="wav"  # Groq Orpheus now ONLY accepts wav; mp3 → 400 (2026-06-15)
     )
     audio_bytes = tts_response.content if hasattr(tts_response, 'content') else tts_response.read()
     logger.info(f"Groq Orpheus TTS generated: {len(audio_bytes)} bytes")

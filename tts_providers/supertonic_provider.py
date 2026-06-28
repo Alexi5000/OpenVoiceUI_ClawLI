@@ -339,6 +339,14 @@ class SupertonicProvider(TTSProvider):
                     raise RuntimeError(f"Supertonic API error {resp.status_code}: {resp.text[:200]}")
                 audio_bytes = resp.content
                 logger.info(f"API: {len(audio_bytes)} bytes for voice '{voice}'")
+                # JamBot Books: shared supertonic-tts container call (cost 0, local).
+                try:
+                    from services.jambot_books_hook import record_provider_call
+                    record_provider_call('supertonic', endpoint='/tts', op='tts-api',
+                                         units=str(len(text)), status=resp.status_code,
+                                         model='supertonic')
+                except Exception:
+                    pass
                 return audio_bytes
 
             # ── Local mode: load ONNX in-process ─────────────────────────────
@@ -347,6 +355,13 @@ class SupertonicProvider(TTSProvider):
                 text=text, lang=lang, speed=speed, total_step=total_step
             )
             logger.info(f"Local: {len(audio_bytes)} bytes for voice '{voice}'")
+            # JamBot Books: in-process ONNX supertonic (cost 0, local).
+            try:
+                from services.jambot_books_hook import record_provider_call
+                record_provider_call('supertonic', endpoint='/local', op='tts-local',
+                                     units=str(len(text)), status=200, model='supertonic')
+            except Exception:
+                pass
             return audio_bytes
 
         except Exception as e:

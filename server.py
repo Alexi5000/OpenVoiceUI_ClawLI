@@ -35,7 +35,7 @@ from pathlib import Path
 
 import websockets
 from dotenv import load_dotenv
-from flask import Response, request, jsonify
+from flask import Response, g, request, jsonify
 
 faulthandler.enable()  # print traceback on hard crashes (SIGSEGV etc.)
 
@@ -124,20 +124,27 @@ if DEFAULT_PAGES_DIR.is_dir():
         if not src.is_file():
             continue
         dest = CANVAS_PAGES_DIR / src.name
-        if not dest.exists():
-            shutil.copy2(src, dest)
-            logger.info("Seeded default page: %s", src.name)
-        else:
-            # Re-seed if the shipped version is newer than the runtime copy
-            src_ver = _extract_page_version(src)
-            if src_ver is not None:
-                dest_ver = _extract_page_version(dest)
-                if dest_ver != src_ver:
-                    shutil.copy2(src, dest)
-                    logger.info(
-                        "Re-seeded default page %s (version %s -> %s)",
-                        src.name, dest_ver, src_ver,
-                    )
+        # A single non-writable tenant page (e.g. a canvas-pages copy owned by a
+        # different uid with restrictive perms) must NOT crash the whole server boot.
+        # Log-and-skip so seeding stays best-effort. (host 2026-06-28 — fleet-roll fix:
+        # tenant-k crash-looped here when website-creator.html was uid-1000/664 vs appuser 1001.)
+        try:
+            if not dest.exists():
+                shutil.copy2(src, dest)
+                logger.info("Seeded default page: %s", src.name)
+            else:
+                # Re-seed if the shipped version is newer than the runtime copy
+                src_ver = _extract_page_version(src)
+                if src_ver is not None:
+                    dest_ver = _extract_page_version(dest)
+                    if dest_ver != src_ver:
+                        shutil.copy2(src, dest)
+                        logger.info(
+                            "Re-seeded default page %s (version %s -> %s)",
+                            src.name, dest_ver, src_ver,
+                        )
+        except (PermissionError, OSError) as _seed_exc:
+            logger.warning("Skipped seeding default page %s (non-fatal): %s", src.name, _seed_exc)
 
 from routes.static_files import static_files_bp, DJ_SOUNDS, SOUNDS_DIR
 app.register_blueprint(static_files_bp)
@@ -165,6 +172,9 @@ app.register_blueprint(greetings_bp)
 
 from routes.suno import suno_bp
 app.register_blueprint(suno_bp)
+
+from routes.fal import fal_bp
+app.register_blueprint(fal_bp)
 
 from routes.story import story_bp
 app.register_blueprint(story_bp)
@@ -461,6 +471,15 @@ if _package_file.exists():
     except Exception:
         pass
 _VERSION_INFO["version"] = _PACKAGE_VERSION
+
+
+@app.route("/api/config", methods=["GET"])
+def get_public_config():
+    """Public client config — only values safe to expose pre-auth.
+    admin.html bootstraps Clerk from this (it is served statically and does not
+    get the window.AGENT_CONFIG injection index.html gets)."""
+    clerk_key = (os.getenv("CLERK_PUBLISHABLE_KEY") or os.getenv("VITE_CLERK_PUBLISHABLE_KEY", "")).strip()
+    return jsonify({"clerkPublishableKey": clerk_key})
 
 
 @app.route("/api/version", methods=["GET"])
@@ -1023,6 +1042,16 @@ def deepgram_stt():
             timeout=15,
         )
 
+        # JamBot Books: Deepgram uses `requests` (no httpx SDK to attach), so
+        # record the STT call explicitly (file-drop leg). Fire-and-forget.
+        try:
+            from services.jambot_books_hook import record_provider_call
+            record_provider_call('deepgram', endpoint='/v1/listen', op='stt',
+                                 units=str(len(audio_bytes)), status=resp.status_code,
+                                 model='nova-2')
+        except Exception:
+            pass
+
         if resp.status_code != 200:
             logger.error(f"Deepgram API error {resp.status_code}: {resp.text[:300]}")
             return jsonify({"error": f"Deepgram API error: {resp.status_code}"}), 502
@@ -1475,6 +1504,41 @@ def list_uploads():
         })
 
     return jsonify({"files": files, "count": len(files)})
+
+
+# ---------------------------------------------------------------------------
+# Z.AI direct fallback — voice path (glm-5-flash)
+# ---------------------------------------------------------------------------
+
+def get_zai_direct_response(message: str, session_id: str = None) -> str:
+    """Call Z.AI glm-5-flash directly for voice fallback (no tools, no gateway)."""
+    import urllib.request as _urlreq
+    import json as _json
+    zai_key = os.getenv("ZAI_API_KEY", "")
+    if not zai_key:
+        logger.warning("get_zai_direct_response: ZAI_API_KEY not set")
+        return None
+    payload = _json.dumps({
+        "model": "glm-5-flash",
+        "messages": [{"role": "user", "content": message}],
+        "max_tokens": 512,
+        "temperature": 0.7,
+    }).encode()
+    req = _urlreq.Request(
+        "https://api.z.ai/api/paas/v4/chat/completions",
+        data=payload,
+        headers={"Authorization": f"Bearer {zai_key}", "Content-Type": "application/json"},
+    )
+    try:
+        with _urlreq.urlopen(req, timeout=30) as r:
+            d = _json.load(r)
+        msg = d["choices"][0]["message"]
+        if msg.get("reasoning_content") and not msg.get("content"):
+            return None  # thinking-only block — treat as empty
+        return msg.get("content", "").strip() or None
+    except Exception as exc:
+        logger.error(f"get_zai_direct_response failed: {exc}")
+        return None
 
 
 # ---------------------------------------------------------------------------

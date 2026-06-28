@@ -543,13 +543,12 @@ class GatewayConnection:
     async def _ensure_connected(self):
         async with self._ws_lock:
             if self._connected and self._ws is not None:
-                try:
-                    pong_waiter = await self._ws.ping()
-                    await asyncio.wait_for(pong_waiter, timeout=5.0)
-                    return
-                except Exception:
-                    logger.warning("### Persistent WS ping failed, reconnecting...")
-                    await self._disconnect()
+                # No pre-send liveness ping: it serialized a full ping/pong
+                # roundtrip (worst case 5s) ahead of EVERY chat.send on the
+                # hot path. A dead socket is caught on send/recv instead —
+                # _do_stream catches _WSClosedError/ConnectionClosed, then
+                # disconnects, reconnects, and re-sends the same message.
+                return
 
             backoff = self.BACKOFF_DELAYS[min(self._backoff_idx, len(self.BACKOFF_DELAYS) - 1)]
             elapsed = time.time() - self._last_disconnect_time
@@ -1006,6 +1005,29 @@ class GatewayConnection:
                         if content and content.strip():
                             final_text = content
 
+                    # Diagnostic (log-only): classify no-visible-text finals.
+                    # GLM occasionally returns a completion whose content is
+                    # ONLY thinking block(s) — the known "thinking-only" empty
+                    # class (thinkingDefault:"off" reduces but doesn't
+                    # eliminate it). Tag these distinctly so log analysis can
+                    # separate them from true zero-content finals.
+                    if not final_text:
+                        try:
+                            _raw_content = (payload.get('message') or {}).get('content')
+                            if isinstance(_raw_content, list):
+                                _think_chars = sum(
+                                    len(b.get('thinking') or b.get('text') or '')
+                                    for b in _raw_content
+                                    if isinstance(b, dict) and b.get('type') == 'thinking'
+                                )
+                                if _think_chars:
+                                    logger.warning(
+                                        f"### THINKING-ONLY FINAL: {_think_chars} chars of "
+                                        f"thinking, zero visible text (GLM thinking leak)"
+                                    )
+                        except Exception:
+                            pass  # diagnostic only — never affect the flow
+
                     if final_text:
                         if is_system_response(final_text):
                             logger.info(f"### Suppressing system response (chat final): {final_text!r}")
@@ -1097,6 +1119,9 @@ class GatewayConnection:
         ws = self._ws
         chat_id = str(uuid.uuid4())
         sub = self._dispatcher.subscribe(chat_id, session_key)
+        _cleanup_ids = []  # MUST init before the try — the finally below iterates it;
+        # if chat.send (inside the try, below) throws before the old in-try init,
+        # the finally hit UnboundLocalError and masked the real error (fix 2026-06-14).
         try:
             full_message = _PROMPT_ARMOR + message
             logger.debug(f"[GW] Sending to gateway ({len(full_message)} chars). User part: {repr(message[:120])}")
@@ -1112,7 +1137,6 @@ class GatewayConnection:
             }
             logger.info(f"### Sending chat message (agent={agent_id or 'main'}): {message[:100]}")
             await self._dispatcher.send(ws, chat_request)
-            _cleanup_ids = []
             result = await self._stream_events(
                 sub, event_queue, session_key,
                 captured_actions, agent_id=agent_id,

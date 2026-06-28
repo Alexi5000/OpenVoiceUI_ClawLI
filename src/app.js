@@ -809,6 +809,11 @@ connectAiradio();
             },
 
             async start() {
+                // Re-entrancy guard: toggle() checks this.stream, but it's only set
+                // after the getUserMedia await — a fast double-click would start two
+                // capture loops and leak a MediaStream + orphaned intervals.
+                if (this._starting) return;
+                this._starting = true;
                 try {
                     this.stream = await navigator.mediaDevices.getUserMedia({
                         video: { facingMode: 'user', width: 640, height: 480 }
@@ -826,12 +831,15 @@ connectAiradio();
                     }, 1000);
 
                     // Re-identify every 8 seconds while camera is on but call is not active
+                    if (this.faceInterval) clearInterval(this.faceInterval);
                     this.faceInterval = setInterval(() => {
                         if (!window.voiceAgent?.isConnected) this.identifyFace();
                     }, 8000);
                 } catch (error) {
                     console.error('Camera error:', error);
                     UIModule.showError('Camera access denied');
+                } finally {
+                    this._starting = false;
                 }
             },
 
@@ -855,6 +863,7 @@ connectAiradio();
             },
 
             startFrameCapture() {
+                if (this.frameInterval) clearInterval(this.frameInterval);
                 this.frameInterval = setInterval(() => {
                     if (!this.stream) return;
 
@@ -1838,6 +1847,10 @@ connectAiradio();
                 setTimeout(() => this._hideStatus(), 8000);
                 // Refresh music player so the agent and UI see the new track immediately
                 window.musicPlayer?.loadMetadata();
+                // Also refresh the Generated playlist panel if it's open, so the new
+                // song appears there without a manual reload (no-op when the panel is
+                // closed or showing Library). Fixes the panel-not-auto-refreshing bug.
+                window.SettingsPanel?._playlistEditor?.refreshIfGenerated?.();
                 // Notify the agent so it can proactively respond
                 ActionConsole?.addEntry('system', `🎵 Song ready: "${title}"`);
                 this._notifyAgent(title);
@@ -4969,8 +4982,16 @@ connectAiradio();
                     }
                     // Queue audio - if already playing, it will play after current finishes
                     this.audioQueue.push({ base64: base64Audio, format });
-                    // Only start playback if nothing is currently playing
-                    if (!this.isPlaying) {
+                    // If a drain timer is pending (gap between chunks), cancel it and
+                    // trigger playback immediately — the new chunk arrived, no need to wait.
+                    // Without this, multi-sentence TTS has a 30s silence gap between
+                    // sentences because playNextAudio set a drain timer but nothing wakes it.
+                    if (this._drainTimer) {
+                        clearTimeout(this._drainTimer);
+                        this._drainTimer = null;
+                        this.playNextAudio();
+                    } else if (!this.isPlaying) {
+                        // Nothing playing at all — start playback
                         this.playNextAudio();
                     }
                 } catch (error) {
@@ -6877,6 +6898,7 @@ connectAiradio();
                 // Sync button visual state with detector state
                 setInterval(() => {
                     const wakeButton = document.getElementById('wake-button');
+                    if (!wakeButton) return;
                     if (wakeDetector.isListening) {
                         wakeButton.classList.add('listening');
                     } else {

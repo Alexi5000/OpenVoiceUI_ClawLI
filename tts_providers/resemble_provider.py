@@ -493,6 +493,13 @@ class ResembleProvider(TTSProvider):
                 f"(request_id={req_id}, voice={voice_uuid[:12]}, "
                 f"text_len={len(text)}, model={model or 'default'}): {body}"
             )
+            try:
+                from services.jambot_books_hook import record_provider_call
+                record_provider_call('resemble', endpoint='/stream', op='tts',
+                                     units=str(len(text)), status=status,
+                                     model=model or 'chatterbox')
+            except Exception:
+                pass
             raise RuntimeError(
                 f"Resemble API error {status} (request_id={req_id}): {body}"
             )
@@ -517,6 +524,16 @@ class ResembleProvider(TTSProvider):
 
         elapsed = int((time.time() - t) * 1000)
         logger.info(f"[Resemble] Generated {len(audio_bytes)} bytes in {elapsed}ms")
+
+        # JamBot Books: Resemble synthesis uses httpx but its client isn't an
+        # SDK we attach() to, so record the call explicitly (file-drop leg).
+        try:
+            from services.jambot_books_hook import record_provider_call
+            record_provider_call('resemble', endpoint='/stream', op='tts',
+                                 units=str(len(text[:2000])), status=200,
+                                 model=model or 'chatterbox')
+        except Exception:
+            pass  # never break a voice turn
 
         if len(audio_bytes) < 100:
             raise RuntimeError(
