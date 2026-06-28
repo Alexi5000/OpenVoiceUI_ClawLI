@@ -1662,21 +1662,24 @@ def _conversation_inner():
                         _audio_fmt = 'wav'
 
                     def _tts_error_event(err_str):
+                        # CLIENT-FACING RULE (Mike 2026-06-28): never serialize raw provider
+                        # name, billing reason, or exception text into a client-bound event.
+                        # Classify to a neutral reason CODE only (used for client-side logic /
+                        # devtools log) — the raw string is logged server-side here, never sent.
                         code_match = re.search(r'\[groq:([^\]]+)\]', err_str)
                         err_code = code_match.group(1) if code_match else 'unknown'
-                        REASONS = {
-                            'model_terms_required': ('terms', 'Accept Orpheus terms at console.groq.com'),
-                            'rate_limit_exceeded':  ('rate_limit', 'Groq rate limit hit — try again shortly'),
-                            'insufficient_quota':   ('no_credits', 'Groq account out of credits'),
-                            'invalid_api_key':      ('bad_key', 'Invalid GROQ_API_KEY'),
-                            'unknown':              ('error', err_str),
+                        REASON_CODES = {
+                            'model_terms_required': 'terms',
+                            'rate_limit_exceeded':  'rate_limit',
+                            'insufficient_quota':   'no_credits',
+                            'invalid_api_key':      'bad_key',
+                            'unknown':              'error',
                         }
-                        reason_key, reason_msg = REASONS.get(err_code, ('error', err_str))
+                        reason_key = REASON_CODES.get(err_code, 'error')
+                        logger.warning(f"### TTS error (not sent to client): reason={reason_key} raw={err_str!r}")
                         return json.dumps({
                             'type': 'tts_error',
-                            'provider': tts_provider,
                             'reason': reason_key,
-                            'error': reason_msg,
                         }) + '\n'
 
                     # ── Mid-stream TTS helpers ────────────────────────────
@@ -1825,7 +1828,9 @@ def _conversation_inner():
                                 # Re-arm a consumed recovery prime — this turn
                                 # never completed, so context must carry forward.
                                 restore_recovery_prime(_recovery_prime)
-                                yield json.dumps({'type': 'error', 'error': 'Gateway timeout'}) + '\n'
+                                # CLIENT-FACING RULE (Mike 2026-06-28): neutral code only.
+                                logger.error('### STREAM HARD TIMEOUT (not sent to client): Gateway timeout')
+                                yield json.dumps({'type': 'error', 'code': 'timeout'}) + '\n'
                                 break
                             yield json.dumps({'type': 'heartbeat', 'elapsed': elapsed}) + '\n'
                             continue
@@ -2013,10 +2018,13 @@ def _conversation_inner():
                                 logger.error(f"### GATEWAY ERROR → fallback: {error_msg}")
                                 # Detect rate limit specifically so the UI can surface it
                                 if 'rate limit' in error_msg.lower():
+                                    # CLIENT-FACING RULE (Mike 2026-06-28): never serialize the
+                                    # raw provider name or rate-limit string into a client-bound
+                                    # event. Send a neutral code only; the browser surfaces
+                                    # nothing and the spoken fallback below stays graceful.
                                     yield json.dumps({
                                         'type': 'rate_limit',
-                                        'provider': 'Z.AI',
-                                        'message': error_msg,
+                                        'code': 'throttled',
                                     }) + '\n'
                                     metrics['rate_limited'] = 1
                                 evt['response'] = "One moment, still working on that."
@@ -2598,12 +2606,12 @@ def _conversation_inner():
                                     }) + '\n'
                                     logger.info(f'Served agent-generated audio: {len(file_bytes)} bytes ({audio_format})')
                                 except Exception as fp_err:
+                                    # CLIENT-FACING RULE (Mike 2026-06-28): log the raw
+                                    # exception server-side; send only a neutral reason code.
                                     logger.error(f'Failed to serve agent audio file {file_path}: {fp_err}')
                                     yield json.dumps({
                                         'type': 'tts_error',
-                                        'provider': 'agent',
                                         'reason': 'file_read_error',
-                                        'error': f'Agent generated audio but file could not be read: {fp_err}',
                                     }) + '\n'
                                 log_metrics(metrics)
                                 break
@@ -2702,9 +2710,14 @@ def _conversation_inner():
                             # the session. Re-arm the prime so the NEXT turn
                             # still carries the conversation context.
                             restore_recovery_prime(_recovery_prime)
+                            # CLIENT-FACING RULE (Mike 2026-06-28): never serialize the raw
+                            # gateway/exception text into a client-bound event. Log it
+                            # server-side; send only a neutral code the browser maps to a
+                            # graceful "reconnecting" line.
+                            logger.error(f"### STREAM ERROR (not sent to client): {evt.get('error', 'Unknown error')!r}")
                             yield json.dumps({
                                 'type': 'error',
-                                'error': evt.get('error', 'Unknown error')
+                                'code': 'gateway',
                             }) + '\n'
                             break
 
