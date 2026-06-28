@@ -1500,6 +1500,41 @@ def list_uploads():
 
 
 # ---------------------------------------------------------------------------
+# Z.AI direct fallback — voice path (glm-5-flash)
+# ---------------------------------------------------------------------------
+
+def get_zai_direct_response(message: str, session_id: str = None) -> str:
+    """Call Z.AI glm-5-flash directly for voice fallback (no tools, no gateway)."""
+    import urllib.request as _urlreq
+    import json as _json
+    zai_key = os.getenv("ZAI_API_KEY", "")
+    if not zai_key:
+        logger.warning("get_zai_direct_response: ZAI_API_KEY not set")
+        return None
+    payload = _json.dumps({
+        "model": "glm-5-flash",
+        "messages": [{"role": "user", "content": message}],
+        "max_tokens": 512,
+        "temperature": 0.7,
+    }).encode()
+    req = _urlreq.Request(
+        "https://api.z.ai/api/paas/v4/chat/completions",
+        data=payload,
+        headers={"Authorization": f"Bearer {zai_key}", "Content-Type": "application/json"},
+    )
+    try:
+        with _urlreq.urlopen(req, timeout=30) as r:
+            d = _json.load(r)
+        msg = d["choices"][0]["message"]
+        if msg.get("reasoning_content") and not msg.get("content"):
+            return None  # thinking-only block — treat as empty
+        return msg.get("content", "").strip() or None
+    except Exception as exc:
+        logger.error(f"get_zai_direct_response failed: {exc}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # WebSocket — Gateway proxy (/ws/clawdbot)
 # ---------------------------------------------------------------------------
 
