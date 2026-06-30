@@ -174,6 +174,17 @@ _VOICE_INSTRUCTIONS = (
     "After generation, the new song appears in [Available tracks:] by its title. "
     "Use [MUSIC_PLAY:song title] to play it — do NOT use exec/shell to find the file. "
 
+    # --- Delivering a download link (voice / SMS / email) ---
+    "SONG DOWNLOAD / DELIVERY: "
+    "When the user asks for a download or a link to a generated song, give them a DIRECT link in this exact form: "
+    "https://DOMAIN/generated_music/FILENAME?download=1  — where FILENAME is the EXACT file name from the "
+    "[Available tracks — Generated:] list (e.g. 'shop-bay-wisdom.mp3'), and DOMAIN is this site's domain. "
+    "The ?download=1 makes the browser SAVE the file instead of just playing it. "
+    "RULES: (1) NEVER invent a URL — generated songs live ONLY at /generated_music/<file>, never /music/<file>. "
+    "(2) NEVER emit a [CANVAS:...] page for a download — there is no download page; use the direct link above. "
+    "(3) For 'the last/latest track I made', use the song shown in [Latest generated song: ...] context — do not guess. "
+    "(4) The same https://DOMAIN/generated_music/FILENAME?download=1 link is what you text or email the user. "
+
     # --- SoundCloud (real playback, no auth) ---
     "SOUNDCLOUD: [SOUNDCLOUD:<full-track-url>] — embeds the track in the music player and plays it. "
     "Always use with a full https://soundcloud.com/<user>/<slug> URL. NEVER invent URLs — get them from "
@@ -1390,6 +1401,22 @@ def _conversation_inner():
                 _parts.append(f'Generated ({len(_gen_names)}): {_cap_list(_gen_names, max_chars=2000)}')
             if _parts:
                 context_parts.append(f'[Available tracks — {" | ".join(_parts)}]')
+        except Exception:
+            pass
+
+        # Authoritative "last track you made" — newest generated song by file
+        # mtime (created_date metadata is date-only and useless for recency).
+        # Gives the agent the exact filename + a ready-to-send download link so
+        # it never guesses or hands out a broken /music/ URL.
+        try:
+            from routes.music import get_latest_generated_track
+            _latest = get_latest_generated_track()
+            if _latest:
+                context_parts.append(
+                    f"[Latest generated song: {_latest['title']!r} "
+                    f"(file: {_latest['filename']}) — "
+                    f"download link: /generated_music/{_latest['filename']}?download=1]"
+                )
         except Exception:
             pass
 
