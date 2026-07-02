@@ -928,6 +928,62 @@ def normalize_action_tags(text: str) -> str:
     return text
 
 
+def strip_canvas_action_tags(text: str) -> str:
+    """Strip [CANVAS_ACTION:{...JSON...}] tags via a brace walker.
+
+    The JSON payload nests {} and [] (e.g. checkbox-group ``values`` arrays),
+    which defeats both ``[^\\]]*`` and the ``_nb`` one-level-nesting pattern
+    used for browser-companion tags. Walk the payload respecting string
+    literals, escapes, and brace depth. (2026-07-02 tradeshow form-fill fix —
+    without this the raw JSON tag was spoken aloud by TTS.)
+    """
+    if not text or '[CANVAS_ACTION' not in text.upper():
+        return text
+    out = []
+    idx = 0
+    pattern = re.compile(r'\[CANVAS_ACTION:', re.IGNORECASE)
+    while True:
+        m = pattern.search(text, idx)
+        if not m:
+            out.append(text[idx:])
+            break
+        json_start = m.end()
+        if json_start >= len(text) or text[json_start] != '{':
+            out.append(text[idx:m.end()])
+            idx = m.end()
+            continue
+        depth, i, in_str, esc = 0, json_start, False, False
+        while i < len(text):
+            c = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == '\\':
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth == 0:
+                    i += 1
+                    break
+            i += 1
+        if depth == 0 and i < len(text) and text[i] == ']':
+            out.append(text[idx:m.start()])
+            idx = i + 1  # skip the whole tag
+        else:
+            # Malformed/unterminated tag (e.g. mid-stream cut): drop from tag
+            # start to end of text so a half-arrived tag is never spoken.
+            out.append(text[idx:m.start()])
+            idx = len(text)
+            break
+    return ''.join(out)
+
+
 def clean_for_tts(text: str) -> str:
     """Remove markdown, reasoning tokens, and non-speech characters for TTS."""
     if not text:
@@ -935,6 +991,10 @@ def clean_for_tts(text: str) -> str:
 
     # Normalize sloppy tag whitespace FIRST so every strip regex below matches.
     text = normalize_action_tags(text)
+
+    # Strip [CANVAS_ACTION:{json}] BEFORE the regex chain — the JSON payload
+    # nests ] and } so no regex below can match it (2026-07-02).
+    text = strip_canvas_action_tags(text)
 
     # Strip GPT-OSS-120B reasoning tokens (but not if NO/YES is the full response)
     if text.strip().upper() not in ['NO', 'YES', 'NO.', 'YES.']:
