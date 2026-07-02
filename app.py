@@ -107,6 +107,9 @@ def create_app(config_override: dict = None):
             '/src/',       # static JS/CSS (needed to render the login screen)
             '/sounds/',
             '/music/',
+            '/generated_music/',  # AI-generated songs — shareable download links (texted/emailed
+                                  # to recipients with no app login). Non-sensitive (client's own
+                                  # jingles); the /api/music track list is already public anyway.
             '/images/',    # canvas images (individual pages check their own flag)
             '/uploads/',   # uploaded/generated files — served from VPS filesystem (no secrets)
             '/canvas-data/',  # processed-song media (audio stems) + fixtures for the Suno Studio editor — non-sensitive, served like /uploads/ (added 2026-06-25)

@@ -3854,7 +3854,11 @@ connectAiradio();
                         break;
 
                     case 'error':
-                        this.addSystemMessage(`Error: ${data.message || 'Unknown error'}`);
+                        // CLIENT-FACING RULE (Mike 2026-06-28): never dump a raw gateway
+                        // message (e.g. "weekly limit"/"overloaded") into the visible chat.
+                        // Show at most a neutral reconnecting line; raw detail to devtools only.
+                        console.warn('Clawdbot WS error:', data.message || 'Unknown error');
+                        this.addSystemMessage('One moment — reconnecting…');
                         this.callbacks.onError(data.message || 'Unknown error');
                         break;
 
@@ -4552,41 +4556,36 @@ connectAiradio();
                                     this.addSystemMessage('Session reset — next response may be slow.');
                                 }
 
-                                // AI provider rate limited — surface clearly
+                                // AI provider rate limited. CLIENT-FACING RULE (Mike 2026-06-28):
+                                // never name a provider or say "throttled"/"fallback" to the
+                                // client — the reply itself is already graceful. Surface NOTHING
+                                // in the visible chat. Raw detail to console.warn only (devtools).
                                 if (data.type === 'rate_limit') {
-                                    const provider = data.provider || 'AI provider';
-                                    console.warn('[Conversation] Rate limited by', provider, data.message);
-                                    ActionConsole.addEntry('error', `⚠️ ${provider} throttled — using fallback model`);
-                                    this.addSystemMessage(`⚠️ ${provider} is temporarily throttled. Response came from fallback model.`);
+                                    console.warn('[Conversation] Rate limited:', data.provider, data.message);
                                 }
 
-                                // Generic server error — surface prominently
+                                // Generic server error. CLIENT-FACING RULE (Mike 2026-06-28):
+                                // the server now sends a neutral `code` (no raw text). Show a
+                                // single neutral reconnecting line; raw detail (if any) to
+                                // devtools only. Never echo a raw gateway/exception string.
                                 if (data.type === 'error') {
-                                    console.error('Stream error:', data.error);
-                                    ActionConsole.addEntry('error', data.error);
-                                    // Gateway connection errors should be visible to the user
-                                    if (data.error?.includes('connect') || data.error?.includes('Gateway') || data.error?.includes('Failed')) {
-                                        this.addSystemMessage('Agent connection error — retrying...');
-                                        StatusModule.update('thinking', 'RECONNECTING...');
-                                    }
+                                    console.error('Stream error:', data.code || data.error);
+                                    ActionConsole.addEntry('system', 'Reconnecting…');
+                                    this.addSystemMessage('One moment — reconnecting…');
+                                    StatusModule.update('thinking', 'RECONNECTING...');
                                 }
 
-                                // TTS-specific failure — response came through but audio failed
+                                // TTS-specific failure — response came through but audio failed.
+                                // CLIENT-FACING RULE (Mike 2026-06-28): never surface a
+                                // provider/billing/error string in the visible chat. The text
+                                // reply is already on screen and the spoken path already failed
+                                // silently server-side — so we add NO chat line here. Raw detail
+                                // (provider, billing reason) goes to console.error only (browser
+                                // devtools, not a client-visible UI surface). The ActionConsole
+                                // is a user-openable panel, so it gets a neutral line too.
                                 if (data.type === 'tts_error') {
-                                    const reasonMessages = {
-                                        'terms':             `${data.provider} TTS: Terms not accepted — visit console.groq.com to accept`,
-                                        'rate_limit':        `${data.provider} TTS: Rate limit hit — try again in a moment`,
-                                        'no_credits':        `${data.provider} TTS: Out of credits`,
-                                        'bad_key':           `${data.provider} TTS: Invalid API key`,
-                                        'agent_tool_misuse': `Agent tried to use its own TTS tool — reply was dropped. Ask again.`,
-                                        'error':             `${data.provider} TTS failed: ${data.error}`,
-                                    };
-                                    const msg = reasonMessages[data.reason] || `TTS failed: ${data.error}`;
                                     console.error('TTS failed:', data);
-                                    ActionConsole.addEntry('error', msg);
-                                    this.addSystemMessage(`⚠️ ${msg}`);
-                                    FaceModule.setMood('sad');
-                                    setTimeout(() => FaceModule.setMood('neutral'), 3000);
+                                    ActionConsole.addEntry('system', 'Audio unavailable for this reply — text shown above');
                                     // Restart STT so the mic comes back (only if call still active)
                                     if (this._voiceActive && this.stt) {
                                         if (this.stt.resume) {
@@ -5282,7 +5281,10 @@ connectAiradio();
                         console.log(`Clawdbot ${role}:`, text);
                     },
                     onError: (error) => {
-                        UIModule.showError(`Agent error: ${error}`);
+                        // CLIENT-FACING RULE (Mike 2026-06-28): never put a raw agent/gateway
+                        // error into a visible toast. Show a neutral line; raw to devtools only.
+                        console.warn('Agent error:', error);
+                        UIModule.showError('One moment…');
                         FaceModule.setMood('sad');
                         setTimeout(() => FaceModule.setMood('neutral'), 2000);
                     }
@@ -5361,7 +5363,10 @@ connectAiradio();
                                 }
                             },
                             onError: (error) => {
-                                UIModule.showError(error);
+                                // CLIENT-FACING RULE (Mike 2026-06-28): neutral toast only;
+                                // raw error to devtools, never a visible toast.
+                                console.warn('Voice adapter error:', error);
+                                UIModule.showError('One moment…');
                                 FaceModule.setMood('sad');
                                 setTimeout(() => FaceModule.setMood('neutral'), 2000);
                             }
@@ -6997,7 +7002,10 @@ connectAiradio();
                     }
                 },
                 onError: (error) => {
-                    UIModule.showError(error);
+                    // CLIENT-FACING RULE (Mike 2026-06-28): neutral toast only;
+                    // raw error to devtools, never a visible toast.
+                    console.warn('Voice adapter error:', error);
+                    UIModule.showError('One moment…');
                     FaceModule.setMood('sad');
                     setTimeout(() => FaceModule.setMood('neutral'), 2000);
                 }
