@@ -8725,19 +8725,23 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                 else if (stagedFile) {
                     try {
                         const result = await this.uploadFile(stagedFile.file);
+                        // Full location string so the agent always knows exactly where the
+                        // file lives (local path + public URL, indexed in .uploads-index.jsonl)
+                        const loc = result.url_full ? `${result.path} (public URL: ${result.url_full})` : result.path;
                         if (result.type === 'image') {
                             // Pass image path so server can run vision analysis
                             this._pendingImagePath = result.path;
                             messageToSend = text || `What do you see in this image? (${result.original_name})`;
+                            messageToSend += `\n[IMAGE SAVED: ${loc}]`;
                         } else if (result.content_preview) {
                             const sizeKb = result.file_size ? ` (${(result.file_size / 1024).toFixed(1)} KB)` : '';
                             if (result.content_preview_truncated) {
-                                messageToSend = `[USER ATTACHED FILE: ${result.original_name}${sizeKb}, saved at ${result.path}]\nFile is large — preview below is TRUNCATED. To read the full file, use your Read tool on the path above.\n--- File preview (truncated) ---\n${result.content_preview}\n--- End preview ---\n${text}`;
+                                messageToSend = `[USER ATTACHED FILE: ${result.original_name}${sizeKb}, saved at ${loc}]\nFile is large — preview below is TRUNCATED. To read the full file, use your Read tool on the path above.\n--- File preview (truncated) ---\n${result.content_preview}\n--- End preview ---\n${text}`;
                             } else {
-                                messageToSend = `[USER ATTACHED FILE: ${result.original_name}${sizeKb}, saved at ${result.path}]\n--- File contents ---\n${result.content_preview}\n--- End file ---\n${text}`;
+                                messageToSend = `[USER ATTACHED FILE: ${result.original_name}${sizeKb}, saved at ${loc}]\n--- File contents ---\n${result.content_preview}\n--- End file ---\n${text}`;
                             }
                         } else {
-                            messageToSend = `[USER ATTACHED FILE: ${result.original_name}, saved at ${result.path}] ${text}`;
+                            messageToSend = `[USER ATTACHED FILE: ${result.original_name}, saved at ${loc}] ${text}`;
                         }
                     } catch (err) {
                         console.error('File upload failed:', err);
