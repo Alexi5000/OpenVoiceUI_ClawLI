@@ -130,6 +130,24 @@ def activate_style(style_id):
                     'agent_file': str(store.ACTIVE_STYLE_MD)})
 
 
+@canvas_styles_bp.get('/api/canvas/lint/<page_id>')
+def lint_page(page_id):
+    """Deterministic page QA: emoji-as-icons, banned colors, CDN frameworks,
+    missing viewport/page-icon, active-style mismatch. Agents run this after
+    every page write and fix what it reports."""
+    from services.paths import CANVAS_PAGES_DIR
+    safe = ''.join(c for c in page_id if c.isalnum() or c in '-_')
+    path = CANVAS_PAGES_DIR / f'{safe}.html'
+    if not path.exists():
+        return jsonify({'error': 'page not found'}), 404
+    try:
+        issues = store.lint_page_html(path.read_text(encoding='utf-8', errors='replace'))
+    except Exception as exc:
+        logger.error('lint failed for %s: %s', page_id, exc)
+        return jsonify({'error': 'lint failed'}), 500
+    return jsonify({'page_id': safe, 'ok': not issues, 'issues': issues})
+
+
 @canvas_styles_bp.get('/api/canvas/styles/<style_id>/preview')
 def preview_style(style_id):
     style = store.get_style(style_id)

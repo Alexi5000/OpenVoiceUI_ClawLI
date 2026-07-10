@@ -1333,13 +1333,24 @@ def create_canvas_page():
         page_meta = add_page_to_manifest(filename, title, content=html_content[:500])
         _notify_brain('canvas_page_created', filename=filename, title=title)
 
-        return jsonify({
+        # Deterministic QA — agents see warnings in the tool result and fix them.
+        try:
+            from services.canvas_styles import lint_page_html
+            _warnings = lint_page_html(html_content)
+        except Exception:
+            _warnings = []
+
+        _resp = {
             'filename': filename,
             'page_id': Path(filename).stem,
             'url': f'/pages/{filename}',
             'title': title,
             'category': page_meta.get('category', 'uncategorized'),
-        })
+        }
+        if _warnings:
+            _resp['warnings'] = _warnings
+            _resp['action_required'] = 'Fix the warnings and re-save this page.'
+        return jsonify(_resp)
     except Exception as exc:
         logger.error(f'Canvas page create error: {exc}')
         return jsonify({'error': 'Canvas page creation failed'}), 500
