@@ -65,6 +65,11 @@ Depth comes from **hairline rules and spacing, not blur**.
 - Grids: KPI row `repeat(auto-fit, minmax(200px, 1fr))`, card grid
   `repeat(auto-fit, minmax(260px, 1fr))`, gap 16–24px. Mobile-first: single
   column at 375px must be flawless.
+- **Mobile width (hard rule):** the host's 25px safe-area padding is the ONLY
+  horizontal inset on phones. At ≤640px, wrappers and sections get ZERO side
+  padding; panels/cards keep only 16–20px internal padding. Text spans the full
+  remaining width; decorative rules/backgrounds may bleed edge-to-edge. Never
+  stack padded containers on mobile.
 
 ## 5. Component recipes
 

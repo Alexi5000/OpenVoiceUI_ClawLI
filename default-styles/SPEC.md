@@ -47,6 +47,10 @@ parse them). Extra tokens are allowed; the listed set is required.
   the token keys exactly — every color used in the page flows through them.
 - The host injects 25px body padding — do NOT add large body padding on top.
 - Mobile-first: flawless at 375px, graceful to 1440px.
+- **Mobile width rule (hard):** the host's 25px safe area is the ONLY horizontal
+  inset. At ≤640px, wrappers/sections must have zero side padding (cards keep
+  only their internal 16-20px). Text takes the full remaining width; decorative
+  backgrounds may bleed edge-to-edge. Never nest padded containers on mobile.
 - Demo content = a believable small-business dashboard/report ("Meridian Roofing
   Co." style fictional data) exercising ALL of: page header w/ title+subtitle+action
   button, 4 KPI stat cards, a data table (5+ rows, status badges), primary/secondary/

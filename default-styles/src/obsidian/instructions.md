@@ -59,6 +59,7 @@ Hover lift: `transform: translateY(-2px)` + brand-tinted glow shadow + brighter 
 - Card padding 20–24px; gaps between cards 16–20px; sections separated by 32–48px.
 - Grids: `repeat(auto-fit, minmax(220px, 1fr))` for KPI rows, `minmax(280px, 1fr)` for content cards. Max content width 1200px, centered.
 - Mobile-first: single column at 375px, tables inside `overflow-x: auto` wrappers. The host injects 25px body padding — do not add large body padding.
+- **Mobile width (hard rule):** the host's 25px safe-area padding is the ONLY horizontal inset on phones. At ≤640px, wrappers and sections get ZERO side padding; cards keep only 16–20px internal padding. Text spans the full remaining width; decorative glows/backgrounds may bleed edge-to-edge. Never stack padded containers on mobile.
 
 ## 6. Component recipes
 

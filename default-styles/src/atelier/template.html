@@ -610,11 +610,18 @@ footer .fine em { font-family: var(--font-display); font-style: italic; }
 
 /* ---------- small screens ---------- */
 
-@media (max-width: 480px) {
-  .panel, .crew-card { padding: 20px; }
-  .kpi { padding: 18px 20px 16px; }
+/* Mobile width rule: the host wrapper's 25px safe-area padding is the ONLY
+   horizontal inset on phones. Wrappers/sections get ZERO side padding here;
+   cards keep only 16px internal padding. Never stack padded containers. */
+@media (max-width: 640px) {
+  .page, section { padding-left: 0; padding-right: 0; }
+  .panel, .crew-card { padding: 18px 16px; }
+  .kpi { padding: 16px 16px 14px; }
+  .pull-quote { padding-left: 0; padding-right: 0; }
   .form-row { grid-template-columns: 1fr; }
   thead th, tbody td { padding-left: 14px; padding-right: 14px; }
+  .kpi-grid { gap: 12px; }
+  .band, .card-grid { gap: 16px; }
 }
 </style>
 </head>

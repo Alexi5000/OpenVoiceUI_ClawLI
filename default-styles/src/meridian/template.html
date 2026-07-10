@@ -630,10 +630,20 @@ td.num { font-family: var(--font-mono); font-size: 13px; color: var(--heading); 
 .footer .mono { font-family: var(--font-mono); font-size: 11.5px; }
 
 /* ---------- Small-screen refinements ---------- */
+/* Mobile width rule: the host wrapper's 25px safe-area padding is the ONLY
+   horizontal inset on phones. Wrappers/sections get ZERO side padding here;
+   cards keep only a 16px internal pad. Never stack padded containers. */
+@media (max-width: 640px) {
+  .page, .section { padding-left: 0; padding-right: 0; }
+  .card-pad, .kpi, .crew-card { padding: 16px; }
+  .table-toolbar { padding: 14px 16px; }
+  thead th, tbody td { padding-left: 14px; padding-right: 14px; }
+  .kpi-grid, .crew-grid { gap: 12px; }
+}
+
 @media (max-width: 480px) {
   .page-title { font-size: 22px; }
   .kpi-value { font-size: 26px; }
-  .card-pad { padding: 18px; }
   .header-actions { width: 100%; }
   .header-actions .btn { flex: 1; }
 }

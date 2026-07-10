@@ -36,6 +36,7 @@ Meridian is the calm confidence of a top-tier SaaS product: Linear's precision, 
 - Page: max-width 1120px, centered. Section gaps 32px; card grid gaps 16–20px.
 - Grids: KPI row `repeat(auto-fit, minmax(220px, 1fr))`; card grids `minmax(280px, 1fr)`. Everything single-column and comfortable at 375px.
 - Generous whitespace is the brand: when in doubt, add 8px more, never less.
+- **Mobile width (hard rule):** the host wrapper injects a 25px safe-area padding on html/body — that is the ONLY horizontal inset on phones. At ≤640px, page wrappers and sections get ZERO side padding; cards keep only their internal padding, capped at 16–20px. Text spans the full remaining width; decorative backgrounds may bleed edge-to-edge. Never stack padded containers on mobile.
 
 ## Component recipes
 - **Primary button:** brand bg, white text, 8px radius, 9–10px × 16–18px padding, 14px/600,

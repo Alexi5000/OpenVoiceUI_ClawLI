@@ -286,12 +286,12 @@ a:focus-visible {
    ============================================================ */
 .main-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   margin-bottom: 28px;
 }
 @media (min-width: 900px) {
-  .main-grid { grid-template-columns: 2fr 1fr; }
+  .main-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
 }
 .stack { display: flex; flex-direction: column; gap: 18px; }
 
@@ -546,6 +546,22 @@ td.num { font-family: var(--font-mono); font-size: 13px; }
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
   }
+}
+
+/* ============================================================
+   Mobile width rule: the host wrapper's 25px safe-area padding
+   is the ONLY horizontal inset on phones. Wrappers/sections get
+   ZERO side padding here; cards keep only 16px internal padding.
+   Decorative glows still bleed edge-to-edge. Never stack padded
+   containers on mobile.
+   ============================================================ */
+@media (max-width: 640px) {
+  .page { padding-left: 0; padding-right: 0; }
+  .card { padding: 16px; }
+  thead th, tbody td { padding-left: 10px; padding-right: 10px; }
+  .kpi-grid, .crew-grid, .main-grid, .stack { gap: 14px; }
+  .section-head { margin-left: 0; }
+  .footer-note { padding-left: 0; padding-right: 0; }
 }
 </style>
 </head>
