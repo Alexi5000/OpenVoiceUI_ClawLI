@@ -1616,8 +1616,9 @@ def _conversation_inner():
                 f'[CANVAS_STYLE: The user chose the "{_style_id}" design system for all '
                 f'canvas pages. BEFORE creating or restyling ANY canvas page you MUST '
                 f'read /app/runtime/canvas-pages/canvas-styles/ACTIVE-STYLE.md and start '
-                f'from /app/runtime/canvas-pages/canvas-styles/active-template.html '
-                f'(keep its full <style> block). Never use the old dark default. '
+                f'by cp-ing canvas-styles/active-template.html to the new page file, then '
+                f'edit the copy (keep its full <style> block — never retype the template). '
+                f'Never use the old dark default. '
                 f'Never use emoji as UI icons — use inline SVG.]'
             )
     except Exception as _se:

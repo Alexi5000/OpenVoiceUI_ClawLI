@@ -411,6 +411,16 @@ def _sync_canvas_manifest_locked() -> dict:
         }
         if page_icon:
             manifest['pages'][page_id]['icon'] = page_icon
+        # Agents write page files directly (not via the pages API), so newly
+        # discovered files get stamped with the active canvas style here too.
+        if not manifest['pages'][page_id].get('style'):
+            try:
+                from services.canvas_styles import get_active_style_id as _gas
+                _active_style = _gas()
+                if _active_style:
+                    manifest['pages'][page_id]['style'] = _active_style
+            except Exception:
+                pass
         if category not in manifest['categories']:
             manifest['categories'][category] = {
                 'name': category.title(),
