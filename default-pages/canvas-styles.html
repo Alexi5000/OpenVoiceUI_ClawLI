@@ -39,6 +39,10 @@ body{
   line-height:1.5;
 }
 /* Host wrapper already injects 25px body padding — no extra page padding. */
+/* Explicit heading/link colors: the host's injected fallback styles beat
+   inheritance (they're declared rules), so headings must declare color. */
+h1,h2,h3,h4{color:var(--text)}
+a{color:var(--blue-dark)}
 .wrap{max-width:1180px;margin:0 auto}
 
 button{font:inherit;cursor:pointer}
