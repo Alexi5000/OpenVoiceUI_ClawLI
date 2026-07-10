@@ -3146,6 +3146,9 @@ connectAiradio();
                             <div class="user-dropdown-item" onclick="AuthModule.openSettings('themes')">
                                 <span class="udi-icon">🎨</span> Themes & Colors
                             </div>
+                            <div class="user-dropdown-item" onclick="AuthModule.openCanvas('canvas-styles.html')">
+                                <span class="udi-icon">🖌️</span> Canvas Styles
+                            </div>
                             <div class="user-dropdown-item" onclick="AuthModule.openSettings('face')">
                                 <span class="udi-icon">👁️</span> Face Display
                             </div>
@@ -3206,6 +3209,9 @@ connectAiradio();
                             <div class="udm-section-label">Appearance</div>
                             <div class="user-dropdown-item" onclick="AuthModule.openSettings('themes')">
                                 <span class="udi-icon">🎨</span> Themes & Colors
+                            </div>
+                            <div class="user-dropdown-item" onclick="AuthModule.openCanvas('canvas-styles.html')">
+                                <span class="udi-icon">🖌️</span> Canvas Styles
                             </div>
                             <div class="user-dropdown-item" onclick="AuthModule.openSettings('face')">
                                 <span class="udi-icon">👁️</span> Face Display
