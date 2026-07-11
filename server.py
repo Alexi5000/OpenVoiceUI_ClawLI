@@ -1634,6 +1634,24 @@ def push_proactive_message(text: str, session_key: str = None):
         except Exception:
             _unregister_push_client(client)
     logger.info(f"Proactive push: delivered to {delivered}/{len(clients)} clients")
+    _write_push_receipt(text, session_key, delivered, len(clients))
+
+
+def _write_push_receipt(text, session_key, delivered, clients):
+    """Durable, host-visible receipt of every proactive push (bind-mounted
+    transcripts dir) — drives the JamFlow board signal and survives restarts."""
+    try:
+        receipt_path = Path("/app/runtime/transcripts/.proactive-push.jsonl")
+        with open(receipt_path, "a") as f:
+            f.write(json.dumps({
+                "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "session_key": session_key,
+                "delivered": delivered,
+                "clients": clients,
+                "text": text[:300],
+            }) + "\n")
+    except Exception as e:
+        logger.debug(f"Proactive push receipt write failed: {e}")
 
 
 # Register with the gateway layer so orphan subagent continuations can reach us.
