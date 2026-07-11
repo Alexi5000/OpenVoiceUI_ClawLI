@@ -111,6 +111,9 @@ def create_app(config_override: dict = None):
         '/api/server-stats',
         '/api/plugins/',    # install/uninstall/restart/config (assets exempted below)
         '/api/plugins',     # bare list endpoint
+        '/api/services/',   # Service Catalog + per-service health (WO-1.2) — reads
+                            # gateway/LLM/TTS/STT descriptors + vault cred status;
+                            # admin-only, never public.
     )
 
     if not _auth_enabled:

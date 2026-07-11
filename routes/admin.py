@@ -679,60 +679,45 @@ _OPENCLAW_CONFIG_RO_FALLBACK = Path('/app/runtime/openclaw-client.json')
 # Active chain is Z.AI account A ('zai') + account B ('zai_fb') — both route to
 # api.z.ai/api/anthropic. MiniMax ('mx'), bigmodel-GLM, and Groq-for-LLM are
 # DROPPED providers and must never be offered here (Groq stays TTS-only).
-_AI_PROVIDERS = {
-    'zai': {
-        'name': 'Z.AI (Account A)',
-        'envKey': 'ZAI_API_KEY',
-        'baseUrl': 'https://api.z.ai/api/anthropic',
-        'api': 'anthropic-messages',
-        'models': [
-            {'id': 'glm-5-turbo', 'name': 'GLM-5 Turbo (Z.AI)', 'contextWindow': 204000},
-            {'id': 'glm-4.7', 'name': 'GLM-4.7 (Z.AI)', 'contextWindow': 204000},
-        ],
-    },
-    'zai_fb': {
-        'name': 'Z.AI (Account B / fallback)',
-        'envKey': 'ZAI_FALLBACK_API_KEY',
-        'baseUrl': 'https://api.z.ai/api/anthropic',
-        'api': 'anthropic-messages',
-        'models': [
-            {'id': 'glm-5-turbo', 'name': 'GLM-5 Turbo (Z.AI B)', 'contextWindow': 204000},
-            {'id': 'glm-4.7', 'name': 'GLM-4.7 (Z.AI B)', 'contextWindow': 204000},
-        ],
-    },
-    'anthropic': {
-        'name': 'Anthropic',
-        'envKey': 'ANTHROPIC_API_KEY',
-        'baseUrl': 'https://api.anthropic.com',
-        'api': 'anthropic-messages',
-        'models': [
-            {'id': 'claude-sonnet-5', 'name': 'Claude Sonnet 5', 'contextWindow': 200000},
-            {'id': 'claude-opus-4-8', 'name': 'Claude Opus 4.8', 'contextWindow': 200000},
-            {'id': 'claude-haiku-4-5-20251001', 'name': 'Claude Haiku 4.5', 'contextWindow': 200000},
-        ],
-    },
-    'openai': {
-        'name': 'OpenAI',
-        'envKey': 'OPENAI_API_KEY',
-        'baseUrl': 'https://api.openai.com/v1',
-        'api': 'openai-responses',
-        'models': [
-            {'id': 'gpt-4.1', 'name': 'GPT-4.1', 'contextWindow': 1047576},
-            {'id': 'gpt-4o', 'name': 'GPT-4o', 'contextWindow': 128000},
-            {'id': 'gpt-4o-mini', 'name': 'GPT-4o Mini', 'contextWindow': 128000},
-        ],
-    },
-    'google': {
-        'name': 'Google Gemini',
-        'envKey': 'GEMINI_API_KEY',
-        'baseUrl': 'https://generativelanguage.googleapis.com/v1beta',
-        'api': 'google-generative-ai',
-        'models': [
-            {'id': 'gemini-2.5-flash', 'name': 'Gemini 2.5 Flash', 'contextWindow': 1048576},
-            {'id': 'gemini-2.5-pro', 'name': 'Gemini 2.5 Pro', 'contextWindow': 1048576},
-        ],
-    },
-}
+# _AI_PROVIDERS moved to config/ai-providers.json (WO-1.2). A module-level
+# property-like accessor keeps every existing `_AI_PROVIDERS[...]` / `.items()`
+# call site working while reading the loadable catalog (mtime-cached, with the
+# historical inline dict as the guaranteed fallback). Assigning at import time is
+# fine because the loader is cheap and cached; the catalog endpoint + this module
+# always call load_ai_providers() fresh where a live edit must be reflected.
+from services.ai_providers import load_ai_providers as _load_ai_providers
+
+
+class _AIProvidersProxy:
+    """Read-only mapping proxy so `_AI_PROVIDERS` reflects config/ai-providers.json
+    on every access without changing the many `_AI_PROVIDERS[pid]` call sites."""
+
+    def _data(self):
+        return _load_ai_providers()
+
+    def __getitem__(self, key):
+        return self._data()[key]
+
+    def __contains__(self, key):
+        return key in self._data()
+
+    def get(self, key, default=None):
+        return self._data().get(key, default)
+
+    def items(self):
+        return self._data().items()
+
+    def keys(self):
+        return self._data().keys()
+
+    def values(self):
+        return self._data().values()
+
+    def __iter__(self):
+        return iter(self._data())
+
+
+_AI_PROVIDERS = _AIProvidersProxy()
 
 
 def _parse_jsonc(text: str) -> dict:
@@ -962,6 +947,28 @@ def update_ai_config():
         if val and ('/' not in val or val.startswith('/') or val.endswith('/')):
             return jsonify({'error': f"{field} must be 'provider/model-id', got: {val}"}), 400
 
+    # WO-2.2 — framework-generic dispatch. If the active profile's gateway is
+    # NOT openclaw, route the model/key change through that framework's
+    # configure() instead of the openclaw config.patch path (a Hermes-primary
+    # tenant used to 502 here because only openclaw has a config RPC).
+    active_gid = _active_gateway_id()
+    if active_gid and active_gid != 'openclaw':
+        from services.gateway_manager import gateway_manager
+        gw = gateway_manager.get(active_gid)
+        if gw is not None:
+            try:
+                result = gw.configure(data)
+            except Exception as exc:
+                logger.error("framework configure(%s) failed: %s", active_gid, exc)
+                return jsonify({'ok': False, 'error': f'{active_gid} configure failed: {exc}'}), 502
+            status = result.get('status')
+            if status in ('applied', 'needs_restart'):
+                return jsonify({'ok': True, 'gateway': active_gid, 'status': status,
+                                'message': result.get('detail', ''),
+                                'changes': result.get('changes', [])})
+            return jsonify({'ok': False, 'gateway': active_gid,
+                            'error': result.get('detail', 'configure failed')}), 502
+
     config, source, base_hash = _get_effective_config()
     if not config:
         return jsonify({'error': 'Cannot read openclaw config — gateway unreachable and no '
@@ -996,3 +1003,81 @@ def update_ai_config():
     except Exception as exc:
         logger.error(f"Failed to write openclaw.json: {exc}")
         return jsonify({'error': 'Write failed — see server logs'}), 500
+
+
+# ---------------------------------------------------------------------------
+# Agent Framework — gateway list + generic configure dispatch (WO-2.2)
+# ---------------------------------------------------------------------------
+
+def _active_gateway_id() -> str | None:
+    """The gateway_id of the active profile (adapter_config.gateway_id).
+
+    Returns 'openclaw' default when unset, None if profiles can't be read.
+    """
+    try:
+        from profiles.manager import get_profile_manager
+        import routes.profiles as _profiles_mod
+        mgr = get_profile_manager()
+        active_id = getattr(_profiles_mod, '_active_profile_id', None)
+        prof = mgr.get_profile(active_id)  # get_profile(None) → default
+        if prof is not None:
+            return (prof.adapter_config or {}).get('gateway_id', 'openclaw')
+    except Exception as exc:
+        logger.debug("active gateway lookup failed: %s", exc)
+    return None
+
+
+def _profiles_by_gateway() -> dict:
+    """Map gateway_id -> list of profile ids that select it (adapter_config)."""
+    out: dict[str, list] = {}
+    try:
+        from profiles.manager import get_profile_manager
+        mgr = get_profile_manager()
+        for p in mgr.list_profiles():
+            # list_profiles() returns dicts (see manager.to summary) — be tolerant.
+            pid = p.get('id') if isinstance(p, dict) else getattr(p, 'id', None)
+            adapter = (p.get('adapter_config') if isinstance(p, dict)
+                       else getattr(p, 'adapter_config', {})) or {}
+            gid = adapter.get('gateway_id', 'openclaw')
+            if pid:
+                out.setdefault(gid, []).append(pid)
+    except Exception as exc:
+        logger.debug("profiles-by-gateway lookup failed: %s", exc)
+    return out
+
+
+@admin_bp.route('/api/admin/gateways', methods=['GET'])
+def admin_gateways():
+    """List every registered gateway with the WO-2.1 rich contract + which
+    profiles select it + the active gateway. Powers the Agent Framework tab."""
+    from services.gateway_manager import gateway_manager
+    gateways = gateway_manager.list_gateways(rich=True)
+    by_gateway = _profiles_by_gateway()
+    for gw in gateways:
+        gw['profiles'] = by_gateway.get(gw['id'], [])
+    return jsonify({
+        'gateways': gateways,
+        'active_gateway': _active_gateway_id(),
+    })
+
+
+@admin_bp.route('/api/admin/gateways/<gateway_id>/configure', methods=['POST'])
+def admin_gateway_configure(gateway_id):
+    """Dispatch a configuration change to a framework's configure() (WO-2.2)."""
+    from services.gateway_manager import gateway_manager
+    gw = gateway_manager.get(gateway_id)
+    if gw is None:
+        return jsonify({'error': f"Gateway '{gateway_id}' not registered"}), 404
+    partial = request.get_json(silent=True) or {}
+    try:
+        result = gw.configure(partial)
+    except Exception as exc:
+        logger.error("gateway configure(%s) error: %s", gateway_id, exc)
+        return jsonify({'ok': False, 'error': 'configure failed — see server logs'}), 502
+    status = result.get('status')
+    if status in ('applied', 'needs_restart'):
+        return jsonify({'ok': True, 'status': status,
+                        'message': result.get('detail', ''),
+                        'changes': result.get('changes', [])})
+    return jsonify({'ok': False, 'status': status or 'error',
+                    'error': result.get('detail', 'configure failed')}), 400

@@ -1785,6 +1785,9 @@ class OpenClawGateway(GatewayBase):
 
     gateway_id = "openclaw"
     persistent = True
+    capabilities = frozenset({
+        "streaming", "steer", "sessions", "tool-events", "config-rpc", "reset",
+    })
 
     def __init__(self):
         self._router = GatewayRouter()
@@ -1794,6 +1797,91 @@ class OpenClawGateway(GatewayBase):
 
     def is_healthy(self) -> bool:
         return self.is_configured()
+
+    def check_health(self) -> tuple:
+        """Reachability + latency via a cheap TCP connect to the gateway socket.
+
+        No RPC handshake, no vendor API — just prove the gateway port accepts a
+        connection and time it. Falls back to is_configured() truthiness if the
+        URL can't be parsed. (WO-2.1)
+        """
+        if not self.is_configured():
+            return (False, None)
+        import socket as _socket
+        from urllib.parse import urlparse
+        url = os.getenv('CLAWDBOT_GATEWAY_URL', 'ws://127.0.0.1:18791')
+        parsed = urlparse(url)
+        host = parsed.hostname or '127.0.0.1'
+        port = parsed.port or 18791
+        t0 = time.time()
+        try:
+            with _socket.create_connection((host, port), timeout=2.0):
+                pass
+            return (True, round((time.time() - t0) * 1000, 1))
+        except OSError:
+            return (False, None)
+
+    def get_config_schema(self) -> dict:
+        """OpenClaw config schema: primary/fallback model refs + per-provider keys.
+
+        Model refs are 'provider/model-id' strings; provider keys route through
+        the vault credential env (config-rpc applies them hot). Built from the
+        loadable LLM catalog so a new provider shows up with no code change.
+        """
+        from services.ai_providers import build_llm_config_schema
+        fields = [
+            {"id": "primary", "type": "text", "label": "Primary model (provider/model-id)",
+             "required": False, "placeholder": "zai/glm-5-turbo"},
+            {"id": "fallback", "type": "text", "label": "Fallback model (provider/model-id)",
+             "required": False, "placeholder": "zai_fb/glm-5-turbo"},
+        ]
+        fields.extend(build_llm_config_schema().get("fields", []))
+        return {"fields": fields, "editable": True, "transport": "config-rpc"}
+
+    def configure(self, partial: dict) -> dict:
+        """Apply a model/key change via the existing config.patch RPC path.
+
+        Reuses routes.admin's effective-config read + partial builder + RPC
+        (imported lazily to avoid an import cycle) so this is the SAME hardened,
+        schema-validated write the AI-Models tab uses — not a duplicate. (WO-2.1)
+
+        Accepts the same shape as PUT /api/admin/ai-config:
+            {"primary": "...", "fallback": "...", "keys": {"anthropic": "sk-..."}}
+        """
+        try:
+            from routes.admin import (
+                _get_effective_config, _build_ai_config_partial, _run_rpc,
+                _oc_config_writable, _write_oc_config, _deep_merge,
+            )
+        except Exception as exc:
+            return {"status": "error", "detail": f"config path unavailable: {exc}"}
+        import json as _json
+
+        config, source, base_hash = _get_effective_config()
+        if not config:
+            return {"status": "error",
+                    "detail": "gateway unreachable and no readable openclaw.json"}
+        built, changes = _build_ai_config_partial(partial, config)
+        if not built:
+            return {"status": "applied", "detail": "no changes"}
+        if source == "gateway":
+            result = _run_rpc("config.patch",
+                              {"raw": _json.dumps(built), "baseHash": base_hash}, timeout=15.0)
+            if result.get("ok"):
+                return {"status": "applied", "detail": "applied via config.patch",
+                        "changes": changes}
+            return {"status": "error",
+                    "detail": f"gateway rejected change: {result.get('error')}"}
+        if not _oc_config_writable():
+            return {"status": "error",
+                    "detail": "gateway unreachable and openclaw.json not writable"}
+        try:
+            _write_oc_config(_deep_merge(config, built))
+        except Exception as exc:
+            return {"status": "error", "detail": f"write failed: {exc}"}
+        return {"status": "needs_restart",
+                "detail": "wrote openclaw.json directly — restart openclaw to apply",
+                "changes": changes}
 
     def stream_to_queue(self, event_queue, message, session_key,
                         captured_actions=None, **kwargs):

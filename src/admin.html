@@ -373,6 +373,7 @@ select{cursor:pointer}
   </div>
   <div class="nav-section">
     <div class="nav-label">Config</div>
+    <div class="nav-item" id="nav-framework" onclick="show('framework')"><span class="nav-icon">&#x1F9E0;</span><span class="nav-text">Agent Framework</span></div>
     <div class="nav-item" id="nav-providers" onclick="show('providers')"><span class="nav-icon">&#x26A1;</span><span class="nav-text">Provider Config</span></div>
     <div class="nav-item" id="nav-connections" onclick="show('connections')"><span class="nav-icon">&#x1F517;</span><span class="nav-text">Connections</span></div>
     <div class="nav-item" id="nav-platform-setup" onclick="show('platform-setup')"><span class="nav-icon">&#x2699;</span><span class="nav-text">Platform Setup</span></div>
@@ -513,6 +514,15 @@ select{cursor:pointer}
         <span id="test-sum" style="font-size:12px;color:var(--dim)"></span>
       </div>
       <div style="display:flex;flex-direction:column;gap:6px" id="test-list"><div class="empty"><div class="empty-icon">&#x1F9EA;</div>Click Run All Tests to begin</div></div>
+    </div>
+  </div>
+
+  <!-- AGENT FRAMEWORK (WO-2.2) -->
+  <div class="panel" id="panel-framework">
+    <div class="panel-inner">
+      <div class="ph"><div class="ph-title">Agent Framework</div><div class="ph-sub">The backend agent brain per profile. Each card is a registered gateway &mdash; health, capabilities, live config, and which profiles use it.</div></div>
+      <div class="ph-row"><button class="btn btn-o" onclick="Framework.load()">&#8634; Refresh</button><span id="fw-active" style="font-size:12px;color:var(--dim);align-self:center;margin-left:8px"></span></div>
+      <div class="g2" id="fw-grid" style="align-items:start;gap:16px"><div class="loading"><div class="spin"></div>Loading...</div></div>
     </div>
   </div>
 
@@ -686,6 +696,7 @@ const loaders = {
   workspace:()=>Workspace.load(),
   music:()=>Music.load(),
   clients:()=>Clients.load(),
+  framework:()=>Framework.load(),
   providers:()=>Providers.load(),
   connections:()=>Connections.load(),
   'platform-setup':()=>PlatformSetup.load(),
@@ -1747,6 +1758,131 @@ const Tests={
 };
 
 // Providers
+// Agent Framework — cards per registered gateway (WO-2.2)
+const Framework={
+  gateways:[], active:null, health:{}, profiles:[],
+  async load(){
+    const g=$('fw-grid');
+    g.innerHTML='<div class="loading"><div class="spin"></div>Loading...</div>';
+    try{
+      const[gwR,hR,pR]=await Promise.all([
+        fetch('/api/admin/gateways'),
+        fetch('/api/services/health').catch(()=>null),
+        fetch('/api/profiles').catch(()=>null)
+      ]);
+      const gwd=await gwR.json();
+      this.gateways=gwd.gateways||[];
+      this.active=gwd.active_gateway;
+      this.health={};
+      if(hR&&hR.ok){const hd=await hR.json();(hd.services||[]).filter(s=>s.service==='gateway').forEach(s=>{this.health[s.id]=s})}
+      if(pR&&pR.ok){const pd=await pR.json();this.profiles=pd.profiles||[]}
+      $('fw-active').innerHTML=this.active?'Active gateway (current profile): <span style="color:var(--green)">'+esc(this.active)+'</span>':'';
+      this.render();
+    }catch(e){g.innerHTML='<div class="empty"><div class="empty-icon">&#x26A0;&#xFE0F;</div>'+esc(e.message)+'</div>'}
+  },
+  render(){
+    const g=$('fw-grid');
+    if(!this.gateways.length){g.innerHTML='<div class="empty">No gateways registered</div>';return}
+    g.innerHTML=this.gateways.map(gw=>{
+      const h=this.health[gw.id]||{healthy:gw.healthy,latency_ms:(gw.health||{}).latency_ms};
+      const healthy=h.healthy;
+      const ring='<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+(healthy?'var(--green)':gw.configured?'var(--yellow,#e3b341)':'var(--red)')+';box-shadow:0 0 6px '+(healthy?'var(--green)':'transparent')+'"></span>';
+      const lat=(h.latency_ms!=null)?' <span style="color:var(--dim);font-size:11px">'+h.latency_ms+'ms</span>':'';
+      const caps=(gw.capabilities||[]).map(c=>'<span class="badge b-blue" style="font-size:10px">'+esc(c)+'</span>').join(' ');
+      const src=gw.source==='builtin'?'<span class="badge b-gray">builtin</span>':'<span class="badge b-gray">'+esc(gw.source)+'</span>';
+      const schema=gw.config_schema||{fields:[]};
+      const canConfig=schema.editable&&(schema.fields||[]).length;
+      const cfgBtn=canConfig?'<button class="btn btn-o btn-sm" onclick="Framework.toggleConfig(\''+esc(gw.id)+'\')">Configure</button>':'';
+      const usedBy=(gw.profiles||[]).length?'<div style="font-size:11px;color:var(--dim);margin-top:6px">Used by: '+gw.profiles.map(p=>esc(p)).join(', ')+'</div>':'';
+      const rscope=gw.restart_scope&&gw.restart_scope!=='none'?'<span class="badge b-yellow" style="font-size:10px" title="A config change restarts this">restarts: '+esc(gw.restart_scope)+'</span>':'';
+      // Per-profile "use for profile X" selector
+      const profOpts=this.profiles.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name||p.id)+'</option>').join('');
+      const useSel=this.profiles.length?
+        '<div style="display:flex;gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap">'+
+          '<span style="font-size:11px;color:var(--dim)">Set as gateway for:</span>'+
+          '<select id="fw-prof-'+esc(gw.id)+'" style="background:var(--panel3);border:1px solid var(--border);border-radius:6px;padding:5px 9px;color:var(--text);font-size:12px">'+profOpts+'</select>'+
+          '<button class="btn btn-p btn-sm" onclick="Framework.assign(\''+esc(gw.id)+'\')">Apply</button>'+
+        '</div>':'';
+      return '<div class="box" style="padding:14px">'+
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">'+
+          '<div style="display:flex;align-items:center;gap:8px">'+ring+'<span style="font-weight:600;color:var(--bright)">'+esc(gw.name||gw.id)+'</span>'+lat+'</div>'+
+          '<div style="display:flex;gap:6px;align-items:center">'+src+cfgBtn+'</div>'+
+        '</div>'+
+        '<div style="font-size:11px;color:var(--dim);margin-top:3px">'+esc(gw.id)+(gw.persistent?' &middot; persistent':' &middot; on-demand')+(gw.configured?'':' &middot; <span style="color:var(--red)">not configured</span>')+'</div>'+
+        '<div style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap">'+caps+' '+rscope+'</div>'+
+        usedBy+useSel+
+        '<div id="fw-config-'+esc(gw.id)+'" style="display:none;margin-top:12px;border-top:1px solid var(--border2);padding-top:12px"></div>'+
+      '</div>';
+    }).join('');
+  },
+  toggleConfig(id){
+    const panel=$('fw-config-'+id);
+    if(!panel)return;
+    if(panel.style.display!=='none'){panel.style.display='none';return}
+    panel.style.display='';
+    const gw=this.gateways.find(g=>g.id===id);
+    if(!gw){panel.innerHTML='';return}
+    const fields=(gw.config_schema||{}).fields||[];
+    const renderField=(f)=>{
+      const fid='fwc-'+id+'-'+f.id;
+      if(f.type==='password'){
+        return '<div style="margin-bottom:10px">'+
+          '<label style="display:block;font-size:12px;font-weight:500;color:var(--text);margin-bottom:4px">'+esc(f.label||f.id)+(f.required?' *':'')+'</label>'+
+          '<input type="password" id="'+fid+'" placeholder="'+esc(f.placeholder||'')+'" autocomplete="off" style="width:100%;background:var(--panel3);border:1px solid var(--border);border-radius:6px;padding:7px 11px;color:var(--text);font-family:var(--mono);font-size:13px">'+
+        '</div>';
+      }
+      if(f.type==='toggle'){
+        return '<div style="margin-bottom:10px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="'+fid+'"'+(f.default?' checked':'')+' style="width:16px;height:16px;accent-color:var(--blue)"><span style="font-size:12px;color:var(--text)">'+esc(f.label||f.id)+'</span></label></div>';
+      }
+      // text / number / default
+      return '<div style="margin-bottom:10px">'+
+        '<label style="display:block;font-size:12px;font-weight:500;color:var(--text);margin-bottom:4px">'+esc(f.label||f.id)+(f.required?' *':'')+'</label>'+
+        '<input type="text" id="'+fid+'" placeholder="'+esc(f.placeholder||'')+'" style="width:100%;background:var(--panel3);border:1px solid var(--border);border-radius:6px;padding:7px 11px;color:var(--text);font-size:13px">'+
+      '</div>';
+    };
+    panel.innerHTML=fields.map(renderField).join('')+
+      '<div style="display:flex;gap:8px;align-items:center;margin-top:8px">'+
+        '<button class="btn btn-g btn-sm" onclick="Framework.saveConfig(\''+esc(id)+'\')">Apply Config</button>'+
+        '<span id="fwc-status-'+esc(id)+'" style="font-size:12px;color:var(--dim)"></span>'+
+      '</div>'+
+      '<div style="font-size:10px;color:var(--dim);margin-top:6px">Empty fields are ignored. Keys route through the vault; model refs use the framework config API.</div>';
+  },
+  async saveConfig(id){
+    const gw=this.gateways.find(g=>g.id===id);if(!gw)return;
+    const fields=(gw.config_schema||{}).fields||[];
+    const payload={};const keys={};
+    fields.forEach(f=>{
+      const el=$('fwc-'+id+'-'+f.id);if(!el)return;
+      let v=el.type==='checkbox'?el.checked:el.value.trim();
+      if(el.type!=='checkbox'&&!v)return;
+      // Model refs (primary/fallback) go top-level; credential fields go under keys{provider}
+      if(f.credential){ keys[f.provider||f.id]=v; }
+      else { payload[f.id]=v; }
+    });
+    if(Object.keys(keys).length)payload.keys=keys;
+    if(!Object.keys(payload).length){toast('Nothing to apply','yellow');return}
+    const st=$('fwc-status-'+id);if(st)st.textContent='Applying...';
+    try{
+      const r=await fetch('/api/admin/gateways/'+encodeURIComponent(id)+'/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      const d=await r.json();
+      if(d.ok){
+        const msg=(d.status==='needs_restart'?'Applied (needs restart)':'Applied')+(d.message?' — '+d.message:'');
+        if(st)st.textContent=msg;toast(msg,'green');
+      }else{if(st)st.textContent=d.error||'Failed';toast(d.error||'Configure failed','red')}
+    }catch(e){if(st)st.textContent=e.message;toast(e.message,'red')}
+  },
+  async assign(gatewayId){
+    const sel=$('fw-prof-'+gatewayId);if(!sel)return;
+    const profileId=sel.value;if(!profileId)return;
+    try{
+      const r=await fetch('/api/profiles/'+encodeURIComponent(profileId),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({adapter_config:{gateway_id:gatewayId}})});
+      const d=await r.json();
+      if(d.id||d.name){toast(profileId+' → '+gatewayId+' (refresh voice app to apply)','green');this.load();}
+      else toast(d.error||'Assign failed','red');
+    }catch(e){toast(e.message,'red')}
+  }
+};
+
 const Providers={
   sel:{llm:null,tts:null,stt:null},
   profileId:null,

@@ -236,6 +236,23 @@ app.register_blueprint(vault_bp)
 from routes.identity import identity_bp
 app.register_blueprint(identity_bp)
 
+from routes.services import services_bp
+app.register_blueprint(services_bp)
+
+# WO-1.3 — wire the STT provider registry. autodiscover() loads
+# config/providers.yaml and imports the STT provider modules so their
+# registry.register() calls fire; the Service Catalog then reads STT ids from
+# the SAME registry consumed by /api/stt/*. LLM entries in the yaml are
+# DEPRECATED (see providers/llm/DEPRECATED.md) — importing them registers
+# classes with zero call sites, harmless. Failure is non-fatal: the STT catalog
+# falls back to the static handler-derived list.
+try:
+    from providers.registry import registry as _provider_registry
+    _provider_registry.autodiscover()
+    logger.info("Provider registry autodiscover complete (STT wired).")
+except Exception as _e:
+    logger.warning(f"Provider registry autodiscover failed (non-critical): {_e}")
+
 from services.plugins import load_plugins
 load_plugins(app)
 
