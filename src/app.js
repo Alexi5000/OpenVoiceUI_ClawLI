@@ -3689,6 +3689,7 @@ connectAiradio();
             connect() {
                 if (this.isConnecting || this.isConnected) return;
                 this.isConnecting = true;
+                this._manualDisconnect = false;
 
                 // Determine WebSocket URL based on hostname
                 // Connect to voice agent (main agent, voice-optimized)
@@ -3704,6 +3705,7 @@ connectAiradio();
                         console.log('Clawdbot connected');
                         this.isConnected = true;
                         this.isConnecting = false;
+                        this._reconnectDelay = 3000;  // reset backoff on success
                         this.updateConnectionStatus('connected');
                         this.addSystemMessage('Connected to Clawdbot');
                         this.enableInput(true);
@@ -3734,6 +3736,18 @@ connectAiradio();
                         this.addSystemMessage('Disconnected from Clawdbot');
                         this.enableInput(false);
                         this.callbacks.onDisconnect();
+                        // Auto-reconnect (capped backoff) — this socket doubles
+                        // as the proactive-push channel, so it must come back
+                        // after server restarts / network blips without a page
+                        // reload. Manual disconnect() suppresses it.
+                        if (!this._manualDisconnect) {
+                            const delay = Math.min(this._reconnectDelay || 3000, 60000);
+                            this._reconnectDelay = delay * 2;
+                            console.log(`Clawdbot: reconnecting in ${delay / 1000}s`);
+                            setTimeout(() => {
+                                if (!this.isConnected && !this._manualDisconnect) this.connect();
+                            }, delay);
+                        }
                     };
                 } catch (error) {
                     this.isConnecting = false;
@@ -3743,6 +3757,7 @@ connectAiradio();
             }
 
             disconnect() {
+                this._manualDisconnect = true;
                 if (this.ws) {
                     this.ws.close();
                     this.ws = null;
@@ -3952,6 +3967,17 @@ connectAiradio();
                         console.log('Clawdbot WS: ignoring duplicate assistant_message');
                         break;
 
+                    case 'proactive_message':
+                        // Agent-initiated push — a background sub-agent finished
+                        // AFTER the original turn ended. Server pre-generated TTS.
+                        this._handleProactiveMessage(data);
+                        break;
+
+                    case 'keepalive':
+                        // Server idle ping keeping the push channel open through
+                        // proxy timeouts. Nothing to do.
+                        break;
+
                     case 'text_delta':
                         // Streaming text update (optional)
                         if (data.delta) {
@@ -3970,6 +3996,46 @@ connectAiradio();
 
                     default:
                         console.log('Clawdbot: Unknown message type:', data.type);
+                }
+            }
+
+            async _handleProactiveMessage(data) {
+                const rawText = data.text || '';
+                if (!rawText.trim()) return;
+                console.log('📣 Proactive message from agent:', rawText.substring(0, 120));
+                ActionConsole.addEntry('system', '✅ Background task complete — agent update');
+
+                // Dispatch [CANVAS:page] / [CANVAS_MENU] tags (mirrors the HTTP
+                // stream handler — proactive pushes must open pages the same way)
+                const canvasMatch = rawText.match(/\[CANVAS:([^\]]+)\]/i);
+                if (canvasMatch) {
+                    const pageName = canvasMatch[1].trim();
+                    ActionConsole.addEntry('system', `Canvas: opening ${pageName}`);
+                    AgentActivityChip.handleTag('canvas', pageName);
+                    try {
+                        await fetch(`${this.config.serverUrl}/api/canvas/manifest/sync`, { method: 'POST' });
+                        await window.CanvasMenu?.loadManifest();
+                    } catch (e) { console.warn('[Canvas] manifest sync failed:', e); }
+                    CanvasControl.showPage?.(pageName);
+                } else if (/\[CANVAS_MENU\]/i.test(rawText)) {
+                    AgentActivityChip.handleTag('canvas_menu');
+                    CanvasControl.showMenu?.() || document.getElementById('canvas-menu-button')?.click();
+                }
+
+                // Dispatch canvas-action tags, then strip ALL tags for display
+                window.__canvasAction?.dispatchFrom(rawText);
+                let clean = (window.__canvasAction?.strip(rawText) ?? rawText);
+                clean = clean.replace(/\[[A-Z_]+(?::[^\]]*)?\]/g, '').trim();
+                if (clean) {
+                    this.displayMessage('assistant', clean);
+                    this.callbacks.onMessage('assistant', clean);
+                    window.TranscriptPanel?.addMessage('assistant', clean);
+                }
+
+                // Play the server-generated TTS through the normal audio queue
+                // (respects text mode, mic muting, ducking via onSpeaking).
+                if (data.audio) {
+                    this.playAudio(data.audio, data.audio_format || 'wav');
                 }
             }
 

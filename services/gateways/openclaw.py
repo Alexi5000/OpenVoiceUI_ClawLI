@@ -158,6 +158,37 @@ def _strip_internal_markers(text):
     return cleaned or text
 
 
+# ---------------------------------------------------------------------------
+# Proactive delivery — subagent completions that finish AFTER the originating
+# HTTP stream closed. The orphan continuation (see EventDispatcher orphan
+# tracking + GatewayConnection._run_orphan_continuation) nudges the idle main
+# agent, collects its reply, and hands the text to this handler. server.py
+# registers push_proactive_message() here at startup; it broadcasts over the
+# persistent /ws/clawdbot browser sockets with server-generated TTS.
+# ---------------------------------------------------------------------------
+
+_PROACTIVE_HANDLER = None
+
+
+def set_proactive_handler(fn):
+    """Register a callable(text, session_key) that delivers an agent-initiated
+    message to connected browsers. Called from a daemon thread — must not
+    assume a Flask request context."""
+    global _PROACTIVE_HANDLER
+    _PROACTIVE_HANDLER = fn
+
+
+# One nudge text for all three call sites (two in-stream, one orphan) so the
+# agent contract stays consistent with templates/AGENTS.md Step 3.
+_SUBAGENT_NUDGE_MSG = (
+    "[SUBAGENT_COMPLETE] The background task just finished. Read its result, "
+    "verify the output actually exists, then give the user ONE brief spoken "
+    "sentence about what was done. If it produced a canvas page, open it by "
+    "including [CANVAS:page-name] in your reply. Do not narrate your checking "
+    "steps — just the outcome."
+)
+
+
 class Subscription:
     """Tracks state for a single chat.send request.
 
@@ -210,6 +241,78 @@ class EventDispatcher:
         # Learned from runId-routed events, which pair a sub (alias) with the
         # event's canonical key authoritatively.
         self._canonical_keys: dict[str, str] = {}
+        # Orphan subagent completion tracking. When a subagent lifecycle.end
+        # arrives and NO live subscription exists (the originating HTTP stream
+        # timed out / aborted, or the spawn came from cron), the in-stream
+        # continuation nudge in _stream_events can never fire. The hook below
+        # (set by GatewayConnection) runs the orphan continuation instead.
+        self._orphan_hook = None                      # callable(parent_alias)
+        self._orphan_debounce: dict[str, asyncio.Task] = {}  # parent → pending task
+        self._orphan_last_fired: dict[str, float] = {}       # parent → ts cooldown
+        self._last_sub_alias: str | None = None       # newest subscribe() alias
+
+    ORPHAN_DEBOUNCE_S = 5      # batch: wait for sibling subagents to finish
+    ORPHAN_COOLDOWN_S = 60     # never nudge the same session more than 1/min
+
+    def set_orphan_hook(self, fn):
+        self._orphan_hook = fn
+
+    def _alias_for_canonical(self, canonical: str) -> str | None:
+        """Best-effort map a canonical sessionKey (or spawnedBy value like
+        'agent:openvoiceui:main') back to the short alias chat.send uses."""
+        if not canonical:
+            return None
+        for alias, canon in self._canonical_keys.items():
+            if canon == canonical:
+                return alias
+        parts = canonical.split(':')
+        if parts[0] == 'agent' and len(parts) >= 3:
+            return ':'.join(parts[2:])
+        return canonical
+
+    def _note_orphan_subagent_end(self, payload: dict):
+        """A subagent lifecycle.end arrived with no live subscription to
+        deliver it to. Debounce per parent session, then fire the orphan
+        continuation hook so the main agent announces the result."""
+        if self._orphan_hook is None:
+            return
+        stream = match_stream(payload.get('stream', ''))
+        phase = payload.get('data', {}).get('phase', '')
+        if stream != 'lifecycle' or phase != 'end':
+            return
+        parent = (self._alias_for_canonical(payload.get('spawnedBy', ''))
+                  or self._last_sub_alias or 'main')
+        now = time.time()
+        if now - self._orphan_last_fired.get(parent, 0) < self.ORPHAN_COOLDOWN_S:
+            logger.info(f"### ORPHAN SUBAGENT END: cooldown active for {parent} — skipped")
+            return
+        pending = self._orphan_debounce.get(parent)
+        if pending and not pending.done():
+            pending.cancel()
+        logger.info(f"### ORPHAN SUBAGENT END: scheduling continuation for session {parent}")
+        self._orphan_debounce[parent] = asyncio.ensure_future(
+            self._fire_orphan_after_debounce(parent))
+
+    async def _fire_orphan_after_debounce(self, parent: str):
+        try:
+            await asyncio.sleep(self.ORPHAN_DEBOUNCE_S)
+        except asyncio.CancelledError:
+            return
+        # A live subscription may have appeared meanwhile (user sent a new
+        # message) — the normal in-stream path owns delivery in that case.
+        for sub in self._subscriptions.values():
+            if sub.state != Subscription.DONE and self._sk_match_alias(parent, sub.session_key):
+                logger.info(f"### ORPHAN continuation cancelled — live sub exists for {parent}")
+                return
+        self._orphan_last_fired[parent] = time.time()
+        try:
+            self._orphan_hook(parent)
+        except Exception as e:
+            logger.error(f"### ORPHAN hook failed: {e}")
+
+    @staticmethod
+    def _sk_match_alias(a: str, b: str) -> bool:
+        return bool(a) and bool(b) and (a == b or a.endswith(':' + b) or b.endswith(':' + a))
 
     def _sk_match(self, event_sk: str, sub_sk: str) -> bool:
         """True when an event's canonical sessionKey refers to sub's session."""
@@ -226,6 +329,7 @@ class EventDispatcher:
         """Create and register a new subscription."""
         sub = Subscription(chat_id, session_key)
         self._subscriptions[chat_id] = sub
+        self._last_sub_alias = session_key
         return sub
 
     def unsubscribe(self, chat_id: str):
@@ -389,6 +493,12 @@ class EventDispatcher:
                         if sub.state == Subscription.ACTIVE:
                             await sub.event_queue.put(data)
                             return
+                    # No live subscription — the originating stream is gone
+                    # (timeout/abort/cron spawn). If this is a completion,
+                    # schedule the orphan continuation so the main agent
+                    # still announces the result to the user.
+                    self._note_orphan_subagent_end(payload)
+                    return
 
                 # Fallback: deliver to single active sub WITH session key match
                 if event_session_key:
@@ -494,6 +604,9 @@ class GatewayConnection:
                 asyncio.set_event_loop(self._loop)
                 self._ws_lock = asyncio.Lock()
                 self._dispatcher = EventDispatcher()
+                self._dispatcher.set_orphan_hook(
+                    lambda parent: asyncio.ensure_future(
+                        self._run_orphan_continuation(parent)))
                 ready.set()
                 self._loop.run_forever()
 
@@ -635,6 +748,99 @@ class GatewayConnection:
                         await asyncio.sleep(delay)
 
             raise RuntimeError(f"Failed to connect to Gateway after {max_attempts} attempts")
+
+    async def _run_orphan_continuation(self, session_key):
+        """Nudge the idle main agent after an orphaned subagent completion,
+        collect its reply, and hand it to the registered proactive handler.
+
+        Runs on the gateway loop thread. The originating HTTP stream is gone,
+        so the reply cannot ride the normal NDJSON path — server.py's
+        push_proactive_message broadcasts it over /ws/clawdbot instead.
+        """
+        if _PROACTIVE_HANDLER is None:
+            logger.info("### ORPHAN continuation skipped — no proactive handler registered")
+            return
+        try:
+            await asyncio.sleep(3)  # let the gateway announce-back settle in session
+            if not self._connected or not self._ws or not self._dispatcher:
+                logger.warning("### ORPHAN continuation skipped — gateway not connected")
+                return
+            cont_chat_id = str(uuid.uuid4())
+            sub = self._dispatcher.subscribe(cont_chat_id, session_key)
+            try:
+                await self._dispatcher.send(self._ws, {
+                    "type": "req",
+                    "id": f"chat-{cont_chat_id}",
+                    "method": "chat.send",
+                    "params": {
+                        "message": _PROMPT_ARMOR + _SUBAGENT_NUDGE_MSG,
+                        "sessionKey": session_key,
+                        "idempotencyKey": cont_chat_id,
+                    },
+                })
+                logger.info(f"### ORPHAN CONTINUATION: nudge sent "
+                            f"(session={session_key}, chat_id={cont_chat_id[:8]})")
+                collected_text = ''
+                prev_len = 0
+                deadline = time.time() + 180
+                while time.time() < deadline:
+                    try:
+                        data = await asyncio.wait_for(sub.event_queue.get(), timeout=10.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    if data.get('_type') == 'ws_closed':
+                        logger.warning("### ORPHAN continuation: WS closed mid-collect")
+                        return
+                    if data.get('type') == 'res':
+                        continue
+                    if data.get('type') != 'event':
+                        continue
+                    payload = data.get('payload', {})
+                    canonical_evt = match_event(data.get('event', ''))
+                    if canonical_evt == 'agent':
+                        stream = match_stream(payload.get('stream', ''))
+                        if stream == 'assistant':
+                            d = payload.get('data', {})
+                            full_text = d.get('text', '')
+                            if full_text and len(full_text) > prev_len:
+                                prev_len = len(full_text)
+                                collected_text = full_text
+                        elif stream == 'lifecycle':
+                            sk = payload.get('sessionKey', '')
+                            phase = payload.get('data', {}).get('phase', '')
+                            if phase == 'end' and not is_subagent_session_key(sk) and collected_text:
+                                break
+                    elif canonical_evt == 'chat':
+                        state = match_state(payload.get('state', ''))
+                        sk = payload.get('sessionKey', '')
+                        if sk and is_subagent_session_key(sk):
+                            continue
+                        if state in ('aborted', 'error'):
+                            logger.warning(f"### ORPHAN continuation: run {state}")
+                            return
+                        if state == 'final':
+                            if not collected_text and 'message' in payload:
+                                content = extract_text_content(
+                                    payload['message'].get('content', ''))
+                                if content and content.strip():
+                                    collected_text = content
+                            break
+            finally:
+                self._dispatcher.unsubscribe(cont_chat_id)
+
+            text = _strip_internal_markers(collected_text or '')
+            if not text or is_system_response(text):
+                logger.info("### ORPHAN continuation: no user-facing text — nothing to push")
+                return
+            logger.info(f"### ORPHAN continuation: pushing proactive message "
+                        f"({len(text)} chars): {text[:120]}")
+            handler = _PROACTIVE_HANDLER
+            threading.Thread(
+                target=lambda: handler(text, session_key),
+                name='proactive-push', daemon=True,
+            ).start()
+        except Exception as e:
+            logger.error(f"### ORPHAN continuation failed: {e}")
 
     async def _send_abort(self, run_id, session_key, reason="voice-disconnect"):
         """Send chat.abort for a specific run via the dispatcher's send lock."""
@@ -934,8 +1140,7 @@ class GatewayConnection:
                                 _cleanup_ids.append(cont_chat_id)
                             cont_msg = (
                                 _PROMPT_ARMOR +
-                                "[SUBAGENT_COMPLETE] The background task just finished. "
-                                "Check the result and give a brief update on what was done."
+                                _SUBAGENT_NUDGE_MSG
                             )
                             cont_request = {
                                 "type": "req",

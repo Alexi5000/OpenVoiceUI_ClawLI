@@ -1575,6 +1575,99 @@ def _tts_bytes(text: str) -> bytes:
     return base64.b64decode(b64)
 
 
+# ---------------------------------------------------------------------------
+# Proactive push — agent-initiated messages to connected browsers
+# ---------------------------------------------------------------------------
+# Registry of live /ws/clawdbot browser sockets. When a subagent finishes
+# after the originating HTTP stream closed, the gateway layer's orphan
+# continuation (services/gateways/openclaw.py) collects the agent's follow-up
+# and calls push_proactive_message() — closing the "I'll let you know when
+# it's done" loop that previously never fired.
+
+_push_clients_lock = threading.Lock()
+_push_clients: set = set()
+
+
+def _register_push_client(ws):
+    with _push_clients_lock:
+        _push_clients.add(ws)
+    logger.info(f"Proactive push: client registered ({len(_push_clients)} connected)")
+
+
+def _unregister_push_client(ws):
+    with _push_clients_lock:
+        _push_clients.discard(ws)
+
+
+def push_proactive_message(text: str, session_key: str = None):
+    """Broadcast an agent-initiated message to all connected browsers.
+
+    Called from a daemon thread (gateway loop side) — no Flask context.
+    The raw text (with [CANVAS:...] etc. action tags intact) is sent so the
+    client can dispatch the tags; TTS is generated from the tag-stripped text.
+    """
+    spoken = re.sub(r'\[[A-Z_]+(?::[^\]]*)?\]', '', text).strip()
+    audio_b64 = None
+    if spoken:
+        try:
+            audio_b64 = _generate_tts_b64(spoken, voice="M1")
+        except Exception as e:
+            logger.warning(f"Proactive push: TTS failed ({e}) — sending text-only")
+    frame = json.dumps({
+        "type": "proactive_message",
+        "text": text,
+        "audio": audio_b64,
+        "sessionKey": session_key,
+        "ts": time.time(),
+    })
+    with _push_clients_lock:
+        clients = list(_push_clients)
+    if not clients:
+        logger.warning("Proactive push: no connected browsers — message not delivered "
+                       f"(text: {text[:100]})")
+        return
+    delivered = 0
+    for client in clients:
+        try:
+            client.send(frame)
+            delivered += 1
+        except Exception:
+            _unregister_push_client(client)
+    logger.info(f"Proactive push: delivered to {delivered}/{len(clients)} clients")
+
+
+# Register with the gateway layer so orphan subagent continuations can reach us.
+try:
+    from services.gateways.openclaw import set_proactive_handler
+    set_proactive_handler(push_proactive_message)
+    logger.info("Proactive push handler registered with gateway layer")
+except Exception as _e:
+    logger.error(f"Failed to register proactive push handler: {_e}")
+
+
+def _warm_gateway_connection():
+    """Open the persistent gateway WS at boot (it is otherwise lazy — first
+    chat.send opens it). Without this, subagent completions that land after a
+    server restart but before the first user message are invisible to the
+    orphan-continuation watcher."""
+    try:
+        from services.gateway_manager import gateway_manager as _gm
+        _gw = _gm.get('openclaw')
+        if _gw is None or not _gw.is_configured():
+            return
+        _conn = _gw._router._get_connection(None)
+        _conn._ensure_started()
+        asyncio.run_coroutine_threadsafe(
+            _conn._ensure_connected(), _conn._loop).result(timeout=30)
+        logger.info("Gateway WS warmed at boot — orphan completion watcher live")
+    except Exception as e:
+        logger.warning(f"Gateway boot warm-up failed (will connect lazily): {e}")
+
+
+threading.Thread(target=_warm_gateway_connection,
+                 name='gateway-warmup', daemon=True).start()
+
+
 @sock.route("/ws/clawdbot")
 def clawdbot_websocket(ws):
     """WebSocket proxy between the frontend and the OpenClaw Gateway.
@@ -1602,6 +1695,10 @@ def clawdbot_websocket(ws):
         ws.send(json.dumps({"type": "error", "message": "Server configuration error"}))
         ws.close()
         return
+
+    # Register for proactive push (agent-initiated messages) for the life of
+    # this socket — delivery is independent of the gateway bridge below.
+    _register_push_client(ws)
 
     async def _run():
         try:
@@ -1658,11 +1755,16 @@ def clawdbot_websocket(ws):
                 async def _from_gateway():
                     while True:
                         try:
-                            data = json.loads(await asyncio.wait_for(gw.recv(), timeout=120.0))
+                            data = json.loads(await asyncio.wait_for(gw.recv(), timeout=25.0))
                         except asyncio.TimeoutError:
-                            logger.warning("Gateway recv() timed out after 120s — closing connection")
-                            ws.send(json.dumps({"type": "error", "message": "Gateway connection timed out"}))
-                            return
+                            # Idle is normal — keep both legs alive. The browser
+                            # socket doubles as the proactive-push channel, so it
+                            # must survive long silences (nginx idle timeouts too).
+                            try:
+                                ws.send(json.dumps({"type": "keepalive", "ts": time.time()}))
+                            except Exception:
+                                return  # browser gone — end the bridge
+                            continue
                         if data.get("type") != "event":
                             continue
                         event = data.get("event")
@@ -1706,6 +1808,8 @@ def clawdbot_websocket(ws):
         asyncio.run(_run())
     except Exception as e:
         logger.error(f"Fatal WebSocket error: {e}")
+    finally:
+        _unregister_push_client(ws)
 
 
 # ---------------------------------------------------------------------------
