@@ -8,10 +8,21 @@ System overview: `<ops-repo>/docs/jambot/canvas-style-system.md`.
 
 1. Repo: `/mnt/system/base/OpenVoiceUI/`, branch `feat/canvas-style-system`
    (check `git branch --show-current` — after merge, work on a new branch off main).
-2. Existing presets: `default-styles/src/{meridian,atelier,obsidian}/` —
+2. Existing presets: `default-styles/src/<id>/` — 13 as of 2026-07-11:
    meridian = SaaS light (default recommendation), atelier = editorial warm
-   light (Fraunces serif/teal), obsidian = premium dark glass (blue/cyan).
-   New styles must be DISTINCT from all existing ones.
+   light (Fraunces serif/teal), obsidian = premium dark glass (blue/cyan),
+   plus the 2026-07-11 Fable batch: ledger (financial serif light, forest
+   green/gold), carbon (industrial dark, Chakra Petch, orange/lime), terra
+   (organic earthen light, Epilogue, terracotta/olive), fjord (Scandinavian
+   minimal light, Outfit, petrol/evergreen), noir (monochrome editorial
+   light, Archivo, black/white/crimson), verdant (dark botanical, Cormorant,
+   emerald/brass), admiralty (navy+gold heritage light, Playfair), helios
+   (sun-gold energetic light, Bricolage Grotesque), foundry (dark copper
+   luxe, Big Shoulders), atlas (vintage cartography light, Crimson Pro,
+   sepia/sienna). New styles must be DISTINCT from all existing ones —
+   taken accent families: blue, sky, teal, amber, forest green/gold, orange/
+   lime, terracotta/olive, petrol, crimson-on-mono, emerald/brass, navy/gold,
+   marigold, copper/ember, sepia/sienna.
 3. Test tenant: test-dev, OVU on host port 5001, containers
    `openvoiceui-test-dev` / `openclaw-test-dev`.
 
