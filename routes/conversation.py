@@ -38,7 +38,7 @@ from routes.music import current_music_state as _music_state
 from services.gateway_manager import gateway_manager
 from services.gateways.compat import is_system_response
 from services.tts import generate_tts_b64 as _tts_generate_b64
-from tts_providers import get_provider, list_providers
+from tts_providers import get_provider, list_providers, invalidate as _tts_invalidate
 
 logger = logging.getLogger(__name__)
 
@@ -1787,6 +1787,27 @@ def _conversation_inner():
                     except Exception:
                         _audio_fmt = 'wav'
 
+                    def _detect_audio_fmt(audio_b64):
+                        """Sniff the real container from the audio header (TTS-11).
+
+                        After a sticky/transitive fallback the actual provider can
+                        switch mp3↔wav mid-response; labeling every chunk with the
+                        PRIMARY provider's format then lies and breaks decoding. Read
+                        the magic bytes so each chunk is labeled with what it actually
+                        is. Falls back to the primary provider's format on any doubt.
+                        """
+                        try:
+                            head = base64.b64decode(audio_b64[:32])
+                        except Exception:
+                            return _audio_fmt
+                        if head[:4] == b'RIFF' and head[8:12] == b'WAVE':
+                            return 'wav'
+                        if head[:3] == b'ID3' or (len(head) >= 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0):
+                            return 'mp3'
+                        if head[:4] == b'OggS':
+                            return 'ogg'
+                        return _audio_fmt
+
                     def _tts_error_event(err_str):
                         # CLIENT-FACING RULE (Mike 2026-06-28): never serialize raw provider
                         # name, billing reason, or exception text into a client-bound event.
@@ -1907,12 +1928,12 @@ def _conversation_inner():
                             _run()  # sequential — block until this sentence is done
                         return done, result
 
-                    def _audio_event(audio_b64, chunk_idx, tts_ms=0):
+                    def _audio_event(audio_b64, chunk_idx, tts_ms=0, fmt=None):
                         """Build an audio SSE event dict with gap config."""
                         evt = {
                             'type': 'audio',
                             'audio': audio_b64,
-                            'audio_format': _audio_fmt,
+                            'audio_format': fmt or _detect_audio_fmt(audio_b64),
                             'chunk': chunk_idx,
                             'total_chunks': None,
                             'timing': {
@@ -2111,9 +2132,12 @@ def _conversation_inner():
                                 if tts_text_interim and tts_text_interim.strip():
                                     _tts_pending.append(_fire_tts(tts_text_interim))
 
-                            # Flush all pending TTS audio immediately
+                            # Flush all pending TTS audio immediately. Bounded per-chunk
+                            # wait (TTS-2) so a hung provider can't stall the interim
+                            # flush; a failed chunk is skipped, not fatal (already if/elif).
+                            _interim_timeout = int(os.getenv('TTS_SENTENCE_TIMEOUT', '20'))
                             for _done_i, _res_i in _tts_pending:
-                                _done_i.wait(timeout=30)
+                                _done_i.wait(timeout=_interim_timeout)
                                 if _res_i.get('error'):
                                     yield _tts_error_event(_res_i['error'])
                                 elif _res_i.get('audio'):
@@ -2804,17 +2828,46 @@ def _conversation_inner():
 
                             t_tts_start = time.time()
                             total_chunks = _chunks_sent + len(_tts_pending)
-                            tts_ok = True
+                            # TTS-2 / TTS-8: a hung provider must NOT head-of-line-block
+                            # the ordered flush, and one chunk's error/timeout must NOT
+                            # discard the already-generated (paid) chunks behind it.
+                            # First pass: wait a bounded per-chunk timeout; deliver ready
+                            # audio, skip errors, and defer any chunk whose provider is
+                            # still hung. Second pass: give the deferred chunks a short
+                            # grace and deliver any that landed (out of order beats
+                            # silence). Never silently drop paid audio — log the rest.
+                            _tts_sentence_timeout = int(os.getenv('TTS_SENTENCE_TIMEOUT', '20'))
+                            _tts_deferred_grace = int(os.getenv('TTS_DEFERRED_GRACE', '10'))
+                            _deferred = []
                             for i, (done_evt, res) in enumerate(_tts_pending):
-                                done_evt.wait(timeout=30)
-                                if res['error']:
+                                if done_evt.wait(timeout=_tts_sentence_timeout):
+                                    if res['error']:
+                                        metrics['tts_success'] = 0
+                                        metrics['tts_error'] = res['error']
+                                        yield _tts_error_event(res['error'])
+                                        continue  # skip only the failed chunk, keep flushing
+                                    if res['audio']:
+                                        yield _audio_event(res['audio'], _chunks_sent + i, tts_ms=int((time.time() - t_tts_start) * 1000))
+                                else:
+                                    logger.warning(
+                                        f"### TTS chunk {i} not ready after "
+                                        f"{_tts_sentence_timeout}s — skipping ahead (provider hung)"
+                                    )
+                                    _deferred.append((i, done_evt, res))
+                            # Second pass — deliver late-completing chunks if they land.
+                            for i, done_evt, res in _deferred:
+                                if done_evt.wait(timeout=_tts_deferred_grace):
+                                    if res['error']:
+                                        yield _tts_error_event(res['error'])
+                                    elif res['audio']:
+                                        logger.info(f"### TTS chunk {i} completed late — delivering")
+                                        yield _audio_event(res['audio'], _chunks_sent + i, tts_ms=int((time.time() - t_tts_start) * 1000))
+                                else:
                                     metrics['tts_success'] = 0
-                                    metrics['tts_error'] = res['error']
-                                    yield _tts_error_event(res['error'])
-                                    tts_ok = False
-                                    break
-                                if res['audio']:
-                                    yield _audio_event(res['audio'], _chunks_sent + i, tts_ms=int((time.time() - t_tts_start) * 1000))
+                                    logger.error(
+                                        f"### TTS chunk {i} never completed within grace — "
+                                        f"audio not delivered (provider hung); paid generation logged, not discarded"
+                                    )
 
                             metrics['tts_generation_ms'] = int((time.time() - t_tts_start) * 1000)
                             metrics['tts_text_len'] = metrics['response_len']
@@ -3227,15 +3280,31 @@ def conversation_reset():
 
 
 # ---------------------------------------------------------------------------
-# POST /api/session/reset  — manual session reset from UI actions panel
+# POST /api/session/reset-openclaw  — deep reset that also clears the openclaw
+# session JSONL (ADMIN-BUG-2, 2026-07-11)
 # ---------------------------------------------------------------------------
-
-@conversation_bp.route('/api/session/reset', methods=['POST'])
+# HISTORY / ADMIN-BUG-2: this handler was originally registered on
+# '/api/session/reset', the SAME path as server.py's soft/hard reset handler
+# (server.py `session_reset`). Because conversation_bp is registered before the
+# server.py @app.route is defined, Werkzeug matched THIS blueprint rule first —
+# silently shadowing server.py's mode-aware (soft/hard + pre-warm) handler that
+# SessionControl.js / the admin Health panel actually drive (they POST
+# {"mode": "soft"|"hard"} and read back `mode`). Worse, the openclaw-session-file
+# path below (`/home/node/.openclaw/...`) lives inside the OPENCLAW container, so
+# from the openvoiceui container it never exists — the try/except swallowed the
+# miss and this handler degraded to "bump the key" while blocking the richer one.
+#
+# FIX (additive, no deletion): this route is moved to the explicit, distinct
+# '/api/session/reset-openclaw' path. `/api/session/reset` is now unambiguously
+# served by server.py's canonical soft/hard handler. Both remain reachable; the
+# deep openclaw-file clear is opt-in via the new path.
+@conversation_bp.route('/api/session/reset-openclaw', methods=['POST'])
 def session_reset():
     """Clear the corrupted openclaw session state and return a fresh session key.
-    Called by the Reset button in the UI actions panel.
-    Clears the openclaw session JSONL file so orphaned messages don't cascade,
-    then bumps the voice session key so the next request starts completely fresh."""
+    Deep reset (opt-in): clears the openclaw session JSONL file so orphaned
+    messages don't cascade, then bumps the voice session key so the next request
+    starts completely fresh. The default /api/session/reset (server.py) handles
+    the common soft/hard reset."""
     old_key = get_voice_session_key()
     # Find and clear the openclaw session file for the current session key
     try:
@@ -3269,7 +3338,7 @@ def session_reset():
 def tts_providers_list():
     """List all available TTS providers with metadata."""
     try:
-        providers = list_providers(include_inactive=True)
+        providers = list_providers(include_inactive=True, probe=True)
         config_path = (Path(__file__).parent.parent
                        / 'tts_providers' / 'providers_config.json')
         default_provider = 'supertonic'
@@ -3352,6 +3421,10 @@ def tts_set_default_provider():
         except Exception as e:
             return jsonify({'ok': False, 'error': f'failed to write config: {e}'}), 500
 
+        # Drop the cached config + provider singletons so the next generate
+        # picks up the new default without a restart.
+        _tts_invalidate()
+
         logger.info(
             f'TTS default provider changed: {old_default} → {provider_id}'
         )
@@ -3420,6 +3493,9 @@ def tts_set_default_voice():
             os.replace(tmp_path, config_path)
         except Exception as e:
             return jsonify({'ok': False, 'error': f'failed to write config: {e}'}), 500
+
+        # Drop the cached config so the next read reflects the new voice order.
+        _tts_invalidate()
 
         logger.info(f'TTS default voice for {provider_id} → {voice}')
         return jsonify({
@@ -3693,7 +3769,10 @@ def tts_voices_list():
     """List all available voices across all providers, including cloned voices."""
     try:
         all_voices = {}
-        for provider_info in list_providers(include_inactive=False):
+        # probe=True: this is an explicit UI voice-list request, so instantiate
+        # cached singletons to surface live cloned_voices (a get_info() field the
+        # config catalog doesn't carry).
+        for provider_info in list_providers(include_inactive=False, probe=True):
             pid = provider_info.get('provider_id', provider_info.get('name', 'unknown'))
             voices = provider_info.get('voices', [])
             cloned = provider_info.get('cloned_voices', [])
