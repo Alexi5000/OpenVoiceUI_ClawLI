@@ -683,6 +683,10 @@ class GatewayConnection:
         self._connected = True
         self._backoff_idx = 0
         self._dispatcher.start(ws)
+        # Supervise the reader: without this the connection only comes back
+        # lazily on the next chat.send, leaving the orphan-completion watcher
+        # deaf after any gateway restart/blip.
+        asyncio.ensure_future(self._supervise_reader())
         if server_version:
             self._server_version = server_version
             logger.info(
@@ -696,6 +700,36 @@ class GatewayConnection:
                 )
         else:
             logger.info(f"### Persistent WS connected + handshake done in {t_ms}ms")
+
+    async def _supervise_reader(self):
+        """Reconnect the persistent WS when the reader loop dies.
+
+        One supervisor is spawned per successful _connect(). When the reader
+        ends (gateway restart, network blip, deliberate disconnect), wait and
+        re-establish so subagent lifecycle broadcasts keep flowing between
+        user messages. Stale supervisors (a newer connect already succeeded)
+        notice _connected and exit.
+        """
+        task = self._dispatcher._reader_task
+        if task is None:
+            return
+        try:
+            await asyncio.wait({task})
+        except Exception:
+            pass
+        while True:
+            if self._connected and self._ws is not None:
+                return  # a newer connect (with its own supervisor) took over
+            await asyncio.sleep(5)
+            if self._connected and self._ws is not None:
+                return
+            try:
+                logger.info("### WS supervisor: reader died — reconnecting")
+                await self._ensure_connected()
+                return  # new supervisor spawned by _connect
+            except Exception as e:
+                logger.warning(f"### WS supervisor reconnect failed: {e} — retrying in 30s")
+                await asyncio.sleep(30)
 
     async def _disconnect(self):
         self._connected = False
