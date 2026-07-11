@@ -7382,6 +7382,9 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
 
                 // Inject dark scrollbar theme into canvas iframe pages
                 if (this.iframe) {
+                    // Stamp every canvas navigation/reload — the speak gate below uses
+                    // this to suppress pages that "announce themselves" on load.
+                    this.iframe.addEventListener('load', () => { window._canvasNavAt = Date.now(); });
                     this.iframe.addEventListener('load', () => {
                         try {
                             const doc = this.iframe.contentDocument;
@@ -7412,8 +7415,26 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                     console.log('[Canvas] postMessage action:', action, event.data);
                     switch (action) {
                         case 'speak':
-                            // Send text as if user spoke it — triggers AI response
+                            // Send text as if user spoke it — triggers AI response.
+                            // Every speak is a paid agent turn + TTS, so auto-announcements
+                            // are gated (Mike 2026-07-11):
+                            //  - userInitiated:true (explicit button tap in the page) always passes
+                            //  - untagged speaks within 15s of a canvas load/reload are pages
+                            //    announcing themselves on open — dropped
+                            //  - untagged speaks are also rate-limited to one per 60s
                             if (text && ModeManager.clawdbotMode) {
+                                if (event.data.userInitiated !== true) {
+                                    const sinceNav = Date.now() - (window._canvasNavAt || 0);
+                                    if (sinceNav < 15000) {
+                                        console.log('[Canvas] speak suppressed: page-open auto-announce', text.slice(0, 80));
+                                        break;
+                                    }
+                                    if (Date.now() - (window._lastAutoSpeakAt || 0) < 60000) {
+                                        console.log('[Canvas] speak suppressed: auto-speak rate limit', text.slice(0, 80));
+                                        break;
+                                    }
+                                    window._lastAutoSpeakAt = Date.now();
+                                }
                                 ModeManager.clawdbotMode.sendMessage(text);
                             }
                             break;
