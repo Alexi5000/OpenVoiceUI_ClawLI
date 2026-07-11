@@ -2078,13 +2078,28 @@ const Connections={
     const primary=$('vault-primary')?.value||'';
     const fallback=$('vault-fallback')?.value||'';
     try{
-      const r=await fetch('/api/vault/credentials/_model_selection',{
+      // WO-0.1: write through the hardened gateway config.patch path
+      // (PUT /api/admin/ai-config), NOT /api/vault/credentials/_model_selection.
+      // The old vault path did a direct openclaw.json write that silently
+      // returned success on a PermissionError (ADMIN-BUG-1) — "saved" but no
+      // change. This path is schema-validated and hot-applied by openclaw.
+      const r=await fetch('/api/admin/ai-config',{
         method:'PUT',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({primary,fallback})
       });
       const d=await r.json();
-      if(d.ok) toast('Model selection saved','green');
-      else toast(d.error||'Failed','red');
+      if(!r.ok||!d.ok){ toast(d.error||d.message||('Failed ('+r.status+')'),'red'); return; }
+      // Confirm the applied value via a follow-up read rather than trusting the
+      // write response — surfaces any silent divergence honestly.
+      try{
+        const c=await fetch('/api/admin/ai-config');
+        const cd=await c.json();
+        if(cd&&cd.primary===primary){
+          toast('Model saved: '+cd.primary+(cd.fallback?' → '+cd.fallback:''),'green');
+        }else{
+          toast('Saved, but applied primary is '+((cd&&cd.primary)||'unknown')+' — verify','red');
+        }
+      }catch(_){ toast('Model selection saved','green'); }
     }catch(e){toast(e.message,'red')}
   },
   async test(id){

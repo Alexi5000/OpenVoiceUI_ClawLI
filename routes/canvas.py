@@ -19,7 +19,7 @@ import mimetypes
 from pathlib import Path
 
 import requests as http_requests
-from flask import Blueprint, Response, jsonify, redirect, request, send_file
+from flask import Blueprint, Response, g, jsonify, redirect, request, send_file
 
 # 3D asset MIME types — without these, send_file falls back to
 # application/octet-stream which (combined with X-Content-Type-Options:nosniff)
@@ -1195,16 +1195,23 @@ def handle_page_metadata(page_id):
         _agent_api_key = os.getenv('AGENT_API_KEY', '').strip()
         is_agent_request = bool(_agent_api_key and request.headers.get('X-Agent-Key') == _agent_api_key)
 
-        # Guard: locked pages — agent cannot change is_public on locked pages.
-        # Admin (Clerk-authenticated) can still change anything, including unlocking.
-        if 'is_public' in data and page.get('is_locked', False) and is_agent_request:
+        # Admin identity — only a Clerk-authenticated admin may lock/unlock pages
+        # or flip visibility on a locked page. Resolve from g.clerk_user_id (set
+        # by require_auth) — never trust the agent key for these mutations.
+        from services.auth import is_admin_user
+        is_admin = is_admin_user(getattr(g, 'clerk_user_id', None))
+
+        # Guard: locked pages — visibility can only be changed by an admin.
+        # The unauthenticated path is already 401'd by require_auth (SEC-2 fix in
+        # app.py); this guard is defense-in-depth and blocks the agent key too.
+        if 'is_public' in data and page.get('is_locked', False) and not is_admin:
             return jsonify({
                 'error': 'This page is locked. Visibility can only be changed from the admin dashboard.',
                 'is_locked': True,
             }), 403
 
-        # Guard: agent cannot lock/unlock pages — only admin can.
-        if 'is_locked' in data and is_agent_request:
+        # Guard: only an admin may lock/unlock pages (never the agent).
+        if 'is_locked' in data and not is_admin:
             return jsonify({
                 'error': 'Page lock status can only be changed from the admin dashboard.',
             }), 403

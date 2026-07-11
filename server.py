@@ -1016,11 +1016,32 @@ def deepgram_stt_token():
     live transcription API.  The key is passed via the WebSocket sub-protocol
     header so it never appears in URLs or logs.
 
-    NOTE: Deepgram supports scoped / short-lived project keys — if you want
-    tighter security, create a key with only 'usage:write' permission and
-    rotate it.  For now we hand out the configured key since the UI is
-    already authenticated.
+    TODO(scoped-key): Deepgram supports scoped / short-lived project keys via
+    its /v1/projects/{id}/keys grant API. We should mint a temporary key with
+    only 'usage:write' scope + a short TTL per session instead of handing out
+    the long-lived project key. Until that helper exists we return the
+    configured key ONLY to authenticated callers (Clerk session or agent key).
+
+    SECURITY: the raw key must never be returned unauthenticated. The public
+    allowlist no longer exposes /api/stt/* (require_auth gates it), and this
+    in-handler check is defense-in-depth so the key can't leak even if the
+    gate is ever loosened.
     """
+    # Defense-in-depth auth check (only enforced when Clerk auth is configured;
+    # local/self-hosted mode with no Clerk key runs fully open per app.py).
+    _clerk_configured = bool(
+        (os.getenv("CLERK_PUBLISHABLE_KEY") or os.getenv("VITE_CLERK_PUBLISHABLE_KEY", "")).strip()
+    )
+    if _clerk_configured:
+        _agent_key = os.environ.get("AGENT_API_KEY", "").strip()
+        _is_agent = bool(_agent_key) and request.headers.get("X-Agent-Key") == _agent_key
+        if not _is_agent:
+            from services.auth import get_token_from_request, verify_clerk_token
+            _token = get_token_from_request()
+            _user = verify_clerk_token(_token) if _token else None
+            if not _user:
+                return jsonify({"error": "Unauthorized", "code": "auth_required"}), 401
+
     api_key = os.environ.get("DEEPGRAM_API_KEY", "")
     if not api_key:
         return jsonify({"error": "DEEPGRAM_API_KEY not configured"}), 500
@@ -1840,8 +1861,8 @@ def clawdbot_websocket(ws):
 
 @sock.route("/openclaw-ui")
 def openclaw_ui_websocket(ws):
-    """WebSocket proxy for OpenClaw Control UI behind Clerk auth."""
-    from services.auth import verify_clerk_token, get_token_from_request
+    """WebSocket proxy for OpenClaw Control UI behind Clerk ADMIN auth."""
+    from services.auth import verify_clerk_token, get_token_from_request, is_admin_user
     token = get_token_from_request()
     user_id = verify_clerk_token(token) if token else None
     if not user_id:
@@ -1849,7 +1870,22 @@ def openclaw_ui_websocket(ws):
         ws.send(json.dumps({"type": "error", "message": "Unauthorized"}))
         ws.close()
         return
-    logger.info(f"OpenClaw UI WebSocket authenticated: user_id={user_id}")
+    # This proxy injects the OPERATOR-scope gateway token into the handshake, so
+    # it must be admin-only — an allowlisted voice user must NOT get operator RPC
+    # (SEC-5/WS-4). Being in ALLOWED_USER_IDS gates the voice app, not admin ops.
+    if not is_admin_user(user_id):
+        logger.warning(f"OpenClaw UI WebSocket rejected — non-admin user_id={user_id}")
+        ws.send(json.dumps({"type": "error", "message": "Admin access required"}))
+        ws.close()
+        return
+    logger.info(f"OpenClaw UI WebSocket authenticated (admin): user_id={user_id}")
+
+    # Same RPC method allowlist the hardened HTTP admin proxy enforces
+    # (routes/admin.py ALLOWED_RPC_METHODS) — the proxy relays operator-scope
+    # frames, so arbitrary methods (config.patch / chat.send / sessions.*) must
+    # not be reachable here. `connect` is permitted (handshake).
+    from routes.admin import ALLOWED_RPC_METHODS
+    _allowed_ws_methods = set(ALLOWED_RPC_METHODS) | {"connect"}
 
     gateway_url = os.getenv("CLAWDBOT_GATEWAY_URL", "ws://127.0.0.1:18791")
     auth_token = os.getenv("CLAWDBOT_AUTH_TOKEN")
@@ -1873,11 +1909,25 @@ def openclaw_ui_websocket(ws):
                             break
                         try:
                             data = json.loads(msg)
-                            if data.get("type") == "req" and data.get("method") == "connect":
-                                if "params" not in data:
-                                    data["params"] = {}
-                                data["params"]["auth"] = {"token": auth_token}
-                                msg = json.dumps(data)
+                            if data.get("type") == "req":
+                                _method = data.get("method")
+                                # Enforce the RPC method allowlist — reject any
+                                # method the HTTP admin proxy also refuses.
+                                if _method and _method not in _allowed_ws_methods:
+                                    logger.warning(
+                                        f"OpenClaw UI: blocked disallowed RPC method {_method!r}"
+                                    )
+                                    ws.send(json.dumps({
+                                        "type": "res",
+                                        "id": data.get("id"),
+                                        "error": {"message": f"Method not allowed: {_method}"},
+                                    }))
+                                    continue
+                                if _method == "connect":
+                                    if "params" not in data:
+                                        data["params"] = {}
+                                    data["params"]["auth"] = {"token": auth_token}
+                                    msg = json.dumps(data)
                         except (json.JSONDecodeError, TypeError):
                             pass  # Non-JSON frame — relay as-is
                         await gw.send(msg)
