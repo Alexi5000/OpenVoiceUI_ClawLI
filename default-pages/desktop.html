@@ -722,7 +722,6 @@ html,body{width:100%!important;height:100%!important;overflow:hidden!important;b
   font-family:'Ubuntu','Segoe UI',sans-serif;
   font-size:13px;
 }
-.theme-ubuntu #mac-menubar .apple-logo{display:none}
 .theme-ubuntu #mac-menubar .menu-item:first-of-type{font-weight:bold}
 .theme-ubuntu #dock{
   display:flex;
@@ -1088,6 +1087,13 @@ function setTheme(theme) {
   currentTheme = theme;
   saveState();
   document.getElementById('app').className = 'theme-' + theme;
+  // Ubuntu previously hid .apple-logo (the only click target that opens the
+  // Start Menu in the top-menubar themes) with no working substitute — the
+  // taskbar's #start-btn is ALSO hidden for mac/ubuntu, so there was no way
+  // to open Settings from Ubuntu at all. Relabel the first menu-item to
+  // something theme-appropriate and keep .apple-logo functional everywhere.
+  const firstMenuItem = document.querySelector('#mac-menubar .menu-item:first-of-type');
+  if (firstMenuItem) firstMenuItem.textContent = theme === 'ubuntu' ? 'Activities' : (theme === 'mac' ? 'Finder' : 'Files');
   updateClock();
   buildDesktopIcons();
   buildDock();
@@ -3074,17 +3080,58 @@ function applyWallpaper(url) {
   wallpaperUrl = url || null;
   const desktop = document.getElementById('desktop');
   if (url) {
-    // Include a dark fallback color so nothing shows through while the image loads
-    desktop.style.background = 'url(' + url + ') center/cover no-repeat #1a1a1a';
+    // Set each property explicitly rather than relying on the `center/cover`
+    // shorthand — background-size:cover + background-position:center is
+    // inherently resize-safe (the browser recomputes it on every reflow,
+    // no JS needed), this just removes any shorthand-parsing ambiguity.
+    desktop.style.backgroundImage = `url(${url})`;
+    desktop.style.backgroundSize = 'cover';
+    desktop.style.backgroundPosition = 'center center';
+    desktop.style.backgroundRepeat = 'no-repeat';
+    desktop.style.backgroundColor = '#1a1a1a'; // fallback while the image loads
   } else {
     desktop.style.background = '';
   }
 }
 
+// Cap any wallpaper upload to a sane display resolution and re-encode it —
+// the user should never be able to load a multi-MB/multi-thousand-pixel
+// source image straight onto the desktop background. Downsizing happens
+// client-side (canvas) BEFORE upload so the oversized original never even
+// gets sent — /api/upload is the shared generic upload endpoint used by
+// lots of other features and must not be made lossy for everyone else.
+const WALLPAPER_MAX_DIM = 2560; // no desktop resolution needs more for a cover background
+const WALLPAPER_JPEG_QUALITY = 0.85;
+
+function optimizeWallpaperImage(file) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const objUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objUrl);
+      let { width: w, height: h } = img;
+      const scale = Math.min(1, WALLPAPER_MAX_DIM / Math.max(w, h));
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob((blob) => {
+        resolve(blob ? new File([blob], 'wallpaper.jpg', {type: 'image/jpeg'}) : file);
+      }, 'image/jpeg', WALLPAPER_JPEG_QUALITY);
+    };
+    img.onerror = () => { URL.revokeObjectURL(objUrl); resolve(file); }; // fall back to original on any decode failure
+    img.src = objUrl;
+  });
+}
+
 async function uploadWallpaper(file) {
   if (!file) return;
+  const optimized = await optimizeWallpaperImage(file);
   const fd = new FormData();
-  fd.append('file', file);
+  fd.append('file', optimized);
   try {
     const opts = { method: 'POST', body: fd };
     if(window._canvasAuthToken) opts.headers = { 'Authorization': 'Bearer ' + window._canvasAuthToken };
