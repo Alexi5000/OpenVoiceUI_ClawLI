@@ -241,8 +241,19 @@ def gateway_status():
     # If ping method not found but handshake worked the error will say so
     err = result.get('error', '')
     err_str = str(err).lower() if err else ''
-    # "missing scope" or "unknown method" = handshake succeeded, just no permission for ping
-    auth_ok = 'missing scope' in err_str or 'method' in err_str or 'unknown' in err_str
+    # The handshake succeeded (auth worked) if the gateway rejected ONLY the
+    # ping method itself — either it is unknown/unsupported, or ping is scope-
+    # restricted. Match those specific shapes, not any error that merely
+    # contains the substring 'method'/'unknown' (which also matches genuine
+    # failures like a malformed request or an "unknown error"). (WS-12)
+    auth_ok = (
+        'missing scope' in err_str
+        or 'method not found' in err_str
+        or 'unknown method' in err_str
+        or 'no such method' in err_str
+        or 'unsupported method' in err_str
+        or 'not allowed' in err_str
+    )
     return jsonify({
         "connected": auth_ok,
         "message": "Handshake OK (ping restricted)" if auth_ok else "Auth failed",
@@ -510,8 +521,13 @@ def install_start():
                     from services.gateways.openclaw import _load_device_identity, _sign_device_connect
                     nonce = challenge.get('payload', {}).get('nonce', '')
                     scopes = ["operator.admin", "operator.read", "operator.write"]
+                    # Identify as the backend gateway-client, not 'cli' — the
+                    # 'cli' label leaked into agent-visible metadata elsewhere
+                    # (fixed in e154d32); this call site was missed. client_id
+                    # is enum-validated (GATEWAY_CLIENT_IDS); signature binds
+                    # client_id|client_mode, so keep both args in lockstep. (WS-12)
                     device_block = _sign_device_connect(
-                        _load_device_identity(), 'cli', 'cli', 'operator', scopes, auth_token, nonce
+                        _load_device_identity(), 'gateway-client', 'backend', 'operator', scopes, auth_token, nonce
                     )
                     connect_id = str(uuid.uuid4())[:8]
                     await ws.send(_json.dumps({
@@ -520,8 +536,8 @@ def install_start():
                         'method': 'connect',
                         'params': build_connect_params(
                             auth_token=auth_token,
-                            client_id='cli',
-                            client_mode='cli',
+                            client_id='gateway-client',
+                            client_mode='backend',
                             platform='linux',
                             user_agent='openvoice-ui-admin/1.0.0',
                             scopes=scopes,

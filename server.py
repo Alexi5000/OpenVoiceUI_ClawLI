@@ -1605,27 +1605,65 @@ def _tts_bytes(text: str) -> bytes:
 # and calls push_proactive_message() — closing the "I'll let you know when
 # it's done" loop that previously never fired.
 
+# ws -> outbound queue.Queue. flask_sock's ws.send() is NOT thread-safe, so
+# proactive pushes (generated on the gateway daemon thread) must NOT call
+# ws.send() directly while the socket's own bridge loop is also writing
+# (keepalives, TTS) — interleaved frames corrupt the push channel (WS-2).
+# Instead every producer ENQUEUES here; each /ws/clawdbot connection's own
+# writer coroutine is the ONLY thread that touches its ws.send().
 _push_clients_lock = threading.Lock()
-_push_clients: set = set()
+_push_clients: dict = {}          # ws -> queue.Queue
+_push_client_session: dict = {}   # ws -> last sessionKey the browser declared (WS-9)
+_push_receipt_lock = threading.Lock()  # serialize JSONL appends (WS-10)
 
 
 def _register_push_client(ws):
+    """Register a browser socket and return its outbound queue."""
+    q = queue.Queue()
     with _push_clients_lock:
-        _push_clients.add(ws)
-    logger.info(f"Proactive push: client registered ({len(_push_clients)} connected)")
+        _push_clients[ws] = q
+        n = len(_push_clients)
+    logger.info(f"Proactive push: client registered ({n} connected)")
+    return q
 
 
 def _unregister_push_client(ws):
     with _push_clients_lock:
-        _push_clients.discard(ws)
+        q = _push_clients.pop(ws, None)
+        _push_client_session.pop(ws, None)
+    if q is not None:
+        # Wake the socket's writer so it can observe the shutdown and exit.
+        try:
+            q.put_nowait(None)
+        except Exception:
+            pass
+
+
+def _push_queue_for(ws):
+    with _push_clients_lock:
+        return _push_clients.get(ws)
+
+
+def _note_push_client_session(ws, session_key):
+    """Record the sessionKey a browser is working under so proactive pushes
+    can be scoped to the right tab (WS-9)."""
+    if not session_key:
+        return
+    with _push_clients_lock:
+        if ws in _push_clients:
+            _push_client_session[ws] = session_key
 
 
 def push_proactive_message(text: str, session_key: str = None):
-    """Broadcast an agent-initiated message to all connected browsers.
+    """Broadcast an agent-initiated message to connected browsers.
 
     Called from a daemon thread (gateway loop side) — no Flask context.
     The raw text (with [CANVAS:...] etc. action tags intact) is sent so the
     client can dispatch the tags; TTS is generated from the tag-stripped text.
+
+    Delivery is scoped (WS-9): if this frame carries a sessionKey AND a client
+    has declared one, it is delivered only on a match; a client that never
+    declared a sessionKey receives everything (backward compatible).
     """
     spoken = re.sub(r'\[[A-Z_]+(?::[^\]]*)?\]', '', text).strip()
     audio_b64 = None
@@ -1642,35 +1680,44 @@ def push_proactive_message(text: str, session_key: str = None):
         "ts": time.time(),
     })
     with _push_clients_lock:
-        clients = list(_push_clients)
-    if not clients:
+        targets = list(_push_clients.items())
+        sessions = dict(_push_client_session)
+    if not targets:
         logger.warning("Proactive push: no connected browsers — message not delivered "
                        f"(text: {text[:100]})")
         return
     delivered = 0
-    for client in clients:
+    for ws, q in targets:
+        reg_key = sessions.get(ws)
+        if session_key and reg_key and reg_key != session_key:
+            continue  # WS-9: this push belongs to a different session/tab
         try:
-            client.send(frame)
+            q.put_nowait(frame)
             delivered += 1
         except Exception:
-            _unregister_push_client(client)
-    logger.info(f"Proactive push: delivered to {delivered}/{len(clients)} clients")
-    _write_push_receipt(text, session_key, delivered, len(clients))
+            _unregister_push_client(ws)
+    logger.info(f"Proactive push: enqueued to {delivered}/{len(targets)} clients")
+    _write_push_receipt(text, session_key, delivered, len(targets))
 
 
 def _write_push_receipt(text, session_key, delivered, clients):
     """Durable, host-visible receipt of every proactive push (bind-mounted
-    transcripts dir) — drives the JamFlow board signal and survives restarts."""
+    transcripts dir) — drives the JamFlow board signal and survives restarts.
+    Multiple proactive-push threads can append concurrently, so serialize the
+    write under a module lock — interleaved partial lines corrupt the JSONL
+    the JamFlow board reads (WS-10)."""
     try:
         receipt_path = Path("/app/runtime/transcripts/.proactive-push.jsonl")
-        with open(receipt_path, "a") as f:
-            f.write(json.dumps({
-                "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "session_key": session_key,
-                "delivered": delivered,
-                "clients": clients,
-                "text": text[:300],
-            }) + "\n")
+        line = json.dumps({
+            "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "session_key": session_key,
+            "delivered": delivered,
+            "clients": clients,
+            "text": text[:300],
+        }) + "\n"
+        with _push_receipt_lock:
+            with open(receipt_path, "a") as f:
+                f.write(line)
     except Exception as e:
         logger.debug(f"Proactive push receipt write failed: {e}")
 
@@ -1739,12 +1786,27 @@ def clawdbot_websocket(ws):
     # this socket — delivery is independent of the gateway bridge below.
     _register_push_client(ws)
 
+    # Outbound queue for THIS socket. Every frame written to the browser —
+    # gateway relays, keepalives, and proactive pushes — goes through here and
+    # is drained by the single _writer() coroutine below, which is the only
+    # thread that ever calls ws.send() (WS-2).
+    out_q = _push_queue_for(ws)
+
     async def _run():
+        loop = asyncio.get_running_loop()
+
+        def _enqueue(frame):
+            try:
+                out_q.put_nowait(frame)
+            except Exception:
+                pass
+
         try:
             async with websockets.connect(gateway_url) as gw:
                 logger.info(f"WebSocket connected to Gateway at {gateway_url}")
 
-                # Handshake
+                # Handshake — these pre-writer sends are safe: no other thread
+                # writes ws until _writer() starts (push only ENQUEUES).
                 challenge = json.loads(await asyncio.wait_for(gw.recv(), timeout=10.0))
                 logger.debug(f"Gateway challenge: {challenge.get('event')}")
 
@@ -1772,15 +1834,31 @@ def clawdbot_websocket(ws):
                     return
 
                 logger.info("Gateway handshake OK")
-                ws.send(json.dumps({"type": "connected", "message": "Connected to OpenClaw Gateway"}))
+                _enqueue(json.dumps({"type": "connected", "message": "Connected to OpenClaw Gateway"}))
+
+                async def _writer():
+                    """The ONLY writer to ws. Drains the per-client outbound
+                    queue so flask_sock's non-thread-safe send() is never
+                    called from two threads (WS-2)."""
+                    while True:
+                        frame = await loop.run_in_executor(None, out_q.get)
+                        if frame is None:  # shutdown sentinel
+                            break
+                        try:
+                            ws.send(frame)
+                        except Exception:
+                            break
 
                 async def _from_client():
                     while True:
-                        msg = ws.receive()
+                        # run_in_executor so blocking ws.receive() doesn't
+                        # starve _from_gateway() while the socket is idle (WS-3).
+                        msg = await loop.run_in_executor(None, ws.receive)
                         if not msg:
                             break
                         data = json.loads(msg)
                         if data.get("type") == "chat.send":
+                            _note_push_client_session(ws, data.get("sessionKey"))
                             await gw.send(json.dumps({
                                 "type": "req",
                                 "id": f"chat-{uuid.uuid4()}",
@@ -1799,10 +1877,7 @@ def clawdbot_websocket(ws):
                             # Idle is normal — keep both legs alive. The browser
                             # socket doubles as the proactive-push channel, so it
                             # must survive long silences (nginx idle timeouts too).
-                            try:
-                                ws.send(json.dumps({"type": "keepalive", "ts": time.time()}))
-                            except Exception:
-                                return  # browser gone — end the bridge
+                            _enqueue(json.dumps({"type": "keepalive", "ts": time.time()}))
                             continue
                         if data.get("type") != "event":
                             continue
@@ -1813,35 +1888,61 @@ def clawdbot_websocket(ws):
                             content = payload.get("content", "")
                             if content:
                                 try:
-                                    audio_b64 = base64.b64encode(_tts_bytes(content)).decode()
-                                    ws.send(json.dumps({
+                                    # Offload blocking TTS so it doesn't stall
+                                    # keepalives/frames on this loop (WS-5).
+                                    raw = await loop.run_in_executor(None, _tts_bytes, content)
+                                    audio_b64 = base64.b64encode(raw).decode()
+                                    _enqueue(json.dumps({
                                         "type": "assistant_message",
                                         "text": content,
                                         "audio": audio_b64,
                                     }))
                                 except Exception as e:
                                     logger.error(f"TTS failed in WebSocket handler: {e}")
-                                    ws.send(json.dumps({"type": "assistant_message", "text": content}))
+                                    _enqueue(json.dumps({"type": "assistant_message", "text": content}))
 
                         elif event == "agent.stream.delta":
-                            ws.send(json.dumps({
+                            _enqueue(json.dumps({
                                 "type": "text_delta",
                                 "delta": payload.get("delta", ""),
                             }))
 
                         elif event == "agent.stream.end":
-                            ws.send(json.dumps({"type": "stream_end"}))
+                            _enqueue(json.dumps({"type": "stream_end"}))
 
-                await asyncio.gather(_from_client(), _from_gateway())
+                # WS-8: stop as soon as ANY leg ends; cancel the survivors.
+                # An executor-blocked ws.receive()/out_q.get() can't be
+                # cancelled directly — the None sentinel unblocks the writer and
+                # exiting the `async with` (closing gw) + ws.close() unblocks the
+                # rest, so the upstream connection can't leak.
+                tasks = {asyncio.ensure_future(_writer()),
+                         asyncio.ensure_future(_from_client()),
+                         asyncio.ensure_future(_from_gateway())}
+                try:
+                    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    _enqueue(None)  # release the writer's blocking get
+                    for t in tasks:
+                        t.cancel()
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
 
         except (ConnectionRefusedError, OSError) as e:
             logger.error(f"Cannot reach Gateway at {gateway_url}: {e}")
-            ws.send(json.dumps({"type": "error", "message": "Cannot connect to Gateway"}))
-            ws.close()
+            try:
+                ws.send(json.dumps({"type": "error", "message": "Cannot connect to Gateway"}))
+                ws.close()
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"WebSocket error: {e}")
-            ws.send(json.dumps({"type": "error", "message": "Connection error"}))
-            ws.close()
+            try:
+                ws.send(json.dumps({"type": "error", "message": "Connection error"}))
+                ws.close()
+            except Exception:
+                pass
 
     try:
         asyncio.run(_run())
@@ -1897,6 +1998,7 @@ def openclaw_ui_websocket(ws):
         return
 
     async def _run():
+        loop = asyncio.get_running_loop()
         try:
             async with websockets.connect(gateway_url, origin="http://localhost:18789") as gw:
                 logger.info(f"OpenClaw UI: connected to Gateway at {gateway_url}")
@@ -1904,7 +2006,9 @@ def openclaw_ui_websocket(ws):
                 async def _from_client():
                     """Relay browser → openclaw, injecting auth token on connect."""
                     while True:
-                        msg = ws.receive()
+                        # run_in_executor so blocking ws.receive() doesn't
+                        # starve _from_gateway() while idle (WS-3).
+                        msg = await loop.run_in_executor(None, ws.receive)
                         if not msg:
                             break
                         try:
@@ -1933,7 +2037,10 @@ def openclaw_ui_websocket(ws):
                         await gw.send(msg)
 
                 async def _from_gateway():
-                    """Relay openclaw → browser (raw, no transformation)."""
+                    """Relay openclaw → browser (raw, no transformation).
+                    This is the ONLY writer to ws in this bridge (the client
+                    leg only relays to the gateway), so no per-client queue is
+                    needed here."""
                     while True:
                         try:
                             msg = await asyncio.wait_for(gw.recv(), timeout=300.0)
@@ -1943,7 +2050,21 @@ def openclaw_ui_websocket(ws):
                             ws.send(json.dumps({"type": "error", "message": "Gateway timeout"}))
                             return
 
-                await asyncio.gather(_from_client(), _from_gateway())
+                # WS-8: end as soon as either leg finishes; cancel the survivor.
+                # The executor-blocked ws.receive() can't be cancelled, but
+                # exiting the `async with` (closing gw) + ws.close() unblocks it,
+                # so the upstream gateway connection can't leak.
+                tasks = {asyncio.ensure_future(_from_client()),
+                         asyncio.ensure_future(_from_gateway())}
+                try:
+                    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    for t in tasks:
+                        t.cancel()
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
 
         except (ConnectionRefusedError, OSError) as e:
             logger.error(f"OpenClaw UI: cannot reach Gateway at {gateway_url}: {e}")
