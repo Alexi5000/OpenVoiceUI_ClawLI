@@ -19,7 +19,12 @@ System overview: `<ops-repo>/docs/jambot/canvas-style-system.md`.
    emerald/brass), admiralty (navy+gold heritage light, Playfair), helios
    (sun-gold energetic light, Bricolage Grotesque), foundry (dark copper
    luxe, Big Shoulders), atlas (vintage cartography light, Crimson Pro,
-   sepia/sienna). New styles must be DISTINCT from all existing ones —
+   sepia/sienna), and the 2026-07-11 flashy batch: velocity (motorsport dark,
+   Saira italic, racing red/silver), stadium (sports-broadcast dark, Anton,
+   turf green/scoreboard gold), voltage (extreme-sports dark, Bebas Neue,
+   volt/hazard), arcade (retro 8-bit dark, Press Start 2P, coin red/pixel
+   yellow), aurora (northern-lights dark, Unbounded, arctic green/ice cyan,
+   animated sky). New styles must be DISTINCT from all existing ones —
    taken accent families: blue, sky, teal, amber, forest green/gold, orange/
    lime, terracotta/olive, petrol, crimson-on-mono, emerald/brass, navy/gold,
    marigold, copper/ember, sepia/sienna.
