@@ -635,15 +635,21 @@ class GatewayConnection:
         nonce = challenge_data.get('payload', {}).get('nonce', '')
         scopes = ["operator.admin", "operator.read", "operator.write"]
         identity = _load_device_identity()
+        # Identify as what we ARE: the OpenVoiceUI backend bridging a voice/web user.
+        # The old client_id/mode of "cli" leaked into agent-visible metadata and the
+        # agent greeted Mike with "you're coming in from the CLI" while he was on
+        # voice (2026-07-11). "backend" is a valid GATEWAY_CLIENT_MODES value.
+        # NOTE: the device signature binds client_id|client_mode — keep the
+        # _sign_device_connect args and build_connect_params in lockstep.
         device_block = _sign_device_connect(
-            identity, "cli", "cli", "operator", scopes, self.auth_token, nonce
+            identity, "openvoiceui", "backend", "operator", scopes, self.auth_token, nonce
         )
 
         # Step 2 — send connect with protocol range (not pinned)
         params = build_connect_params(
             auth_token=self.auth_token,
-            client_id="cli",
-            client_mode="cli",
+            client_id="openvoiceui",
+            client_mode="backend",
             platform="linux",
             user_agent="openvoice-ui-voice/1.0.0",
             scopes=scopes,
