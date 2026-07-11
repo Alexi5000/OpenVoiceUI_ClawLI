@@ -2731,7 +2731,7 @@ function openCanvasPage(pageId, newWindow) {
 function openRecycleBin() {
   const title = currentTheme === 'mac' ? 'Trash' : 'Recycle Bin';
   let content = '<div class="recycle-toolbar">';
-  content += '<button onclick="emptyRecycleBin();this.closest(\'.win-body\').querySelector(\'.explorer-content\').innerHTML=buildRecycleContent()">Empty</button>';
+  content += '<button onclick="emptyRecycleBin()">Empty</button>';
   content += '<button onclick="restoreAll();this.closest(\'.win-body\').querySelector(\'.explorer-content\').innerHTML=buildRecycleContent()">Restore All</button>';
   content += '</div>';
   content += '<div class="explorer-content">' + buildRecycleContent() + '</div>';
@@ -2787,8 +2787,13 @@ function showRecycleItemMenu(e, id) {
     {label:'Restore', action:()=>restoreItem(id)},
     '---',
     {label:isMac?'Delete Immediately\u2026':'Delete Permanently\u2026', action:()=>{
-      showConfirmModal('Permanently delete "'+name+'"? This cannot be undone.', (ok)=>{
+      showConfirmModal('Permanently delete "'+name+'"? This cannot be undone.', async (ok)=>{
         if (!ok) return;
+        // Archive server-side (renames .html to .bak, removes manifest entry) \u2014
+        // see emptyRecycleBin() for why this is required, not optional.
+        if (PAGES[id]) {
+          await fetch(`/api/canvas/manifest/page/${id}`, {method: 'DELETE'}).catch(() => {});
+        }
         recycleBin = recycleBin.filter(i => i !== id);
         if (PAGES[id]) delete PAGES[id];
         knownPages = knownPages.filter(k => k !== id);
@@ -2835,10 +2840,20 @@ function restoreAll() {
   refreshRecycleBin();
 }
 
-function emptyRecycleBin() {
+async function emptyRecycleBin() {
   if (recycleBin.length === 0) return;
-  // Remove permanently from known pages so they don't resurface
-  recycleBin.forEach(id => {
+  // Archive real canvas pages server-side (DELETE renames the .html to .bak
+  // and removes the manifest entry — see routes/canvas.py handle_page_metadata).
+  // Without this, only local browser state was cleared: the next fetchManifest()
+  // poll would see the page is still known to the server, treat it as a "new"
+  // page (it's no longer in knownPages), and silently re-add it to the desktop —
+  // recycled items were resurrecting instead of actually going away.
+  const ids = recycleBin.slice();
+  await Promise.all(ids.map(id => {
+    if (!PAGES[id]) return Promise.resolve(); // not a real canvas page (folder/system pseudo-id)
+    return fetch(`/api/canvas/manifest/page/${id}`, {method: 'DELETE'}).catch(() => {});
+  }));
+  ids.forEach(id => {
     if (PAGES[id]) delete PAGES[id];
     knownPages = knownPages.filter(k => k !== id);
   });
