@@ -2832,6 +2832,7 @@ def _conversation_inner():
                                         actions=captured_actions,
                                         identified_person=identified_person,
                                         clerk_user_id=_clerk_user_id,
+                                        gateway=gateway_id or 'openclaw',
                                     )
                                 break
 
@@ -2897,6 +2898,7 @@ def _conversation_inner():
                                     actions=captured_actions,
                                     identified_person=identified_person,
                                     clerk_user_id=_clerk_user_id,
+                                    gateway=gateway_id or 'openclaw',
                                 )
                             break
 
@@ -3028,6 +3030,7 @@ def _conversation_inner():
             actions=captured_actions,
             identified_person=identified_person,
             clerk_user_id=_clerk_user_id,
+            gateway=gateway_id or 'openclaw',
         )
 
     response_data = {'response': ai_response, 'user_said': user_message}
