@@ -2117,14 +2117,57 @@ connectAiradio();
 
             // Constants
             NUM_BARS: 25,
+            RIPPLE_POOL_SIZE: 6,
+
+            // --- Perf caches (populated in init) — the animate loop never queries the DOM ---
+            _dom: null,
+            _vizBars: null,        // [{el, mult}]
+            _sideBars: null,       // [{el, mult}]
+            _vizContainers: null,
+            _containersActive: false,
+            _oscW: 0,
+            _oscH: 0,
+            _ripplePool: null,
+            _rippleIndex: 0,
+            _glowBeatUntil: 0,
+            // Adaptive quality — lite tier: 1x canvas, half dots/particles, 30Hz DOM fx.
+            // Starts lite on small/touch screens; the frame governor can drop others into it.
+            _lite: false,
+            _frame: 0,
+            _lastFrameTs: 0,
+            _slowFrames: 0,
+            _tickCount: 0,
 
             async init() {
                 console.log('VisualizerModule initializing...');
                 // Load from server profile (set by ProviderManager.init), localStorage fallback
                 this.enabled = window._serverProfile?.ui?.visualizer_enabled ?? (localStorage.getItem('visualizerEnabled') !== 'false');
                 this.autoplayEnabled = window._serverProfile?.ui?.music_autoplay ?? (localStorage.getItem('musicAutoplay') === 'true');
+
+                this._dom = {
+                    partyContainer: document.getElementById('party-effects-container'),
+                    centerGlow: document.getElementById('center-glow'),
+                    beatFlash: document.getElementById('beat-flash'),
+                    faceBox: document.getElementById('face-box'),
+                    rippleContainer: document.getElementById('ripple-container'),
+                    oscContainer: document.getElementById('oscilloscope-container'),
+                    oscCanvas: document.getElementById('oscilloscope-canvas'),
+                    oscCtx: null,
+                };
+                this._vizContainers = document.querySelectorAll('.visualizer-container, .side-visualizer');
+
+                this._lite = window.matchMedia('(max-width: 768px), (pointer: coarse)').matches;
+
+                if (this._dom.oscCanvas) {
+                    this._dom.oscCtx = this._dom.oscCanvas.getContext('2d');
+                    this._updateCanvasSize();
+                    window.addEventListener('resize', () => this._updateCanvasSize());
+                }
+
                 this.createVisualizerBars();
                 this.initPartyEffects();
+                this._initRipplePool();
+                if (this._lite) this._applyLiteTier();
                 this.updateToggleUI();
 
                 // Add ended listener for autoplay
@@ -2141,6 +2184,44 @@ connectAiradio();
                     console.log('Autoplaying next track...');
                     window.musicPlayer.play();
                 }
+            },
+
+            _updateCanvasSize() {
+                const canvas = this._dom && this._dom.oscCanvas;
+                if (!canvas) return;
+                const scale = this._lite ? 1 : 2;
+                this._oscW = canvas.offsetWidth * scale;
+                this._oscH = canvas.offsetHeight * scale;
+                canvas.width = this._oscW;
+                canvas.height = this._oscH;
+            },
+
+            _initRipplePool() {
+                const container = this._dom.rippleContainer;
+                if (!container) return;
+                this._ripplePool = [];
+                for (let i = 0; i < this.RIPPLE_POOL_SIZE; i++) {
+                    const ripple = document.createElement('div');
+                    ripple.className = 'sound-ripple';
+                    ripple.style.left = '50%';
+                    ripple.style.top = '50%';
+                    ripple.style.transform = 'translate(-50%, -50%)';
+                    ripple.style.animation = 'none';
+                    container.appendChild(ripple);
+                    this._ripplePool.push(ripple);
+                }
+                this._rippleIndex = 0;
+            },
+
+            // Drop to the lite tier: 1x oscilloscope canvas, hide every other
+            // dot/particle. One-way — never upgrades back mid-session.
+            _applyLiteTier() {
+                this._lite = true;
+                this._updateCanvasSize();
+                this.discoDots.forEach((d, i) => { if (i % 2) d.el.style.display = 'none'; });
+                this.discoDots = this.discoDots.filter((_, i) => i % 2 === 0);
+                this.partyParticles.forEach((p, i) => { if (i % 2) p.el.style.display = 'none'; });
+                this.partyParticles = this.partyParticles.filter((_, i) => i % 2 === 0);
             },
 
             updateToggleUI() {
@@ -2207,34 +2288,41 @@ connectAiradio();
                 leftViz.innerHTML = '';
                 rightViz.innerHTML = '';
 
+                this._vizBars = [];
+                this._sideBars = [];
+
                 for (let i = 0; i < this.NUM_BARS; i++) {
                     // Calculate center curve multiplier (1.0 at center, lower at edges)
                     const distFromCenter = Math.abs(i - (this.NUM_BARS - 1) / 2) / ((this.NUM_BARS - 1) / 2);
                     const centerMultiplier = 1 - (distFromCenter * 0.6); // 1.0 center, 0.4 at edges
+                    // Frequency bins match the old querySelectorAll document order:
+                    // first container's bars = i, second container's = NUM_BARS + i
+                    const band1 = Math.floor(i / this.NUM_BARS * 256);
+                    const band2 = Math.floor((this.NUM_BARS + i) / this.NUM_BARS * 256);
 
                     const topBar = document.createElement('div');
                     topBar.className = 'visualizer-bar';
-                    topBar.dataset.centerMult = centerMultiplier;
                     topBar.style.height = '10px';
                     topViz.appendChild(topBar);
+                    this._vizBars.push({ el: topBar, mult: centerMultiplier, band: band1 });
 
                     const bottomBar = document.createElement('div');
                     bottomBar.className = 'visualizer-bar';
-                    bottomBar.dataset.centerMult = centerMultiplier;
                     bottomBar.style.height = '10px';
                     bottomViz.appendChild(bottomBar);
+                    this._vizBars.push({ el: bottomBar, mult: centerMultiplier, band: band2 });
 
                     const leftBar = document.createElement('div');
                     leftBar.className = 'side-bar';
-                    leftBar.dataset.centerMult = centerMultiplier;
                     leftBar.style.width = '20px';
                     leftViz.appendChild(leftBar);
+                    this._sideBars.push({ el: leftBar, mult: centerMultiplier, band: band1 });
 
                     const rightBar = document.createElement('div');
                     rightBar.className = 'side-bar';
-                    rightBar.dataset.centerMult = centerMultiplier;
                     rightBar.style.width = '20px';
                     rightViz.appendChild(rightBar);
+                    this._sideBars.push({ el: rightBar, mult: centerMultiplier, band: band2 });
                 }
             },
 
@@ -2245,11 +2333,15 @@ connectAiradio();
                 if (particleContainer) {
                     particleContainer.innerHTML = '';
                     this.partyParticles = [];
+                    this._dom.particleContainer = particleContainer;
                     for (let i = 0; i < 30; i++) {
                         const particle = document.createElement('div');
                         particle.className = 'party-particle';
-                        particle.style.left = Math.random() * 100 + '%';
-                        particle.style.top = Math.random() * 100 + '%';
+                        // Positioned purely via transform (compositor-only) — left/top stay 0.
+                        // Element opacity 1; the audio-reactive fade lives on the container.
+                        particle.style.left = '0';
+                        particle.style.top = '0';
+                        particle.style.opacity = '1';
                         particleContainer.appendChild(particle);
                         this.partyParticles.push({
                             el: particle,
@@ -2264,13 +2356,20 @@ connectAiradio();
                 if (discoContainer) {
                     discoContainer.innerHTML = '';
                     this.discoDots = [];
+                    this._dom.discoContainer = discoContainer;
                     for (let i = 0; i < 40; i++) {
                         const dot = document.createElement('div');
                         dot.className = 'disco-dot';
                         const baseX = Math.random() * 100;
                         const baseY = Math.random() * 100;
-                        dot.style.left = baseX + '%';
-                        dot.style.top = baseY + '%';
+                        // Positioned purely via transform; per-dot hue baked once, the
+                        // shared color cycle runs as hue-rotate on the container
+                        dot.style.left = '0';
+                        dot.style.top = '0';
+                        dot.style.opacity = '1';
+                        const baseHue = Math.round(Math.random() * 360);
+                        dot.style.background = `hsl(${baseHue}, 100%, 70%)`;
+                        dot.style.boxShadow = `0 0 16px hsl(${baseHue}, 100%, 50%)`;
                         discoContainer.appendChild(dot);
                         this.discoDots.push({
                             el: dot,
@@ -2278,8 +2377,7 @@ connectAiradio();
                             baseY: baseY,
                             angle: Math.random() * Math.PI * 2,
                             speed: 0.5 + Math.random() * 1.5,
-                            orbitRadius: 5 + Math.random() * 15,
-                            hueOffset: Math.random() * 360
+                            orbitRadius: 5 + Math.random() * 15
                         });
                     }
                 }
@@ -2319,6 +2417,10 @@ connectAiradio();
 
             startAnimation() {
                 if (this.animationId) return;
+                this._containersActive = false;
+                this._lastFrameTs = 0;
+                this._slowFrames = 0;
+                this._tickCount = 0;
                 this.animate();
             },
 
@@ -2327,11 +2429,11 @@ connectAiradio();
                     cancelAnimationFrame(this.animationId);
                     this.animationId = null;
                 }
-                const container = document.getElementById('party-effects-container');
-                if (container) container.classList.remove('active');
-                const oscContainer = document.getElementById('oscilloscope-container');
-                if (oscContainer) oscContainer.classList.remove('active');
-                document.querySelectorAll('.visualizer-container, .side-visualizer').forEach(el => {
+                this._containersActive = false;
+                const dom = this._dom;
+                if (dom && dom.partyContainer) dom.partyContainer.classList.remove('active');
+                if (dom && dom.oscContainer) dom.oscContainer.classList.remove('active');
+                (this._vizContainers || document.querySelectorAll('.visualizer-container, .side-visualizer')).forEach(el => {
                     el.classList.remove('active');
                 });
             },
@@ -2348,12 +2450,32 @@ connectAiradio();
                     return;
                 }
 
-                // Show effects container
-                const container = document.getElementById('party-effects-container');
-                if (container) container.classList.add('active');
-                document.querySelectorAll('.visualizer-container, .side-visualizer').forEach(el => {
-                    el.classList.add('active');
-                });
+                // Show effects containers (class toggles once, not every frame)
+                if (!this._containersActive) {
+                    if (this._dom.partyContainer) this._dom.partyContainer.classList.add('active');
+                    if (this._dom.oscContainer) this._dom.oscContainer.classList.add('active');
+                    this._vizContainers.forEach(el => el.classList.add('active'));
+                    this._updateCanvasSize(); // re-measure once per start in case layout changed while stopped
+                    this._containersActive = true;
+                }
+
+                // Frame governor: if >half the last 120 frames ran slow, drop to lite tier
+                const nowTs = performance.now();
+                if (this._lastFrameTs) {
+                    if (nowTs - this._lastFrameTs > 26) this._slowFrames++;
+                    if (++this._tickCount >= 120) {
+                        if (!this._lite && this._slowFrames > 60) {
+                            console.log('Visualizer: sustained slow frames — dropping to lite tier');
+                            this._applyLiteTier();
+                        }
+                        this._tickCount = 0;
+                        this._slowFrames = 0;
+                    }
+                }
+                this._lastFrameTs = nowTs;
+                this._frame++;
+                // Lite tier updates the DOM-heavy effects at 30Hz (CSS transitions smooth it)
+                const skipHeavy = this._lite && (this._frame & 1);
 
                 // Setup analyser if needed
                 if (!this.sourceNode1 && this.enabled) {
@@ -2397,59 +2519,56 @@ connectAiradio();
                     this.triggerSoundRipple(useBass);
                 }
 
-                // Update oscilloscope
+                // Update oscilloscope (every frame — it's the smooth background wave)
                 this.updateOscilloscope();
 
-                // Update particles and disco
-                this.updateParticles(useBass, useEnergy, time);
-                this.updateDiscoDots(useEnergy, useHighMid, useBass, useMid, time, isBeat);
-
-                // Update visualizer bars
-                this.updateVisualizerBars();
+                // DOM-heavy effects: 30Hz on the lite tier (beats carry over skipped frames)
+                if (skipHeavy) {
+                    if (isBeat) this._pendingBeat = true;
+                } else {
+                    this.updateParticles(useBass, useEnergy, time);
+                    this.updateDiscoDots(useEnergy, useHighMid, useBass, useMid, time, isBeat || this._pendingBeat);
+                    this.updateVisualizerBars();
+                    this._pendingBeat = false;
+                }
 
                 this.animationId = requestAnimationFrame(() => this.animate());
             },
 
-            // Update center glow - EXACT from ai-eyes
+            // Update center glow — compositor-only: the gradient + softness are baked
+            // into the CSS (fixed 600px element); per-frame we only touch transform,
+            // opacity, and filter (hue-rotate/brightness), never layout or paint.
             updateCenterGlow(useBass, useEnergy, useMid, isBeat) {
-                const glow = document.getElementById('center-glow');
+                const glow = this._dom.centerGlow;
                 if (!glow) return;
 
-                // Size pulses with bass (600px base, up to 1200px on heavy bass)
-                const size = 600 + useBass * 800;
+                // Size pulses with bass (600px base, up to 1400px on heavy bass)
+                const scale = 1 + (useBass * 800) / 600;
 
-                // Color shifts based on frequencies
-                const hue = 180 + useEnergy * 60 + useMid * 40;
-                const saturation = 80 + useBass * 20;
-                const lightness = 50;
+                // Color shift relative to the baked hue-180 gradient
+                const hueDelta = useEnergy * 60 + useMid * 40;
 
                 // Opacity based on energy
                 const opacity = 0.3 + useEnergy * 0.7;
 
-                glow.style.width = size + 'px';
-                glow.style.height = size + 'px';
-                glow.style.background = `radial-gradient(circle,
-                    hsla(${hue}, ${saturation}%, ${lightness}%, ${opacity * 0.4}) 0%,
-                    hsla(${hue - 30}, ${saturation}%, ${lightness - 20}%, ${opacity * 0.15}) 40%,
-                    transparent 70%)`;
-                glow.style.opacity = opacity;
+                // Extra punch on beat (~100ms brightness pop, no setTimeout churn)
+                if (isBeat) this._glowBeatUntil = Date.now() + 100;
+                const punch = Date.now() < this._glowBeatUntil ? ' brightness(1.3)' : '';
 
-                // Extra punch on beat
-                if (isBeat) {
-                    glow.style.filter = 'blur(40px)';
-                    setTimeout(() => glow.style.filter = 'blur(60px)', 100);
-                }
+                glow.style.transform = `translate(-50%, -50%) scale(${scale.toFixed(3)})`;
+                glow.style.opacity = opacity;
+                glow.style.filter = `hue-rotate(${hueDelta.toFixed(1)}deg)${punch}`;
             },
 
             triggerBeatFlash(useBass) {
-                const flash = document.getElementById('beat-flash');
+                const flash = this._dom.beatFlash;
                 if (!flash) return;
                 flash.style.opacity = Math.min(useBass * 0.6, 0.4);
                 setTimeout(() => flash.style.opacity = 0, 80);
             },
 
             triggerShake(useBass) {
-                const faceBox = document.getElementById('face-box');
+                const faceBox = this._dom.faceBox;
                 if (!faceBox) return;
                 faceBox.classList.add('shake');
                 faceBox.style.setProperty('--shake-amount', (useBass * 8) + 'px');
@@ -2458,103 +2577,114 @@ connectAiradio();
 
             triggerSoundRipple(useBass) {
                 if (useBass < 0.15) return;
-                const container = document.getElementById('ripple-container');
-                if (!container) return;
-                const ripple = document.createElement('div');
-                ripple.className = 'sound-ripple';
-                ripple.style.left = '50%';
-                ripple.style.top = '50%';
-                ripple.style.transform = 'translate(-50%, -50%)';
-                container.appendChild(ripple);
-                setTimeout(() => ripple.remove(), 1000);
+                if (!this._ripplePool || !this._ripplePool.length) return;
+
+                // Reuse a pooled element — restart its CSS animation instead of
+                // creating/destroying DOM nodes on every beat
+                const ripple = this._ripplePool[this._rippleIndex];
+                this._rippleIndex = (this._rippleIndex + 1) % this._ripplePool.length;
+                ripple.style.animation = 'none';
+                ripple.offsetHeight; // reflow on one tiny element restarts the animation
+                ripple.style.animation = '';
             },
 
-            // Oscilloscope - FULL SCREEN background effect - EXACT from ai-eyes
+            // Oscilloscope - FULL SCREEN background effect.
+            // Canvas is sized once (init/resize/tier change), never per frame.
+            // The old CSS double drop-shadow (a fullscreen GPU blur per frame) is
+            // replaced by layered strokes of one shared Path2D — same halo look.
             updateOscilloscope() {
-                const container = document.getElementById('oscilloscope-container');
-                if (!container) return;
-                if (!container.classList.contains('active')) {
-                    container.classList.add('active');
-                }
+                const ctx = this._dom.oscCtx;
+                if (!ctx) return;
 
-                const canvas = document.getElementById('oscilloscope-canvas');
-                if (!canvas) return;
-                const ctx = canvas.getContext('2d');
+                const w = this._oscW;
+                const h = this._oscH;
+                if (!w || !h) return;
 
-                // Set canvas size
-                canvas.width = canvas.offsetWidth * 2;
-                canvas.height = canvas.offsetHeight * 2;
+                ctx.clearRect(0, 0, w, h);
 
-                // Clear
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-                // Need time domain data for waveform
+                // timeDomainData already read in animate() — no duplicate read
                 if (!this.analyser || !this.timeDomainData) return;
-                this.analyser.getByteTimeDomainData(this.timeDomainData);
 
                 // Sample fewer points for smoother wave (every 16th point)
                 const sampleStep = 16;
                 const numSamples = Math.floor(this.timeDomainData.length / sampleStep);
-                const sliceWidth = canvas.width / numSamples;
+                const sliceWidth = w / numSamples;
+                const halfH = h / 2;
+                const ampScale = h * 0.35;
 
-                // Draw glow layer first (thicker, more transparent)
-                ctx.beginPath();
-                ctx.strokeStyle = 'rgba(0, 255, 255, 0.25)'; // --cyan with alpha
-                ctx.lineWidth = 20;
+                // Build the waveform path once, stroke it in layers
+                const path = new Path2D();
+                let x = 0;
+                for (let i = 0; i < numSamples; i++) {
+                    const v = this.timeDomainData[i * sampleStep] / 128.0;
+                    const y = halfH + (v - 1) * ampScale;
+                    if (i === 0) path.moveTo(x, y);
+                    else path.lineTo(x, y);
+                    x += sliceWidth;
+                }
+
                 ctx.lineCap = 'round';
                 ctx.lineJoin = 'round';
 
-                let x = 0;
-                for (let i = 0; i < numSamples; i++) {
-                    const dataIndex = i * sampleStep;
-                    const v = this.timeDomainData[dataIndex] / 128.0;
-                    const y = canvas.height / 2 + (v - 1) * canvas.height * 0.35;
+                // Widths are authored for the 2x canvas; halve on the 1x lite tier
+                // so on-screen thickness stays identical
+                const k = this._lite ? 0.5 : 1;
 
-                    if (i === 0) ctx.moveTo(x, y);
-                    else ctx.lineTo(x, y);
-                    x += sliceWidth;
-                }
-                ctx.stroke();
+                // Outer halo (replaces drop-shadow(0 0 60px --blue))
+                ctx.strokeStyle = 'rgba(0, 136, 255, 0.10)';
+                ctx.lineWidth = 60 * k;
+                ctx.stroke(path);
 
-                // Draw main bright line on top
-                ctx.beginPath();
+                // Inner halo (replaces drop-shadow(0 0 30px --cyan))
+                ctx.strokeStyle = 'rgba(0, 255, 255, 0.12)';
+                ctx.lineWidth = 32 * k;
+                ctx.stroke(path);
+
+                // Glow layer (thicker, more transparent)
+                ctx.strokeStyle = 'rgba(0, 255, 255, 0.25)'; // --cyan with alpha
+                ctx.lineWidth = 20 * k;
+                ctx.stroke(path);
+
+                // Main bright line on top
                 ctx.strokeStyle = '#00ffff'; // matches --cyan token
-                ctx.lineWidth = 6;
-                x = 0;
-
-                for (let i = 0; i < numSamples; i++) {
-                    const dataIndex = i * sampleStep;
-                    const v = this.timeDomainData[dataIndex] / 128.0;
-                    const y = canvas.height / 2 + (v - 1) * canvas.height * 0.35;
-
-                    if (i === 0) ctx.moveTo(x, y);
-                    else ctx.lineTo(x, y);
-                    x += sliceWidth;
-                }
-                ctx.stroke();
+                ctx.lineWidth = 6 * k;
+                ctx.stroke(path);
             },
 
-            // Update particles - EXACT from ai-eyes
+            // Update particles — one transform write per particle (compositor-only,
+            // vw/vh units replace the old left/top % layout writes); shared opacity
+            // rides on the container as a single write.
             updateParticles(useBass, useEnergy, time) {
+                const size = 4 + useEnergy * 8;
+                const scale = (size / 6).toFixed(3); // base CSS size is 6px
+                const opacity = 0.3 + useEnergy * 0.7;
+
+                if (this._dom.particleContainer) {
+                    this._dom.particleContainer.style.opacity = opacity;
+                }
+
                 this.partyParticles.forEach((p, i) => {
                     const radius = p.baseRadius + useBass * 200;
                     const orbitSpeed = 0.3 + (i % 5) * 0.1;
                     const x = 50 + Math.cos(time * orbitSpeed + p.angle) * (radius / 10);
                     const y = 50 + Math.sin(time * orbitSpeed * 0.7 + p.angle) * (radius / 15);
-                    const size = 4 + useEnergy * 8;
-
-                    p.el.style.left = x + '%';
-                    p.el.style.top = y + '%';
-                    p.el.style.width = size + 'px';
-                    p.el.style.height = size + 'px';
-                    p.el.style.opacity = 0.3 + useEnergy * 0.7;
+                    p.el.style.transform = `translate(${x.toFixed(2)}vw, ${y.toFixed(2)}vh) scale(${scale})`;
                 });
             },
 
-            // Update disco dots - EXACT from ai-eyes
+            // Update disco dots — one transform write per dot. The shared color cycle
+            // is a single hue-rotate on the container (per-dot base hue baked at init);
+            // the bass glow pulse rides the scale, which scales the baked box-shadow.
             updateDiscoDots(useEnergy, useHighMid, useBass, useMid, time, isBeat) {
                 const centerX = 50, centerY = 50;
-                this.discoDots.forEach((dot, i) => {
+                const hueShift = (time * 30 + useMid * 60) % 360;
+
+                if (this._dom.discoContainer) {
+                    this._dom.discoContainer.style.opacity = 0.3 + useEnergy * 0.7;
+                    this._dom.discoContainer.style.filter = `hue-rotate(${hueShift.toFixed(1)}deg)`;
+                }
+
+                this.discoDots.forEach((dot) => {
                     const dynamicRadius = dot.orbitRadius * (0.5 + useEnergy * 2);
                     const orbitX = Math.cos(time * dot.speed + dot.angle) * dynamicRadius;
                     const orbitY = Math.sin(time * dot.speed * 0.8 + dot.angle) * dynamicRadius;
@@ -2568,36 +2698,37 @@ connectAiradio();
                     let size = 0.4 + useHighMid * 0.6 + useBass * 0.4;
                     if (isBeat) size += 0.5;
 
-                    const hue = (dot.hueOffset + time * 30 + useMid * 60) % 360;
-
-                    dot.el.style.left = x + '%';
-                    dot.el.style.top = y + '%';
-                    dot.el.style.transform = `scale(${size})`;
-                    dot.el.style.opacity = 0.3 + useEnergy * 0.7;
-                    dot.el.style.background = `hsl(${hue}, 100%, 70%)`;
-                    dot.el.style.boxShadow = `0 0 ${10 + useBass * 20}px hsl(${hue}, 100%, 50%)`;
+                    dot.el.style.transform = `translate(${x.toFixed(2)}vw, ${y.toFixed(2)}vh) scale(${size.toFixed(3)})`;
                 });
             },
 
-            // Update visualizer bars - EXACT from ai-eyes with audioSensitivity
+            // Update visualizer bars — cached element arrays with precomputed
+            // multipliers and frequency bins; no per-frame DOM queries or parseFloat
             updateVisualizerBars() {
                 if (!this.frequencyData) return;
 
+                const freqData = this.frequencyData;
+                const sensitivity = this.audioSensitivity;
+
                 // Top and bottom bars - height based on frequency data
-                document.querySelectorAll('.visualizer-bar').forEach((bar, i) => {
-                    const mult = parseFloat(bar.dataset.centerMult) || 1;
-                    const bandIndex = Math.floor(i / this.NUM_BARS * 256);
-                    const level = (this.frequencyData[bandIndex] / 255 * this.audioSensitivity);
-                    bar.style.height = ((8 + level * 50) * mult) + 'px';
-                });
+                const vizBars = this._vizBars;
+                if (vizBars) {
+                    for (let i = 0; i < vizBars.length; i++) {
+                        const bar = vizBars[i];
+                        const level = freqData[bar.band] / 255 * sensitivity;
+                        bar.el.style.height = ((8 + level * 50) * bar.mult) + 'px';
+                    }
+                }
 
                 // Side bars - width based on frequency data
-                document.querySelectorAll('.side-bar').forEach((bar, i) => {
-                    const mult = parseFloat(bar.dataset.centerMult) || 1;
-                    const bandIndex = Math.floor(i / this.NUM_BARS * 256);
-                    const level = (this.frequencyData[bandIndex] / 255 * this.audioSensitivity);
-                    bar.style.width = ((15 + level * 70) * mult) + 'px';
-                });
+                const sideBars = this._sideBars;
+                if (sideBars) {
+                    for (let i = 0; i < sideBars.length; i++) {
+                        const bar = sideBars[i];
+                        const level = freqData[bar.band] / 255 * sensitivity;
+                        bar.el.style.width = ((15 + level * 70) * bar.mult) + 'px';
+                    }
+                }
             },
 
             setEnabled(enabled) {
