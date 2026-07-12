@@ -1615,7 +1615,9 @@ def _conversation_inner():
             context_parts.append(
                 f'[CANVAS_STYLE: The user chose the "{_style_id}" design system for all '
                 f'canvas pages. BEFORE creating or restyling ANY canvas page you MUST '
-                f'read /app/runtime/canvas-pages/canvas-styles/ACTIVE-STYLE.md and start '
+                f'read canvas-styles/ACTIVE-STYLE.md inside your canvas-pages directory '
+                f'(OpenClaw: /app/runtime/canvas-pages/canvas-styles/ACTIVE-STYLE.md; '
+                f'Hermes: /workspace/canvas-pages/canvas-styles/ACTIVE-STYLE.md) and start '
                 f'by cp-ing canvas-styles/active-template.html to the new page file, then '
                 f'edit the copy (keep its full <style> block — never retype the template). '
                 f'Never use the old dark default. '
