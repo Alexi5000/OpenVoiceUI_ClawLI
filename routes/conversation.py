@@ -2797,8 +2797,15 @@ def _conversation_inner():
                                 _tts_pending.append(_fire_tts(_remaining))
                                 _tts_buf = ''
 
-                            # Fallback: no sentences extracted (very short response)
-                            if not _tts_pending and full_response:
+                            # Fallback: no sentences extracted (very short response).
+                            # Guard on _chunks_sent, NOT just _tts_pending: the delta
+                            # path pops sentences from _tts_pending as their audio is
+                            # yielded, so on short fast replies the list is already
+                            # empty at text_done and this fallback re-spoke the WHOLE
+                            # reply a second time (double audio, 2026-07-12).
+                            # _chunks_sent counts audio actually delivered — if any
+                            # went out, streaming TTS already covered the text.
+                            if not _tts_pending and _chunks_sent == 0 and full_response:
                                 tts_text = clean_for_tts(full_response)
                                 if tts_text and tts_text.strip():
                                     _tts_pending.append(_fire_tts(tts_text))
