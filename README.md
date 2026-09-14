@@ -49,7 +49,7 @@ Engineering teams spend months drowning in audio pipelines, Web Speech vs. strea
 
 ## The Voice Council
 
-Rather than speaking to a single generic assistant, the ClawLI Voice Interface deploys the **Voice Council** &mdash; a multi-agent executive triad that speaks, reasons, and coordinates live:
+Rather than speaking to a single generic assistant, the ClawLI Voice Interface deploys the **Voice Council**, a multi-agent executive triad that speaks, reasons, and coordinates live:
 
 ```text
                ┌───────────────────────────────┐
@@ -211,10 +211,10 @@ TechTide actively hardens and contributes foundational improvements back to the 
 
 ## Core Contributors
 
-* **Alex Cinovoj** ([@Alexi5000](https://github.com/Alexi5000)) &mdash; Lead Architect, TechTide AI Founder (Voice Council design, ClawLI integration, upstream PRs #320, #321, #322).
-* **Marco Cerqua** ([@MCERQUA](https://github.com/MCERQUA)) &mdash; Original Creator and Core Maintainer of OpenVoiceUI.
-* **Claude Nexus** (Mentropic / Anthropic) &mdash; AI Systems Architect (Voice Council protocols, system prompt engineering, multi-agent pipelines).
-* **Gemini** (Google DeepMind / Antigravity) &mdash; AI Systems Architect (Three-tier synchronization, Windows runtime hardening, test verification, copywriting overhaul).
+* **Alex Cinovoj** ([@Alexi5000](https://github.com/Alexi5000)): Lead Architect, TechTide AI Founder (Voice Council design, ClawLI integration, upstream PRs #320, #321, #322).
+* **Marco Cerqua** ([@MCERQUA](https://github.com/MCERQUA)): Original Creator and Core Maintainer of OpenVoiceUI.
+* **Claude Nexus** (Mentropic / Anthropic): AI Systems Architect (Voice Council protocols, system prompt engineering, multi-agent pipelines).
+* **Gemini** (Google DeepMind / Antigravity): AI Systems Architect (Three-tier synchronization, Windows runtime hardening, test verification, copywriting overhaul).
 
 See [CONTRIBUTORS.md](CONTRIBUTORS.md) for detailed attribution and technical history.
 

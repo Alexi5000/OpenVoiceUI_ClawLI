@@ -82,7 +82,7 @@ That separation of concerns was exactly what we needed.
 
 We forked the repo to create our internal production engine: **`OpenVoiceUI_ClawLI`**.
 
-We wired OpenVoiceUI to **ClawLI**, TechTide's multi-agent orchestrator. Instead of a single generic voice assistant, we built the **Voice Council** — a triad of distinct agent personas designed for executive decision-making:
+We wired OpenVoiceUI to **ClawLI**, TechTide's multi-agent orchestrator. Instead of a single generic voice assistant, we built the **Voice Council**, a triad of distinct agent personas designed for executive decision-making:
 
 ### The Voice Council Roster
 

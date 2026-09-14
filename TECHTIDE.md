@@ -1,4 +1,4 @@
-# TechTide AI — Why This Fork Exists
+# TechTide AI: Why This Fork Exists
 
 ## Overview
 
@@ -15,7 +15,7 @@ By adopting and hardening OpenVoiceUI, TechTide was able to deliver a full multi
 ## What TechTide Uses This For
 
 - **ClawLI Voice Interface:** The primary audio/visual I/O layer for ClawLI agents, routing streaming STT, LLM inference, and low-latency TTS.
-- **The Voice Council:** A triad of executive voice agents—**Prime** (CEO / Lead Strategist), **Veronica** (Data & Operations), and **Rose** (Counsel & Client Nuance)—who speak with unique cloned voices and delegate deep operational tasks to over 100+ back-office specialist agents.
+- **The Voice Council:** A triad of executive voice agents: **Prime** (CEO / Lead Strategist), **Veronica** (Data & Operations), and **Rose** (Counsel & Client Nuance), who speak with unique cloned voices and delegate deep operational tasks to over 100+ back-office specialist agents.
 - **Live Canvas Workspaces:** Dynamic, full-screen iframe rendering of client dashboards, live code diffs, interactive maps, and reports generated in real time as the agent speaks.
 - **Interactive Client Demos:** Zero-latency executive demos showcasing autonomous multi-agent systems with voice conversation and synchronized visual displays.
 
