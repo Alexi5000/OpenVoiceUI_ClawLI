@@ -2600,7 +2600,8 @@ if __name__ == "__main__":
         os._exit(0)
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
-    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
     try:
         from services.gateways.openclaw import OPENCLAW_TESTED_VERSION
