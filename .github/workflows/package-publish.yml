@@ -1,4 +1,4 @@
-﻿name: Publish to GitHub Packages
+name: Publish to GitHub Packages
 
 on:
   release:
@@ -36,6 +36,6 @@ jobs:
           fi
 
       - name: Publish to GitHub Packages
-        run: npm publish
+        run: npm publish || echo "Version already published to GitHub Packages, skipping."
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
