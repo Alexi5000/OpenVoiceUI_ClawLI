@@ -38,6 +38,7 @@ The development and evolution of the **TechTide ClawLI Voice Interface** (`OpenV
 ### 3. Claude Nexus
 * **Role:** AI Systems Architect & Co-Engineer
 * **Affiliation:** Mentropic / Anthropic Claude
+* **GitHub:** [@claude](https://github.com/claude)
 * **Contributions:**
   * Multi-agent orchestration protocols and agent council design.
   * System prompt engineering for Prime, Veronica, and Rose.
@@ -49,6 +50,7 @@ The development and evolution of the **TechTide ClawLI Voice Interface** (`OpenV
 ### 4. Gemini
 * **Role:** AI Systems Architect & Co-Engineer
 * **Affiliation:** Google DeepMind / Antigravity
+* **GitHub:** [@gemini-code-assist](https://github.com/gemini-code-assist)
 * **Contributions:**
   * Repository multi-tier synchronization and upstream release integration.
   * Windows signal handling and runtime compatibility hardening.
