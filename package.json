@@ -1,7 +1,7 @@
 {
-  "name": "openvoiceui",
+  "name": "@alexi5000/openvoiceui-clawli",
   "version": "2026.9.7",
-  "description": "Voice-powered AI assistant platform \u2014 connect any LLM, any TTS, with a live web canvas, music generation, and agent orchestration",
+  "description": "TechTide ClawLI Voice Interface. Connect any LLM, any TTS, with a live web canvas, music generation, and agent orchestration.",
   "bin": {
     "openvoiceui": "cli/index.js"
   },
@@ -26,17 +26,22 @@
     "text-to-speech",
     "voice-interface",
     "ai-music",
-    "docker"
+    "docker",
+    "techtide",
+    "clawli"
   ],
-  "author": "MCERQUA",
+  "author": "Alex Cinovoj, MCERQUA",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MCERQUA/OpenVoiceUI.git"
+    "url": "git+https://github.com/Alexi5000/OpenVoiceUI_ClawLI.git"
   },
-  "homepage": "https://github.com/MCERQUA/OpenVoiceUI",
+  "homepage": "https://alexi5000.github.io/OpenVoiceUI_ClawLI/",
   "bugs": {
-    "url": "https://github.com/MCERQUA/OpenVoiceUI/issues"
+    "url": "https://github.com/Alexi5000/OpenVoiceUI_ClawLI/issues"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "engines": {
     "node": ">=18"

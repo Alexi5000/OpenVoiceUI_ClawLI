@@ -1,16 +1,17 @@
-name: Publish to npm
+﻿name: Publish to GitHub Packages
 
 on:
   release:
     types: [published]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment: npm-release
-
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -19,12 +20,12 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@alexi5000"
 
       - name: Sync version from release tag
         if: github.event_name == 'release'
         run: |
-          # Strip leading 'v' if present (e.g. v2026.3.28 -> 2026.3.28)
           TAG="${GITHUB_REF_NAME#v}"
           CURRENT=$(node -p "require('./package.json').version")
           if [ "$TAG" != "$CURRENT" ]; then
@@ -34,8 +35,7 @@ jobs:
             echo "Version already matches: $TAG"
           fi
 
-      - name: Publish
-        if: ${{ secrets.NPM_TOKEN != '' }}
-        run: npm publish --access public
+      - name: Publish to GitHub Packages
+        run: npm publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
