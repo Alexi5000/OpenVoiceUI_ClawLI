@@ -1,4 +1,4 @@
-﻿# Gemini DeepMind Systems Runtime and Telemetry
+# Gemini DeepMind Systems Runtime and Telemetry
 
 ## 1. Executive Summary
 
@@ -10,7 +10,7 @@ High-reliability multimodal agent interactions demand deterministic latency boun
 
 ## 2. Telemetry and Latency Thresholds
 
-* **First Audio Latency (FAL)**: Target <= 850ms from speech transcription completion to first audible phoneme.
+* **First Audio Latency (FAL)**: Target under 850ms from speech transcription completion to first audible phoneme.
 * **TTS Chunk Size Control**: Primary TTS audio buffers are capped at 60 characters to initiate playback before downstream synthesis finishes.
 * **WebSocket Heartbeat Budget**: Connection ping/pong intervals are strictly monitored; 3 consecutive dropped frames trigger proactive reconnection.
 * **Canvas ETag Cache Validation**: Desktop state polling utilizes HTTP ETags to eliminate redundant JSON payload serialization.
