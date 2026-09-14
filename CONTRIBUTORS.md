@@ -18,6 +18,7 @@ The development and evolution of the **TechTide ClawLI Voice Interface** (`OpenV
     * **PR #321:** Config constants extraction architecture.
     * **PR #322:** `jsconfig.json` IDE module path mappings and developer tooling.
   * Windows platform resilience and production deployment hardening.
+  * Architecture Specification: [TechTide ClawLI Multi-Agent Autonomous Architecture](docs/architecture/techtide-clawli-architecture.md)
 
 ---
 
@@ -32,6 +33,7 @@ The development and evolution of the **TechTide ClawLI Voice Interface** (`OpenV
     * Native Canvas fullscreen iframe streaming architecture.
     * Multi-provider STT and TTS engine adapters.
   * Ongoing upstream maintenance, security auditing, and releases through `v2026.9.7`.
+  * Foundation Architecture: [OpenVoiceUI Upstream Architectural Foundation](docs/architecture/openvoice-upstream-foundation.md)
 
 ---
 
@@ -44,6 +46,7 @@ The development and evolution of the **TechTide ClawLI Voice Interface** (`OpenV
   * System prompt engineering for Prime, Veronica, and Rose.
   * Architectural documentation, code review, and upstream contribution preparation.
   * Long-form narrative documentation and production case history.
+  * Cognitive Specification: [Claude Nexus Cognitive Orchestration Engine](docs/architecture/claude-nexus-orchestration.md)
 
 ---
 
@@ -56,6 +59,7 @@ The development and evolution of the **TechTide ClawLI Voice Interface** (`OpenV
   * Windows signal handling and runtime compatibility hardening.
   * Test automation, schema verification, and CI/CD validation.
   * Copywriting overhaul, repository restructuring, and branch hygiene.
+  * Runtime Specification: [Gemini DeepMind Systems Runtime and Telemetry](docs/architecture/gemini-deepmind-runtime.md)
 
 ---
 
@@ -65,3 +69,4 @@ We build tools that prioritize:
 1. **Zero Framework Bloat:** Fast, inspectable, vanilla code that runs directly in standard runtimes.
 2. **Production Reliability:** Low-latency streaming, resilient WebSockets, and defensive error handling.
 3. **Open Collaboration:** Active upstream contributions that strengthen the entire open-source ecosystem.
+

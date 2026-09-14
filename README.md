@@ -211,10 +211,10 @@ TechTide actively hardens and contributes foundational improvements back to the 
 
 ## Core Contributors
 
-* **Alex Cinovoj** ([@Alexi5000](https://github.com/Alexi5000)): Lead Architect, TechTide AI Founder (Voice Council design, ClawLI integration, upstream PRs #320, #321, #322).
-* **Marco Cerqua** ([@MCERQUA](https://github.com/MCERQUA)): Original Creator and Core Maintainer of OpenVoiceUI.
-* **Claude Nexus** ([@claude](https://github.com/claude)): AI Systems Architect, Mentropic / Anthropic (Voice Council protocols, system prompt engineering, multi-agent pipelines).
-* **Gemini** ([@gemini-code-assist](https://github.com/gemini-code-assist)): AI Systems Architect, Google DeepMind / Antigravity (Three-tier synchronization, Windows runtime hardening, test verification, copywriting overhaul).
+* **Alex Cinovoj** ([@Alexi5000](https://github.com/Alexi5000)): Lead Architect, TechTide AI Founder (Voice Council design, ClawLI integration, [Architecture Specification](docs/architecture/techtide-clawli-architecture.md)).
+* **Mike Cerqua** ([@MCERQUA](https://github.com/MCERQUA)): Original Creator and Core Maintainer of OpenVoiceUI ([Foundation Architecture](docs/architecture/openvoice-upstream-foundation.md)).
+* **Claude Nexus** ([@claude](https://github.com/claude)): AI Systems Architect, Mentropic / Anthropic ([Cognitive Specification](docs/architecture/claude-nexus-orchestration.md)).
+* **Gemini** ([@gemini-code-assist](https://github.com/gemini-code-assist)): AI Systems Architect, Google DeepMind / Antigravity ([Runtime Specification](docs/architecture/gemini-deepmind-runtime.md)).
 
 See [CONTRIBUTORS.md](CONTRIBUTORS.md) for detailed attribution and technical history.
 
