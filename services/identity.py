@@ -226,6 +226,19 @@ def resolve(clerk_user_id: Optional[str]) -> Optional[dict]:
     return _load_registry().get(clerk_user_id)
 
 
+# Appended only when the signed-in person has a KNOWN home tenant that is not this one (the
+# same measured condition as the "not their own" text). A "granted" row has no home tenant and
+# can be the real owner (Example Partner is granted on tenant-k), so it never gets this line.
+# 2026-10-01: a sub-admin asked tenant-c's agent for a Facebook/Instagram stats pull; the agent filed it as "Request from tenant-c tenant (Owner C)",
+# and when the results came back on a mesh wake it texted them to Owner C, the owner, who never
+# asked. The tag already said "not their own" tenant; it never said where the results go.
+NOT_OWNER_DELIVERY = (
+    ' They are not the owner of this account. Whatever they ask for is THEIR request: give the'
+    ' results back to them, never to the account owner unless they say so. When you hand their'
+    ' request to another agent, name them as the requester.'
+)
+
+
 def get_current_user_tag(clerk_user_id: Optional[str], tenant: Optional[str] = None) -> Optional[str]:
     """
     Build the [CURRENT_USER: ...] context tag that gets prepended to gateway
@@ -267,6 +280,8 @@ def get_current_user_tag(clerk_user_id: Optional[str], tenant: Optional[str] = N
         else:
             location = ''
         body = f'{name}{title_part} —{location} {notes}'.strip()
+        if tenant and user_tenant and tenant != user_tenant:
+            body += NOT_OWNER_DELIVERY
         return f'[CURRENT_USER: {body}]'
 
     if role == 'client':
@@ -277,6 +292,8 @@ def get_current_user_tag(clerk_user_id: Optional[str], tenant: Optional[str] = N
         else:
             location = ''
         body = f'{name}{title_part}{location} {notes}'.strip()
+        if tenant and user_tenant and tenant != user_tenant:
+            body += NOT_OWNER_DELIVERY
         tag = f'[CURRENT_USER: {body}]'
         # Append the office briefing for clients (the secretary's brief).
         # This is the difference between greeting them as "user" vs greeting
