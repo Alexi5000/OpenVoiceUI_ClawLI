@@ -2028,8 +2028,10 @@ def _conversation_inner():
         # a non-admin customer get NO mesh access; admin sessions get full
         # both-direction access. host/test-dev/webtops bypass the gate.
         # See /mnt/system/base/skills/agent-mesh/bin/mesh-gate-check.
-        ADMIN_CLERK_ID = 'user_ADMIN_ID_FROM_ENV'
-        if _clerk_uid == ADMIN_CLERK_ID:
+        # The platform operator comes from PLATFORM_ADMIN_USER_IDS (services/auth.py);
+        # no id is built into the source.
+        from services.auth import is_platform_admin as _is_platform_admin
+        if _is_platform_admin(_clerk_uid):
             try:
                 _gate_path = '/app/runtime/uploads/.mesh-admin-session'
                 _ts_iso = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
