@@ -76,11 +76,60 @@ def test_github_fallback_rejects_invalid_repository_urls(monkeypatch, url):
         get.assert_not_called()
 
 
-def test_github_fallback_preserves_repository_name(monkeypatch):
+def _no_local_sha(monkeypatch):
     monkeypatch.delenv('GIT_COMMIT', raising=False)
-    with patch.object(registry.subprocess, 'check_output', side_effect=OSError), patch.object(registry.os.path, 'exists', return_value=False), patch.object(registry.requests, 'get') as get:
+    return (patch.object(registry.subprocess, 'check_output', side_effect=OSError),
+            patch.object(registry.os.path, 'exists', return_value=False))
+
+
+@pytest.mark.parametrize('configured, requested', [
+    ('MCERQUA/OpenVoiceUI', 'https://github.com/MCERQUA/OpenVoiceUI'),
+    ('MCERQUA/OpenVoiceUI', 'https://github.com/mcerqua/openvoiceui.git'),
+    ('owner/legit.name', 'https://github.com/owner/legit.name/'),
+])
+def test_github_fallback_uses_configured_repository(monkeypatch, configured, requested):
+    monkeypatch.setenv('OPENVOICE_GITHUB_REPO', configured)
+    a, b = _no_local_sha(monkeypatch)
+    with a, b, patch.object(registry.requests, 'get') as get:
         get.return_value.ok = True
         get.return_value.text = 'a' * 40
-        assert registry._get_git_sha('https://github.com/owner/legit.git') == 'a' * 40
-        assert get.call_args.args[0] == 'https://api.github.com/repos/owner/legit/commits/main'
+        assert registry._get_git_sha(requested) == 'a' * 40
+        # URL is built only from the fixed prefix and the operator configuration.
+        assert get.call_args.args[0] == f'https://api.github.com/repos/{configured}/commits/main'
         assert get.call_args.kwargs['allow_redirects'] is False
+
+
+def test_github_fallback_default_repository(monkeypatch):
+    monkeypatch.delenv('OPENVOICE_GITHUB_REPO', raising=False)
+    a, b = _no_local_sha(monkeypatch)
+    with a, b, patch.object(registry.requests, 'get') as get:
+        get.return_value.ok = True
+        get.return_value.text = 'b' * 40
+        assert registry._get_git_sha('https://github.com/MCERQUA/OpenVoiceUI') == 'b' * 40
+        assert get.call_args.args[0] == 'https://api.github.com/repos/MCERQUA/OpenVoiceUI/commits/main'
+
+
+@pytest.mark.parametrize('requested', [
+    'https://github.com/other/repo',                 # valid shape, not the configured repo
+    'https://github.com/MCERQUA/OpenVoiceUI/../x',
+    'https://github.com/MCERQUA/OpenVoiceUI%2F..',
+    'https://github.com/MCERQUA/OpenVoiceUI/commits',
+    'https://github.com/MCERQUA/Open%0aVoiceUI',
+    'https://github.com/-bad/repo',
+    'https://github.com:443@evil.test/MCERQUA/OpenVoiceUI',
+])
+def test_github_fallback_rejects_unconfigured_or_malformed_repository(monkeypatch, requested):
+    monkeypatch.delenv('OPENVOICE_GITHUB_REPO', raising=False)
+    a, b = _no_local_sha(monkeypatch)
+    with a, b, patch.object(registry.requests, 'get') as get:
+        assert registry._get_git_sha(requested) == ''
+        get.assert_not_called()
+
+
+@pytest.mark.parametrize('configured', ['bad', '../x/y', 'a/b/c', 'owner/..', 'owner/repo?x=1'])
+def test_github_fallback_rejects_invalid_configuration(monkeypatch, configured):
+    monkeypatch.setenv('OPENVOICE_GITHUB_REPO', configured)
+    a, b = _no_local_sha(monkeypatch)
+    with a, b, patch.object(registry.requests, 'get') as get:
+        assert registry._get_git_sha('https://github.com/' + configured) == ''
+        get.assert_not_called()

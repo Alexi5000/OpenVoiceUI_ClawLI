@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from flask import Blueprint, jsonify, request, send_file
 from services.paths import RUNTIME_DIR
+from services.safe_paths import UnsafePathError, safe_join
 
 workspace_bp = Blueprint('workspace', __name__)
 
@@ -57,22 +58,19 @@ def _writable_path(rel: str):
     if base is None:
         return None
     sub = parts[1] if len(parts) > 1 else ''
-    target = (base / sub).resolve()
-    # Safety: ensure it stays within the writable base
+    # Safety: the result must stay within the writable base (no traversal,
+    # absolute paths or symlink escapes).
     try:
-        target.relative_to(base.resolve())
-    except ValueError:
+        return safe_join(base, sub)
+    except UnsafePathError:
         return None
-    return target
 
 
 def _resolve(rel: str):
     """Resolve relative path safely within WORKSPACE_DIR. Returns None on traversal."""
     try:
-        p = (WORKSPACE_DIR / rel.lstrip('/')).resolve()
-        p.relative_to(WORKSPACE_DIR.resolve())  # raises ValueError if outside
-        return p
-    except (ValueError, Exception):
+        return safe_join(WORKSPACE_DIR, rel.lstrip('/'))
+    except (UnsafePathError, TypeError, OSError):
         return None
 
 
