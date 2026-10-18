@@ -78,6 +78,8 @@ def _save_generated_image(url: str, ext_hint: str = 'jpg') -> str:
     Returns the permanent /uploads/... server URL. Raises on download failure."""
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     ext = url.rsplit('.', 1)[-1].split('?')[0][:4] if '.' in url.rsplit('/', 1)[-1] else ext_hint
+    if ext not in {'jpg', 'jpeg', 'png', 'webp', 'gif'}:
+        ext = 'jpg'
     filename = f'ai-gen-{int(time.time() * 1000)}.{ext}'
     path = UPLOADS_DIR / filename
     content = download_public(url, max_bytes=64 * 1024 * 1024, timeout=60)

@@ -66,6 +66,10 @@ def _unique_name(stem: str, ext: str = '.glb') -> str:
 
 def _download_and_save(url: str, dest: Path) -> bool:
     try:
+        filename = dest.name
+        if not re.fullmatch(r'[A-Za-z0-9_-]+\.(?:glb|png|jpg|jpeg|webp)', filename):
+            raise ValueError('Invalid model download filename')
+        dest = CANVAS_DIR / filename
         content = download_public(url, max_bytes=256 * 1024 * 1024, timeout=60)
         CANVAS_DIR.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(content)

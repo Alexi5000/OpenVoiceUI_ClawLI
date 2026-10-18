@@ -20,6 +20,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -1685,10 +1686,14 @@ def _find_stem_urls(obj, found: dict):
 
 def _persist_stem_urls(urls: dict, name_stem: str) -> dict:
     """Download remote stem URLs into the stems dir. Returns local URLs saved."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', name_stem):
+        raise ValueError('Invalid stem filename')
     stems_dir = _stems_dir()
     stems_dir.mkdir(parents=True, exist_ok=True)
     saved = {}
     for kind_key, url in urls.items():
+        if kind_key not in {'vocal', 'instrumental'}:
+            continue
         if not _is_safe_download_url(url) or not url.lower().startswith('https://'):
             continue
         p = stems_dir / f'{name_stem}-{kind_key}.mp3'
@@ -1696,7 +1701,7 @@ def _persist_stem_urls(urls: dict, name_stem: str) -> dict:
             try:
                 content = download_public(url, max_bytes=SUNO_MAX_DOWNLOAD_BYTES, timeout=120, require_https=True)
                 p.write_bytes(content)
-                logger.info(f'stems: downloaded {kind_key} → {p.name} ({len(content)} bytes)')
+                logger.info('Downloaded stem audio (%d bytes)', len(content))
             except Exception as exc:
                 logger.warning(f'stems: download failed ({kind_key}): {exc}')
                 continue
@@ -2502,7 +2507,7 @@ def suno_callback():
                             content = download_public(audio_url, max_bytes=SUNO_MAX_DOWNLOAD_BYTES,
                                                       timeout=60, require_https=_require_https)
                             save_path.write_bytes(content)
-                            logger.info(f'Callback downloaded: {song_title} → {filename}')
+                            logger.info('Downloaded callback audio (%d bytes)', len(content))
 
                             # Find matching job
                             prompt = ''
