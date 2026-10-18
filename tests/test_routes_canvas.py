@@ -235,3 +235,43 @@ class TestHandlePageMetadataManifestWrite:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["status"] == "ok"
+
+
+@pytest.mark.parametrize('route,method,base', [
+    ('/canvas-sse/', 'GET', 'http://localhost:3030/'),
+    ('/canvas-session/', 'GET', 'http://localhost:3002/api/session/'),
+    ('/canvas-session/', 'POST', 'http://localhost:3002/api/session/'),
+    ('/website-dev/', 'GET', 'http://localhost:15050/'),
+    ('/website-dev/', 'POST', 'http://localhost:15050/'),
+    ('/website-dev/', 'PUT', 'http://localhost:15050/'),
+    ('/website-dev/', 'DELETE', 'http://localhost:15050/'),
+])
+def test_proxy_preserves_path_boundary_and_disables_redirects(canvas_client, route, method, base, monkeypatch):
+    import routes.canvas as canvas
+    import requests
+    monkeypatch.setattr(canvas, 'CANVAS_SSE_PORT', 3030)
+    monkeypatch.setattr(canvas, 'CANVAS_SESSION_PORT', 3002)
+    monkeypatch.setattr(canvas, 'WEBSITE_DEV_PORT', 15050)
+    with patch.object(canvas.http_requests, method.lower()) as send:
+        send.return_value.status_code = 200
+        send.return_value.headers = {'content-type': 'application/json'}
+        send.return_value.iter_content.return_value = [b'{}']
+        send.return_value.json.return_value = {'ok': True}
+        response = canvas_client.open(route + 'nested/a%3Fb%23c%40evil.test?legit=value', method=method, json={})
+        assert response.status_code == 200
+        url = send.call_args.args[0]
+        prepared = requests.Request(method, url).prepare()
+        assert prepared.url == base + 'nested/a%3Fb%23c%40evil.test'
+        assert send.call_args.kwargs['allow_redirects'] is False
+        if route == '/website-dev/' and method == 'GET':
+            assert send.call_args.kwargs['params']['legit'] == 'value'
+
+
+@pytest.mark.parametrize('route', ['/canvas-sse/', '/canvas-session/', '/website-dev/'])
+@pytest.mark.parametrize('path', ['../admin', 'folder/../admin', 'folder/./admin', 'folder%5Cadmin', 'folder%00admin'])
+def test_proxy_rejects_traversal_and_control_characters(canvas_client, route, path):
+    import routes.canvas as canvas
+    with patch.object(canvas.http_requests, 'get') as send:
+        response = canvas_client.get(route + path)
+        assert response.status_code == 400
+        send.assert_not_called()
