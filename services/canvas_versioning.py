@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 from services.paths import CANVAS_PAGES_DIR
+from services.safe_paths import UnsafePathError, safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def _save_version(filename: str, old_content: bytes) -> Path | None:
         suffix = p.suffix or '.html'   # preserve original extension (svg/json/… not just html)
         timestamp = int(time.time())
         version_name = f'{stem}.{timestamp}{suffix}'
-        version_path = _versions_dir() / version_name
+        version_path = safe_join(_versions_dir(), version_name, allow_base=False)
         version_path.write_bytes(old_content)
         logger.info(f'Canvas version saved: {version_name} ({len(old_content)} bytes)')
         _cleanup_versions(stem, suffix)
@@ -232,8 +233,12 @@ def list_versions(page_id: str) -> list[dict]:
 
 def restore_version(page_id: str, timestamp: int) -> bool:
     """Restore a specific version, saving the current as a new version first."""
-    version_file = _versions_dir() / f'{page_id}.{timestamp}.html'
-    current_file = CANVAS_PAGES_DIR / f'{page_id}.html'
+    try:
+        version_file = safe_join(_versions_dir(), f'{page_id}.{int(timestamp)}.html', allow_base=False)
+        current_file = safe_join(CANVAS_PAGES_DIR, f'{page_id}.html', allow_base=False)
+    except (UnsafePathError, TypeError, ValueError):
+        logger.error(f'Invalid version restore request: {page_id!r}')
+        return False
 
     if not version_file.exists():
         logger.error(f'Version not found: {version_file}')
@@ -258,7 +263,10 @@ def restore_version(page_id: str, timestamp: int) -> bool:
 
 def get_version_content(page_id: str, timestamp: int) -> bytes | None:
     """Get the content of a specific version."""
-    version_file = _versions_dir() / f'{page_id}.{timestamp}.html'
+    try:
+        version_file = safe_join(_versions_dir(), f'{page_id}.{int(timestamp)}.html', allow_base=False)
+    except (UnsafePathError, TypeError, ValueError):
+        return None
     if version_file.exists():
         return version_file.read_bytes()
     return None

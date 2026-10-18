@@ -162,7 +162,9 @@ def extract():
         return jsonify({'error': 'File too large (25 MB max)'}), 413
 
     # Write to a secure temp file
-    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+    # Use the server-defined constant suffix (never the client's string).
+    tmp_suffix = next(e for e in sorted(ALLOWED_EXTRACT_EXTENSIONS) if e == ext)
+    with tempfile.NamedTemporaryFile(suffix=tmp_suffix, delete=False) as tmp:
         tmp_path = Path(tmp.name)
         f.save(tmp_path)
 
@@ -219,7 +221,9 @@ def analyze_csv():
     if size > MAX_FILE_BYTES:
         return jsonify({'error': 'File too large (25 MB max)'}), 413
 
-    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+    # Use the server-defined constant suffix (never the client's string).
+    tmp_suffix = next(e for e in sorted(ALLOWED_CSV_EXTENSIONS) if e == ext)
+    with tempfile.NamedTemporaryFile(suffix=tmp_suffix, delete=False) as tmp:
         tmp_path = Path(tmp.name)
         f.save(tmp_path)
 

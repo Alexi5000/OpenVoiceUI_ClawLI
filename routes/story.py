@@ -17,6 +17,8 @@ import threading
 from pathlib import Path
 
 import httpx
+
+from services.safe_paths import UnsafePathError, safe_join
 from flask import Blueprint, jsonify, request
 
 logger = logging.getLogger(__name__)
@@ -193,6 +195,14 @@ def gen_tts_line(text: str, char_key: str, out_path: Path) -> bool:
     return False
 
 
+def _scene_file(story_dir: Path, name: str):
+    """Contained path for a scene asset inside story_dir, or None if unsafe."""
+    try:
+        return safe_join(story_dir, name, allow_base=False)
+    except UnsafePathError:
+        return None
+
+
 # ── Main endpoint ─────────────────────────────────────────────────────────────
 
 @story_bp.route('/api/story/generate-scene', methods=['POST'])
@@ -208,6 +218,11 @@ def generate_scene():
     if not choice_text:
         return jsonify({'error': 'choice_text required'}), 400
 
+    try:
+        story_dir = safe_join(CANVAS_PAGES_DIR, 'stories', str(story_id), allow_base=False)
+    except UnsafePathError:
+        return jsonify({'error': 'invalid story_id'}), 400
+
     # 1. Generate scene JSON via LLM
     try:
         scene_data = generate_scene_json(choice_text, scene_history, genre, tone)
@@ -216,7 +231,6 @@ def generate_scene():
         return jsonify({'error': f'Scene generation failed: {e}'}), 500
 
     scene_id = f'scene_{scene_index:03d}'
-    story_dir = CANVAS_PAGES_DIR / 'stories' / story_id
     story_dir.mkdir(parents=True, exist_ok=True)
     try:
         story_dir.chmod(0o777)
@@ -229,7 +243,7 @@ def generate_scene():
     errors = []
 
     # Image
-    image_file = story_dir / f'{scene_id}_image.jpg'
+    image_file = _scene_file(story_dir, f'{scene_id}_image.jpg')
     def do_image():
         if not gen_image(scene_data.get('image_prompt', 'dark fantasy scene'), image_file):
             errors.append('image')
@@ -237,7 +251,7 @@ def generate_scene():
 
     # Ambient sound
     ambient = scene_data.get('ambient', {})
-    ambient_file = story_dir / f'{scene_id}_ambient.mp3'
+    ambient_file = _scene_file(story_dir, f'{scene_id}_ambient.mp3')
     def do_ambient():
         if not gen_suno_sound(
             ambient.get('prompt', 'dark ambient atmosphere'),
@@ -255,7 +269,9 @@ def generate_scene():
         if not _sfx.get('id'):
             _sfx['id'] = f'sfx_{_i}'
     for sfx in sfx_list:
-        sfx_file = story_dir / f'{scene_id}_{sfx["id"]}.mp3'
+        sfx_file = _scene_file(story_dir, f'{scene_id}_{sfx["id"]}.mp3')
+        if sfx_file is None:
+            continue
         def do_sfx(s=sfx, f=sfx_file):
             gen_suno_sound(s.get('prompt', 'sound effect'), False, 'Any', f)
         threads.append(threading.Thread(target=do_sfx))
@@ -263,7 +279,7 @@ def generate_scene():
     # TTS lines
     script = scene_data.get('script', [])
     for i, line in enumerate(script):
-        line_file = story_dir / f'{scene_id}_line_{i:02d}.wav'
+        line_file = _scene_file(story_dir, f'{scene_id}_line_{i:02d}.wav')
         def do_tts(l=line, lf=line_file):
             gen_tts_line(l.get('text', ''), l.get('character', 'narrator'), lf)
         threads.append(threading.Thread(target=do_tts))
@@ -285,8 +301,8 @@ def generate_scene():
             'volume': ambient.get('volume', 0.35),
         })
     for sfx in sfx_list:
-        sfx_file = story_dir / f'{scene_id}_{sfx["id"]}.mp3'
-        if sfx_file.exists():
+        sfx_file = _scene_file(story_dir, f'{scene_id}_{sfx["id"]}.mp3')
+        if sfx_file is not None and sfx_file.exists():
             sounds.append({
                 'id': sfx['id'],
                 'role': 'sfx',
@@ -299,7 +315,7 @@ def generate_scene():
     # Rebuild script with resolved audio paths
     resolved_script = []
     for i, line in enumerate(script):
-        line_file = story_dir / f'{scene_id}_line_{i:02d}.wav'
+        line_file = _scene_file(story_dir, f'{scene_id}_line_{i:02d}.wav')
         resolved_script.append({
             'type':      line.get('type', 'narration'),
             'character': line.get('character', 'narrator'),

@@ -22,6 +22,7 @@ import time
 import requests as http
 from flask import Blueprint, jsonify, request
 from services.paths import UPLOADS_DIR
+from services.safe_paths import UnsafePathError, safe_join
 from services.metered_spend import log_spend
 
 logger = logging.getLogger(__name__)
@@ -177,7 +178,7 @@ def _save_generated_image(mime_type: str, b64_data: str) -> str:
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     ext = mime_type.split('/')[-1] if '/' in mime_type else 'png'
     filename = f'ai-gen-{int(time.time() * 1000)}.{ext}'
-    path = UPLOADS_DIR / filename
+    path = safe_join(UPLOADS_DIR, filename, allow_base=False)
     path.write_bytes(base64.b64decode(b64_data))
     logger.info('image_gen: saved generated image → %s (%d bytes)', path, path.stat().st_size)
     return f'/uploads/{filename}'

@@ -30,6 +30,7 @@ from pathlib import Path
 from flask import Blueprint, request, jsonify
 
 from services.paths import RUNTIME_DIR, UPLOADS_DIR
+from services.safe_paths import UnsafePathError, safe_join
 
 grid_gen_bp = Blueprint('grid_gen', __name__)
 
@@ -52,7 +53,10 @@ def _sanitize_refs(raw) -> list:
         name = (str(r) or '').strip().lstrip('/')
         if not name or '/' in name or '\\' in name or '..' in name:
             continue
-        p = UPLOADS_DIR / name
+        try:
+            p = safe_join(UPLOADS_DIR, name, allow_base=False)
+        except UnsafePathError:
+            continue
         if p.suffix.lower() in _IMAGE_EXTS and p.is_file():
             if name not in out:
                 out.append(name)
@@ -94,7 +98,11 @@ def create_order():
         'status': 'queued',
         'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
     }
-    (_orders_dir() / f'{rid}.json').write_text(json.dumps(order))
+    try:
+        order_path = safe_join(_orders_dir(), f'{rid}.json', allow_base=False)
+    except UnsafePathError:
+        return jsonify({'error': 'valid request_id required'}), 400
+    order_path.write_text(json.dumps(order))
     return jsonify({'ok': True, 'request_id': rid, 'refs': order['refs']})
 
 

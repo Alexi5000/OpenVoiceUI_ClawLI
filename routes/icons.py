@@ -32,6 +32,7 @@ from flask import Blueprint, jsonify, request, send_file, Response
 from PIL import Image
 
 from services.paths import RUNTIME_DIR
+from services.safe_paths import UnsafePathError, safe_join
 
 icons_bp = Blueprint('icons', __name__)
 
@@ -269,9 +270,12 @@ def serve_icon(name):
     """
     # Sanitize name
     safe = re.sub(r'[^a-z0-9\-]', '', name.lower())
-    path = LUCIDE_DIR / f'{safe}.svg'
+    try:
+        path = safe_join(LUCIDE_DIR, f'{safe}.svg', allow_base=False)
+    except UnsafePathError:
+        path = None
 
-    if not path.exists():
+    if path is None or not path.exists():
         return Response('<!-- icon not found -->', status=404, mimetype='image/svg+xml')
 
     resp = send_file(str(path), mimetype='image/svg+xml')
@@ -426,17 +430,17 @@ def generate_icon_image(prompt, name=None, style=None, allow_reuse=True):
     # Save to server immediately (NEVER lose generated content)
     out_dir = _ensure_generated_dir()
     filename = f'{safe_name}{ext}'
-    out_path = out_dir / filename
+    out_path = safe_join(out_dir, filename, allow_base=False)
 
     # Don't overwrite — add timestamp suffix
     if out_path.exists():
         filename = f'{safe_name}-{int(time.time())}{ext}'
-        out_path = out_dir / filename
+        out_path = safe_join(out_dir, filename, allow_base=False)
 
     out_path.write_bytes(image_data)
 
     # Save metadata alongside
-    meta_path = out_dir / f'{filename}.meta.json'
+    meta_path = safe_join(out_dir, f'{filename}.meta.json', allow_base=False)
     meta_path.write_text(json.dumps({
         'prompt': user_prompt,
         'full_prompt': full_prompt,
@@ -524,14 +528,17 @@ def serve_generated(filename):
     """
     safe = re.sub(r'[^\w.\-]', '', filename)
     gen_dir = _ensure_generated_dir()
-    path = gen_dir / safe
-    if not path.exists():
+    try:
+        path = safe_join(gen_dir, safe, allow_base=False)
+    except UnsafePathError:
+        return jsonify({'error': 'Not found'}), 404
+    if not path.is_file():
         return jsonify({'error': 'Not found'}), 404
     if request.args.get('full') not in ('1', 'true'):
         try:
             thumb_dir = gen_dir / '.thumbs'
             thumb_dir.mkdir(exist_ok=True)
-            thumb = thumb_dir / safe
+            thumb = safe_join(thumb_dir, safe, allow_base=False)
             if (not thumb.exists()
                     or thumb.stat().st_mtime < path.stat().st_mtime):
                 img = Image.open(path)
@@ -583,9 +590,12 @@ def serve_global_library_image(tenant, filename):
     but must not become a path-traversal hole into unrelated tenant data."""
     if not _TENANT_NAME_RE.match(tenant) or not _ICON_FILENAME_RE.match(filename):
         return jsonify({'error': 'Invalid path'}), 400
-    base = (GLOBAL_ICONS_ROOT / tenant / 'openvoiceui' / 'icons' / 'generated').resolve()
-    path = (base / filename).resolve()
-    if not str(path).startswith(str(base) + os.sep) or not path.exists():
+    try:
+        base = safe_join(GLOBAL_ICONS_ROOT, tenant, 'openvoiceui', 'icons', 'generated', allow_base=False)
+        path = safe_join(base, filename, allow_base=False)
+    except UnsafePathError:
+        return jsonify({'error': 'Not found'}), 404
+    if not path.exists():
         return jsonify({'error': 'Not found'}), 404
     resp = send_file(str(path))
     resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'

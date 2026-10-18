@@ -25,6 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 from services.paths import APP_ROOT, CANVAS_PAGES_DIR
+from services.safe_paths import safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +140,7 @@ def save_custom(style: dict) -> None:
     style['preset'] = False
     style.setdefault('created_at', datetime.now().isoformat())
     style['updated_at'] = datetime.now().isoformat()
-    path = CUSTOM_DIR / f"{style['id']}.json"
+    path = safe_join(CUSTOM_DIR, f"{style['id']}.json", allow_base=False)
     path.write_text(json.dumps(style, indent=2), encoding='utf-8')
 
 

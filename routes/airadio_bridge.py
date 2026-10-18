@@ -39,6 +39,7 @@ import requests as http_requests
 from flask import Blueprint, jsonify, request
 
 from services.provider_paths import encode_provider_path
+from services.safe_paths import UnsafePathError, safe_join
 from services.paths import (
     GENERATED_MUSIC_DIR,
     KNOWN_FACES_DIR,
@@ -385,13 +386,29 @@ def _norm_title(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
 
 
-def _in_base(candidate: Path, base_dir: Path) -> bool:
-    """True if candidate resolves inside base_dir (path-traversal guard)."""
+def _in_base(base_dir: Path, name: str):
+    """Return the contained Path for ``name`` inside base_dir, or None (path-traversal guard)."""
     try:
-        candidate.resolve().relative_to(base_dir.resolve())
-        return True
-    except ValueError:
-        return False
+        return safe_join(base_dir, name, allow_base=False)
+    except UnsafePathError:
+        return None
+
+
+def _contained_absolute(raw_path: str, bases):
+    """Map an absolute filesystem path to a contained Path under one of ``bases``.
+
+    The path must lie under a base (by its absolute or resolved spelling); the
+    remainder is re-joined with safe_join so symlink escapes are rejected."""
+    norm = os.path.normpath(raw_path)
+    for base in bases:
+        for spelled in {os.path.abspath(base), os.path.realpath(base)}:
+            prefix = spelled.rstrip(os.sep) + os.sep
+            if norm.startswith(prefix):
+                try:
+                    return safe_join(base, norm[len(prefix):], allow_base=False)
+                except UnsafePathError:
+                    return None
+    return None
 
 
 def _resolve_local_song(filename: str, playlist: str):
@@ -419,15 +436,15 @@ def _resolve_local_song(filename: str, playlist: str):
         return None, None
 
     # 1. Exact filename as given (already has a real extension).
-    cand = base_dir / safe_name
-    if _in_base(cand, base_dir) and cand.is_file():
+    cand = _in_base(base_dir, safe_name)
+    if cand is not None and cand.is_file():
         return cand, meta.get(safe_name, {})
 
     # 2. Stem given without extension → try the known audio extensions.
     stem = Path(safe_name).suffix.lower() in _AUDIO_EXTS and Path(safe_name).stem or safe_name
     for ext in _AUDIO_EXTS:
-        cand = base_dir / (stem + ext)
-        if _in_base(cand, base_dir) and cand.is_file():
+        cand = _in_base(base_dir, stem + ext)
+        if cand is not None and cand.is_file():
             return cand, meta.get(cand.name, {})
 
     # 3. Fuzzy: normalize the query and match against each file's stem AND its
@@ -475,7 +492,10 @@ def _resolve_image_path(raw_path: str):
                 if "/" in relative or "\\" in relative:
                     # No nested subdirs allowed (matches existing /uploads style).
                     return None
-                candidate = (base / relative).resolve()
+                try:
+                    candidate = safe_join(base, relative, allow_base=False)
+                except UnsafePathError:
+                    return None
                 break
         if candidate is None:
             # An absolute path that doesn't begin with one of our prefixes is
@@ -485,7 +505,10 @@ def _resolve_image_path(raw_path: str):
         # Bare filename — assume uploads/ by convention.
         if "/" in raw_path or "\\" in raw_path:
             return None
-        candidate = (UPLOADS_DIR / raw_path).resolve()
+        try:
+            candidate = safe_join(UPLOADS_DIR, raw_path, allow_base=False)
+        except UnsafePathError:
+            return None
 
     if not candidate.is_file():
         return None
@@ -508,6 +531,25 @@ _AIRADIO_META_KEYS = (
     "title", "artist", "genre", "duration",
     "isPublic", "sunoId", "sourceHash", "cover",
 )
+
+
+def _resolve_cover_path(raw_path) -> Path | None:
+    """Resolve a caller-supplied cover path to an image inside the whitelist.
+
+    Accepts the same URL-style / bare-filename forms as set-image, plus an
+    absolute path that already lies inside a whitelisted dir or the music
+    library (covers often sit next to songs). Anything else is rejected."""
+    if not raw_path or not isinstance(raw_path, str):
+        return None
+    resolved = _resolve_image_path(raw_path)
+    if resolved is not None:
+        return resolved
+    if ".." in raw_path or "\x00" in raw_path or not os.path.isabs(raw_path):
+        return None
+    candidate = _contained_absolute(raw_path, [*_IMAGE_WHITELIST_DIRS, MUSIC_DIR])
+    if candidate is None or not candidate.is_file():
+        return None
+    return candidate
 
 
 def _encode_cover_data_url(cover_path: str) -> str | None:
@@ -687,6 +729,12 @@ def push_song():
     ):
         if meta and meta.get(src_key) is not None:
             fields[dst_key] = str(meta[src_key])
+
+    if cover_path:
+        resolved_cover = _resolve_cover_path(cover_path)
+        if resolved_cover is None:
+            logger.warning("push-song: rejected cover_path outside whitelisted dirs")
+        cover_path = str(resolved_cover) if resolved_cover is not None else None
 
     print(f"📻 push-song: {local_path.name} → AI-Radio (playlist={playlist})")
     result = _stream_song(local_path, fields, cover_path=cover_path)

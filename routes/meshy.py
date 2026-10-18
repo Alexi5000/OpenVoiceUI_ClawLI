@@ -33,6 +33,7 @@ from pathlib import Path
 import requests as http
 from flask import Blueprint, jsonify, request
 from services.public_download import download_public, write_media_file
+from services.safe_paths import safe_join
 
 logger = logging.getLogger(__name__)
 meshy_bp = Blueprint('meshy', __name__)
@@ -58,7 +59,7 @@ def _unique_name(stem: str, ext: str = '.glb') -> str:
     """Return stem (possibly suffixed with -N) so filename doesn't collide."""
     candidate = stem
     n = 1
-    while (CANVAS_DIR / (candidate + ext)).exists():
+    while safe_join(CANVAS_DIR, candidate + ext, allow_base=False).exists():
         candidate = f'{stem}-{n}'
         n += 1
     return candidate
@@ -208,8 +209,8 @@ def poll_task(task_id):
         stem = _safe_name(name_hint) if name_hint else f'mesh-{task_id[:8]}'
         stem = _unique_name(stem)
 
-        glb_dest = CANVAS_DIR / f'{stem}.glb'
-        thumb_dest = CANVAS_DIR / f'{stem}.png'
+        glb_dest = safe_join(CANVAS_DIR, f'{stem}.glb', allow_base=False)
+        thumb_dest = safe_join(CANVAS_DIR, f'{stem}.png', allow_base=False)
 
         saved_glb = False
         if glb_remote and not glb_dest.exists():

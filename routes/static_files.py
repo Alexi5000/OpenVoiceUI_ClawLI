@@ -30,6 +30,7 @@ static_files_bp = Blueprint('static_files', __name__)
 # Paths
 # ---------------------------------------------------------------------------
 
+from services.safe_paths import UnsafePathError, safe_join
 from services.paths import APP_ROOT, SOUNDS_DIR, UPLOADS_DIR, KNOWN_FACES_DIR, STATIC_DIR
 
 BASE_DIR = APP_ROOT
@@ -129,13 +130,9 @@ def _safe_path(base_dir: Path, *parts) -> Path | None:
     Returns the resolved Path on success, or None if traversal is detected.
     """
     try:
-        resolved = (base_dir / Path(*parts)).resolve()
-        base_resolved = base_dir.resolve()
-        if resolved == base_resolved or base_resolved in resolved.parents:
-            return resolved
-    except Exception:
-        pass
-    return None
+        return safe_join(base_dir, *parts)
+    except (UnsafePathError, TypeError, ValueError, OSError):
+        return None
 
 
 @static_files_bp.route('/sounds/<path:filepath>')
@@ -367,8 +364,8 @@ def upload_file():
     #     prevents collisions when the same name is uploaded twice. ---
     stem_safe = re.sub(r'[^A-Za-z0-9._-]+', '_', Path(original_name).stem)[:80].strip('._-') or 'file'
     safe_name = f"{stem_safe}__{uuid.uuid4().hex[:8]}{ext}"
-    dest = UPLOADS_DIR / safe_name
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = safe_join(UPLOADS_DIR, safe_name, allow_base=False)
     f.save(str(dest))
 
     # --- HEIC/HEIF → JPG auto-conversion ---
@@ -376,7 +373,7 @@ def upload_file():
     # immediately usable. Uses pillow-heif (in requirements.txt).
     if ext in ('.heic', '.heif'):
         jpg_name = f"{stem_safe}__{uuid.uuid4().hex[:8]}.jpg"
-        jpg_dest = UPLOADS_DIR / jpg_name
+        jpg_dest = safe_join(UPLOADS_DIR, jpg_name, allow_base=False)
         try:
             import pillow_heif
             from PIL import Image as _Image

@@ -33,6 +33,8 @@ from typing import Dict, List, Optional
 
 import requests
 
+from services.safe_paths import UnsafePathError, safe_join
+
 logger = logging.getLogger(__name__)
 
 # Where installed plugins live (volume-mounted per client)
@@ -59,6 +61,16 @@ PROVISION_TIMEOUT = 120
 # Cache for remote registry (avoid re-fetching every request)
 _remote_registry_cache: Optional[List[dict]] = None
 _remote_registry_age: float = 0
+
+
+def _plugin_path(base: Path, plugin_id: str) -> Optional[Path]:
+    """Resolve ``base/plugin_id`` as a direct child of ``base``, or None if unsafe."""
+    if not isinstance(plugin_id, str) or not plugin_id or "/" in plugin_id or "\\" in plugin_id:
+        return None
+    try:
+        return safe_join(base, plugin_id, allow_base=False)
+    except UnsafePathError:
+        return None
 
 
 def _get_provision_url() -> str:
@@ -193,13 +205,17 @@ def _download_remote_plugin(plugin_id: str) -> Optional[Path]:
                 return None
 
             # Extract plugin files to a temp directory
-            tmp_dir = Path(tempfile.mkdtemp(prefix=f"plugin_{plugin_id}_"))
+            tmp_dir = Path(tempfile.mkdtemp(prefix="plugin_"))
             plugin_prefix = f"{prefix}/{plugin_id}/"
             for member in zf.namelist():
                 if member.startswith(plugin_prefix) and not member.endswith("/"):
                     # Strip the repo prefix to get the relative path within the plugin
                     rel_path = member[len(plugin_prefix):]
-                    dest_file = tmp_dir / rel_path
+                    try:
+                        dest_file = safe_join(tmp_dir, rel_path, allow_base=False)
+                    except UnsafePathError:
+                        logger.warning(f"Skipping unsafe archive member in plugin '{plugin_id}': {member!r}")
+                        continue
                     dest_file.parent.mkdir(parents=True, exist_ok=True)
                     dest_file.write_bytes(zf.read(member))
 
@@ -313,14 +329,16 @@ def install_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
         config: Optional configuration dict (API keys, provider selection)
                 passed through to the provisioning service for gateway plugins.
     """
-    dest = PLUGIN_DIR / plugin_id
+    dest = _plugin_path(PLUGIN_DIR, plugin_id)
+    catalog_dir = _plugin_path(PLUGIN_CATALOG_DIR, plugin_id)
+    if dest is None or catalog_dir is None:
+        return None  # Invalid plugin id
     if dest.exists():
         return None  # Already installed
 
     PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
 
     # Try local catalog first
-    catalog_dir = PLUGIN_CATALOG_DIR / plugin_id
     remote_tmp = None
     if (catalog_dir / "plugin.json").is_file():
         shutil.copytree(str(catalog_dir), str(dest))
@@ -357,13 +375,17 @@ def install_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
     if lore:
         workspace_dir = Path("/app/runtime/workspace/Agent")
         if workspace_dir.is_dir():
-            lore_dest = workspace_dir / plugin_id
+            lore_dest = _plugin_path(workspace_dir, plugin_id)
             lore_count = 0
             for section_key in ("transcripts", "characters", "memories", "files"):
-                for file_rel in lore.get(section_key, []):
-                    src = dest / file_rel
+                for file_rel in (lore.get(section_key, []) if lore_dest else []):
                     rel_from_lore = file_rel[5:] if file_rel.startswith("lore/") else file_rel
-                    dst = lore_dest / rel_from_lore
+                    try:
+                        src = safe_join(dest, file_rel, allow_base=False)
+                        dst = safe_join(lore_dest, rel_from_lore, allow_base=False)
+                    except (UnsafePathError, TypeError):
+                        logger.warning(f"Skipping unsafe lore path in plugin '{plugin_id}': {file_rel!r}")
+                        continue
                     if src.is_file() and not dst.exists():
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(str(src), str(dst))
@@ -377,8 +399,8 @@ def install_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
 
 def uninstall_plugin(plugin_id: str) -> bool:
     """Uninstall a plugin by removing its directory."""
-    dest = PLUGIN_DIR / plugin_id
-    if not dest.exists():
+    dest = _plugin_path(PLUGIN_DIR, plugin_id)
+    if dest is None or not dest.exists():
         return False
 
     # Run pre_uninstall lifecycle hook (container deprovisioning)
@@ -464,13 +486,15 @@ def update_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
     left missing. Returns the new manifest, or {"_error": ...} on failure, or None
     if the plugin isn't installed.
     """
-    dest = PLUGIN_DIR / plugin_id
-    if not dest.exists():
+    dest = _plugin_path(PLUGIN_DIR, plugin_id)
+    if dest is None or not dest.exists():
         return None  # not installed — caller should use install_plugin
 
     from datetime import datetime as _dt
     ts = _dt.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    sidecar = dest.with_name(f"{plugin_id}.old-{ts}")
+    sidecar = _plugin_path(PLUGIN_DIR, f"{plugin_id}.old-{ts}")
+    if sidecar is None:
+        return {"_error": "invalid plugin id"}
     try:
         dest.rename(sidecar)
     except Exception as e:
@@ -489,7 +513,9 @@ def update_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
         if dest.exists():
             # partial install landed; move it aside so the restore is clean
             try:
-                dest.rename(dest.with_name(f"{plugin_id}.failed-{ts}"))
+                failed = _plugin_path(PLUGIN_DIR, f"{plugin_id}.failed-{ts}")
+                if failed is not None:
+                    dest.rename(failed)
             except Exception:
                 pass
         try:

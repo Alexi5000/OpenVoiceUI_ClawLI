@@ -34,6 +34,7 @@ from flask import Blueprint, Response, jsonify, request
 
 from services import tool_jobs
 from services.tool_catalog import catalog
+from services.safe_paths import UnsafePathError, safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,12 @@ def _profile_tool_grants(profile_id: Optional[str]) -> Tuple[Set[str], Set[str]]
     if not profile_id:
         return set(), set()
 
-    path = _profiles_dir() / f"{profile_id}.json"
+    try:
+        path = safe_join(_profiles_dir(), f"{profile_id}.json", allow_base=False)
+    except (UnsafePathError, TypeError):
+        # A profile id that escapes the profiles dir grants nothing (fail closed).
+        logger.warning("tools: invalid profile id %r — no tools granted", profile_id)
+        return set(), set()
     if not path.exists():
         logger.warning("tools: unknown profile %r — no tools granted", profile_id)
         return set(), set()

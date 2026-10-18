@@ -25,6 +25,7 @@ from pathlib import Path
 
 import requests
 from flask import Blueprint, jsonify, request
+from services.safe_paths import UnsafePathError, safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -410,7 +411,10 @@ def register_face(name):
     if not image_data:
         return jsonify({'error': 'No image provided'}), 400
 
-    face_dir = FACES_DIR / safe_name
+    try:
+        face_dir = safe_join(FACES_DIR, safe_name, allow_base=False)
+    except UnsafePathError:
+        return jsonify({'error': 'Invalid name'}), 400
     face_dir.mkdir(exist_ok=True)
 
     # Strip data-URI prefix
@@ -419,7 +423,7 @@ def register_face(name):
 
     # Save with incrementing filename
     idx      = len(list(face_dir.glob('*.jpg'))) + 1
-    out_path = face_dir / f'photo_{idx:03d}.jpg'
+    out_path = safe_join(face_dir, f'photo_{idx:03d}.jpg', allow_base=False)
     out_path.write_bytes(base64.b64decode(image_data))
 
     logger.info('Registered face photo: %s (%s)', safe_name, out_path.name)
@@ -438,7 +442,12 @@ def register_face(name):
 @vision_bp.route('/api/faces/<name>', methods=['DELETE'])
 def delete_face(name):
     safe_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', name).strip()
-    face_dir  = FACES_DIR / safe_name
+    try:
+        # allow_base=False: an empty sanitized name must never resolve to (and
+        # rmtree) the whole faces directory.
+        face_dir = safe_join(FACES_DIR, safe_name, allow_base=False)
+    except UnsafePathError:
+        return jsonify({'error': 'Face not found'}), 404
     if not face_dir.exists():
         return jsonify({'error': 'Face not found'}), 404
 

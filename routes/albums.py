@@ -19,6 +19,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request, send_file
 
 from services.paths import UPLOADS_DIR
+from services.safe_paths import UnsafePathError, safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +54,16 @@ def _save_index(index: list) -> None:
         pass
 
 
+def _album_dir(album_id: str) -> Path:
+    """Album directory for ``album_id``; raises UnsafePathError if it escapes ALBUMS_DIR."""
+    return safe_join(ALBUMS_DIR, album_id, allow_base=False)
+
+
 def _load_album(album_id: str) -> dict | None:
-    album_file = ALBUMS_DIR / album_id / 'album.json'
+    try:
+        album_file = safe_join(_album_dir(album_id), 'album.json')
+    except UnsafePathError:
+        return None
     if not album_file.exists():
         return None
     try:
@@ -64,9 +73,9 @@ def _load_album(album_id: str) -> dict | None:
 
 
 def _save_album(album_id: str, data: dict) -> None:
-    album_dir = ALBUMS_DIR / album_id
+    album_dir = _album_dir(album_id)
     album_dir.mkdir(parents=True, exist_ok=True)
-    album_file = album_dir / 'album.json'
+    album_file = safe_join(album_dir, 'album.json')
     album_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
     try:
         album_file.chmod(0o666)
@@ -195,9 +204,9 @@ def upload_photo(album_id: str):
     photo_id = uuid.uuid4().hex[:12]
     now = datetime.now(timezone.utc).isoformat(timespec='seconds')
     safe_name = f'photo-{photo_id}{ext}'
-    album_dir = ALBUMS_DIR / album_id
+    album_dir = _album_dir(album_id)
     album_dir.mkdir(parents=True, exist_ok=True)
-    dest = album_dir / safe_name
+    dest = safe_join(album_dir, safe_name, allow_base=False)
     f.save(str(dest))
     try:
         dest.chmod(0o666)
@@ -207,7 +216,7 @@ def upload_photo(album_id: str):
     # HEIC → JPG conversion
     if ext in ('.heic', '.heif'):
         jpg_name = f'photo-{photo_id}.jpg'
-        jpg_dest = album_dir / jpg_name
+        jpg_dest = safe_join(album_dir, jpg_name, allow_base=False)
         try:
             import pillow_heif
             from PIL import Image as _Image
@@ -264,7 +273,12 @@ def serve_album_photo(album_id: str, filename: str):
     """Serve photo files from album directories."""
     safe_id = ''.join(c for c in album_id if c.isalnum())
     safe_file = Path(filename).name
-    dest = ALBUMS_DIR / safe_id / safe_file
+    if not safe_id:
+        return 'Not found', 404
+    try:
+        dest = safe_join(ALBUMS_DIR, safe_id, safe_file, allow_base=False)
+    except UnsafePathError:
+        return 'Not found', 404
     if not dest.exists() or not dest.is_file():
         return 'Not found', 404
     return send_file(str(dest))

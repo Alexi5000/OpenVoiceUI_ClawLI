@@ -47,6 +47,36 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 from services.paths import DB_PATH, VOICE_SESSION_FILE
+from services.paths import UPLOADS_DIR as _UPLOADS_DIR, WORKSPACE_DIR as _WORKSPACE_DIR
+from services.safe_paths import UnsafePathError as _UnsafePathError, safe_join as _safe_join
+
+
+def _resolve_upload_image(image_path):
+    """Resolve a chat-attached image path to a file inside an uploads dir, or None.
+
+    Accepts the absolute path returned by the upload endpoint (inside
+    UPLOADS_DIR or the workspace uploads folder), or a path relative to the
+    uploads folder (optionally prefixed with ``uploads/``). Traversal, other
+    absolute locations and symlink escapes are rejected."""
+    if not isinstance(image_path, str) or not image_path or '\x00' in image_path:
+        return None
+    bases = (_UPLOADS_DIR, _WORKSPACE_DIR / 'uploads')
+    if os.path.isabs(image_path):
+        norm = os.path.normpath(image_path)
+        for base in bases:
+            for spelled in {os.path.abspath(base), os.path.realpath(base)}:
+                prefix = spelled.rstrip(os.sep) + os.sep
+                if norm.startswith(prefix):
+                    try:
+                        return _safe_join(base, norm[len(prefix):], allow_base=False)
+                    except _UnsafePathError:
+                        return None
+        return None
+    rel = image_path[len('uploads/'):] if image_path.startswith('uploads/') else image_path
+    try:
+        return _safe_join(_UPLOADS_DIR, rel, allow_base=False)
+    except _UnsafePathError:
+        return None
 
 BRAIN_EVENTS_PATH = Path('/tmp/openvoiceui-events.jsonl')
 MAX_HISTORY_MESSAGES = 20
@@ -1478,9 +1508,10 @@ def _conversation_inner():
     # Vision: if user uploaded an image, analyze it with vision model
     if image_path:
         try:
-            _img_file = Path(image_path).resolve()
-            # Security: only allow files inside uploads/ directories
-            if 'uploads' not in _img_file.parts:
+            # Security: only allow files inside the uploads directory
+            # (no traversal, absolute paths elsewhere, or symlink escapes).
+            _img_file = _resolve_upload_image(image_path)
+            if _img_file is None:
                 raise ValueError(f'Path traversal blocked: {image_path}')
             if _img_file.is_file() and _img_file.stat().st_size < 20_000_000:  # 20MB safety cap
                 # Check .image-intel cache first — avoids live API call when image was pre-analyzed
@@ -4424,12 +4455,12 @@ def tts_delete_voice(voice_id):
             return jsonify({'error': 'Can only retire cloned voices (clone_*)'}), 400
 
         from services.paths import VOICE_CLONES_DIR
-        voice_dir = VOICE_CLONES_DIR / voice_id
+        from services.safe_paths import UnsafePathError, safe_join
 
         # Validate path doesn't escape
         try:
-            voice_dir.resolve().relative_to(VOICE_CLONES_DIR.resolve())
-        except ValueError:
+            voice_dir = safe_join(VOICE_CLONES_DIR, voice_id, allow_base=False)
+        except UnsafePathError:
             return jsonify({'error': 'Invalid voice_id'}), 400
 
         if not voice_dir.exists():

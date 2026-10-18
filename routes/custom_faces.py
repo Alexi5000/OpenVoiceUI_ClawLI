@@ -29,6 +29,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request, send_from_directory
 
 from services.paths import FACES_DIR, FACE_MANIFEST_PATH, CANVAS_PAGES_DIR, APP_ROOT
+from services.safe_paths import UnsafePathError, safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +259,10 @@ def create_custom_face():
 
     # Write file
     FACES_DIR.mkdir(parents=True, exist_ok=True)
-    dest = FACES_DIR / filename
+    try:
+        dest = safe_join(FACES_DIR, filename, allow_base=False)
+    except UnsafePathError:
+        return jsonify({"error": "Invalid filename"}), 400
     dest.write_text(html, encoding="utf-8")
 
     # Extract metadata from the HTML itself (overrides title/description if present)
@@ -296,10 +300,10 @@ def get_custom_face(face_id):
     # Include source HTML if requested
     if request.args.get("source") == "1":
         filename = face.get("filename", face_id + ".html")
-        src_path = FACES_DIR / filename
         try:
+            src_path = safe_join(FACES_DIR, filename, allow_base=False)
             result["source"] = src_path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnsafePathError):
             result["source"] = None
 
     return jsonify(result)
@@ -314,7 +318,10 @@ def delete_custom_face(face_id):
         return jsonify({"error": f"Face '{face_id}' not found"}), 404
 
     filename = face.get("filename", face_id + ".html")
-    src = FACES_DIR / filename
+    try:
+        src = safe_join(FACES_DIR, filename, allow_base=False)
+    except UnsafePathError:
+        return jsonify({"error": "Invalid face filename"}), 400
     if src.exists():
         bak = src.with_suffix(".html.bak")
         src.rename(bak)
@@ -381,9 +388,9 @@ def perf_report():
     except (TypeError, ValueError):
         return jsonify({"error": "samples must be numbers"}), 400
     fps_low = vals[max(0, int(len(vals) * 0.05) - 1)] if len(vals) else 0.0
-    src = CANVAS_PAGES_DIR / (page_id + ".html")
+    src = safe_join(CANVAS_PAGES_DIR, page_id + ".html", allow_base=False)
     if not src.exists():
-        src = FACES_DIR / (page_id + ".html")
+        src = safe_join(FACES_DIR, page_id + ".html", allow_base=False)
     sha = _page_sha(src)
     report = {
         "page_id": page_id,
@@ -394,7 +401,7 @@ def perf_report():
         "user_agent": str(data.get("user_agent", request.headers.get("User-Agent", "")))[:200],
         "recorded_at": datetime.now(timezone.utc).isoformat(),
     }
-    (_perf_dir() / (page_id + ".json")).write_text(json.dumps(report, indent=1))
+    safe_join(_perf_dir(), page_id + ".json", allow_base=False).write_text(json.dumps(report, indent=1))
     passed = fps_low >= FACE_MIN_FPS
     return jsonify({"ok": True, "passed": passed, "fps_low": report["fps_low"],
                     "threshold": FACE_MIN_FPS,
@@ -404,7 +411,7 @@ def perf_report():
 
 def _check_perf_attestation(page_id, src_path):
     """Return (ok, http_status, payload) for the promote gate."""
-    rp = _perf_dir() / (page_id + ".json")
+    rp = safe_join(_perf_dir(), page_id + ".json", allow_base=False)
     how = ("Run the full-load probe from /mnt/shared-skills/custom-faces/SKILL.md while the page "
            "is open in the user's browser (it POSTs to /api/custom-faces/perf-report), then retry.")
     if not rp.exists():
@@ -444,7 +451,12 @@ def promote_canvas_to_face():
         return jsonify({"error": "Missing 'canvas_page_id'"}), 400
 
     page_id = data["canvas_page_id"]
-    src = CANVAS_PAGES_DIR / (page_id + ".html")
+    if not isinstance(page_id, str) or "/" in page_id or "\\" in page_id:
+        return jsonify({"error": "Invalid 'canvas_page_id'"}), 400
+    try:
+        src = safe_join(CANVAS_PAGES_DIR, page_id + ".html", allow_base=False)
+    except UnsafePathError:
+        return jsonify({"error": "Invalid 'canvas_page_id'"}), 400
     if not src.exists():
         return jsonify({"error": f"Canvas page '{page_id}' not found"}), 404
 
@@ -458,7 +470,7 @@ def promote_canvas_to_face():
 
     # Copy to faces dir
     FACES_DIR.mkdir(parents=True, exist_ok=True)
-    dest = FACES_DIR / src.name
+    dest = safe_join(FACES_DIR, src.name, allow_base=False)
     shutil.copy2(src, dest)
 
     # Extract metadata and register

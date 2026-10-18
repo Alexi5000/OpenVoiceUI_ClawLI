@@ -17,6 +17,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from flask import Blueprint, jsonify, request
+from services.safe_paths import UnsafePathError, safe_join
 
 transcripts_bp = Blueprint('transcripts', __name__)
 
@@ -62,10 +63,11 @@ def save_transcript():
     slug      = _slug(title)
     filename  = f'{time_part}_{slug}.txt'
 
-    save_dir = os.path.join(TRANSCRIPTS_DIR, date_dir)
-    os.makedirs(save_dir, exist_ok=True)
-
-    filepath = os.path.join(save_dir, filename)
+    try:
+        filepath = safe_join(TRANSCRIPTS_DIR, date_dir, filename, allow_base=False)
+    except UnsafePathError:
+        return jsonify({'error': 'Invalid transcript title'}), 400
+    os.makedirs(filepath.parent, exist_ok=True)
 
     word_count = len(text.split())
     content = (
@@ -303,12 +305,9 @@ def sms_history():
 @transcripts_bp.route('/api/transcripts/<date_dir>/<filename>', methods=['GET'])
 def get_transcript(date_dir, filename):
     # Resolve and verify path stays within TRANSCRIPTS_DIR
-    base = Path(TRANSCRIPTS_DIR).resolve()
     try:
-        resolved = (base / date_dir / filename).resolve()
-    except (ValueError, OSError):
-        return jsonify({'error': 'Invalid path'}), 400
-    if base not in resolved.parents and resolved != base:
+        resolved = safe_join(TRANSCRIPTS_DIR, date_dir, filename, allow_base=False)
+    except (UnsafePathError, ValueError, OSError):
         return jsonify({'error': 'Invalid path'}), 400
     if not resolved.is_file():
         return jsonify({'error': 'Not found'}), 404
@@ -391,10 +390,10 @@ def save_conversation_turn(
             'word_count': {'user': user_words, 'assistant': ai_words},
         }
 
-        save_dir = os.path.join(TRANSCRIPTS_DIR, date_str)
-        os.makedirs(save_dir, exist_ok=True)
         filename = f'{time_str}_{key}_{session_id}.json'
-        filepath = os.path.join(save_dir, filename)
+        # Raises UnsafePathError (handled below) if session/key would escape.
+        filepath = safe_join(TRANSCRIPTS_DIR, date_str, filename, allow_base=False)
+        os.makedirs(filepath.parent, exist_ok=True)
 
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)

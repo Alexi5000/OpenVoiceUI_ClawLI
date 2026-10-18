@@ -44,6 +44,7 @@ from services.canvas_versioning import (
 # Constants
 # ---------------------------------------------------------------------------
 
+from services.safe_paths import UnsafePathError, safe_join
 from services.paths import APP_ROOT as _APP_ROOT, CANVAS_MANIFEST_PATH, CANVAS_PAGES_DIR, WORKSPACE_DIR, CODE_WORKSPACE_DIR
 CANVAS_SSE_PORT = int(os.getenv('CANVAS_SSE_PORT', '3030'))
 CANVAS_SESSION_PORT = int(os.getenv('CANVAS_SESSION_PORT', '3002'))
@@ -556,8 +557,8 @@ def _sync_canvas_manifest_locked() -> dict:
     for page_id, page_data in manifest['pages'].items():
         if page_id == 'desktop' or page_data.get('icon'):
             continue  # already has icon or is the desktop entry
-        filepath = CANVAS_PAGES_DIR / page_data.get('filename', f'{page_id}.html')
-        page_icon = extract_page_icon_from_file(filepath)
+        filepath = _safe_canvas_path(str(CANVAS_PAGES_DIR), page_data.get('filename', f'{page_id}.html'))
+        page_icon = extract_page_icon_from_file(filepath) if filepath else None
         if page_icon:
             page_data['icon'] = page_icon
 
@@ -615,7 +616,8 @@ def _add_page_to_manifest_locked(filename: str, title: str, description: str = '
     # Extract canonical icon from the page HTML meta tag
     page_icon = extract_page_icon(content) if content else None
     if not page_icon:
-        page_icon = extract_page_icon_from_file(CANVAS_PAGES_DIR / filename)
+        _icon_path = _safe_canvas_path(str(CANVAS_PAGES_DIR), filename)
+        page_icon = extract_page_icon_from_file(_icon_path) if _icon_path else None
 
     is_new_page = False
     if page_id in manifest['pages']:
@@ -863,13 +865,9 @@ def canvas_sse_proxy(path):
 def _safe_canvas_path(base: str, user_path: str) -> Path | None:
     """Resolve user_path inside base, rejecting path traversal."""
     try:
-        base_p = Path(base).resolve()
-        resolved = (base_p / user_path).resolve()
-        if base_p == resolved or base_p in resolved.parents:
-            return resolved
-    except Exception:
-        pass
-    return None
+        return safe_join(base, user_path)
+    except (UnsafePathError, TypeError, ValueError, OSError):
+        return None
 
 
 @canvas_bp.route('/pages/<path:path>')
@@ -1524,7 +1522,10 @@ def create_canvas_page():
             filename += '.html'
 
         CANVAS_PAGES_DIR.mkdir(parents=True, exist_ok=True)
-        filepath = CANVAS_PAGES_DIR / filename
+        try:
+            filepath = safe_join(CANVAS_PAGES_DIR, filename, allow_base=False)
+        except UnsafePathError:
+            return jsonify({'error': 'Invalid filename'}), 400
 
         filepath.write_text(html_content, encoding='utf-8')
         logger.info(f'Canvas page saved: {filename} ({len(html_content)} bytes)')
@@ -1994,7 +1995,7 @@ def canvas_build_log(project):
     """
     import re as _re
     import json as _json
-    if not _re.match(r'^[a-z0-9][a-z0-9\-_]{0,80}$', project):
+    if not _re.fullmatch(r'[a-z0-9][a-z0-9\-_]{0,80}', project):
         return jsonify({'error': 'Invalid project name'}), 400
 
     try:
@@ -2017,8 +2018,8 @@ def canvas_build_log(project):
 
         # Determine build start time from the project status file (if available)
         build_start_ts = ''
-        status_path = CANVAS_PAGES_DIR / '_data' / 'builds' / f'{project}-status.json'
-        if status_path.exists():
+        status_path = _safe_canvas_path(str(CANVAS_PAGES_DIR), f'_data/builds/{project}-status.json')
+        if status_path is not None and status_path.exists():
             try:
                 with open(status_path) as _sf:
                     _sd = _json.load(_sf)

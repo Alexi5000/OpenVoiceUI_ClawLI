@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from services.paths import DB_PATH
+from services.safe_paths import safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ def _path(job_id: str) -> Path:
     # id can never escape the jobs dir.
     if not job_id or not all(c in "0123456789abcdef-" for c in job_id):
         raise ValueError(f"invalid job id: {job_id!r}")
-    return JOBS_DIR / f"{job_id}.json"
+    return safe_join(JOBS_DIR, f"{job_id}.json", allow_base=False)
 
 
 def _write_atomic(path: Path, data: Dict[str, Any]) -> None:

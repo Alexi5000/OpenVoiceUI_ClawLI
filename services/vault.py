@@ -21,6 +21,8 @@ from typing import Any, Optional
 
 import requests
 
+from services.safe_paths import UnsafePathError, safe_join
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -272,6 +274,13 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 # Vault paths per client
 # ---------------------------------------------------------------------------
+def _path_component(name: str) -> str:
+    """Reject anything that is not a single, plain path component."""
+    if not isinstance(name, str) or not name or '/' in name or '\\' in name:
+        raise UnsafePathError('invalid path component')
+    return name
+
+
 def _vault_dir(username: str) -> Path:
     """
     Get vault directory for a client.
@@ -280,19 +289,20 @@ def _vault_dir(username: str) -> Path:
     """
     if _RUNTIME_VAULT_DIR.exists():
         return _RUNTIME_VAULT_DIR
-    return _CLIENTS_DIR / username / 'vault'
+    # username is a single directory name under the clients root.
+    return safe_join(_CLIENTS_DIR, _path_component(username), 'vault', allow_base=False)
 
 
 def _vault_creds_path(username: str) -> Path:
-    return _vault_dir(username) / 'credentials.json'
+    return safe_join(_vault_dir(username), 'credentials.json', allow_base=False)
 
 
 def _vault_oauth_dir(username: str) -> Path:
-    return _vault_dir(username) / 'oauth'
+    return safe_join(_vault_dir(username), 'oauth', allow_base=False)
 
 
 def _vault_oauth_path(username: str, provider: str) -> Path:
-    return _vault_oauth_dir(username) / f'{provider}.json'
+    return safe_join(_vault_oauth_dir(username), f'{_path_component(provider)}.json', allow_base=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1286,7 +1296,7 @@ _OAUTH_NONCE_TTL_SEC = 600
 
 
 def _oauth_nonce_path(username: str) -> Path:
-    return _vault_dir(username) / 'oauth-nonces.json'
+    return safe_join(_vault_dir(username), 'oauth-nonces.json', allow_base=False)
 
 
 def _mint_oauth_nonce(username: str, cred_id: str) -> str:
