@@ -2503,6 +2503,52 @@ def suno_callback():
                                                       timeout=60, require_https=_require_https)
                             save_path.write_bytes(content)
                             logger.info(f'Callback downloaded: {song_title} → {filename}')
+
+                            # Find matching job
+                            prompt = ''
+                            style = ''
+                            job_id = None
+                            kind = 'song'
+                            extra = {}
+                            for jid, job in suno_jobs.items():
+                                if job.get('task_id') == task_id:
+                                    job['status'] = 'complete'
+                                    job['song_id'] = song_id
+                                    job['url'] = f'/generated_music/{filename}'
+                                    prompt = job.get('prompt', '')
+                                    style = job.get('style', '')
+                                    job_id = jid
+                                    kind = job.get('kind', 'song')
+                                    if kind == 'jingle':
+                                        extra = {
+                                            'brand': job.get('brand', ''),
+                                            'style_key': job.get('style_key', ''),
+                                            'vocal_gender': job.get('vocal_gender', ''),
+                                            'instrumental': job.get('instrumental', False),
+                                        }
+                                    break
+
+                            # Capture lyrics from Suno response (description-mode jingles
+                            # have Suno-written lyrics; custom-mode songs have provided lyrics)
+                            song_lyrics = song.get('prompt', '') or song.get('lyrics', '')
+                            if song_lyrics:
+                                extra['lyrics'] = song_lyrics
+
+                            _add_song_to_metadata(filename, song_title, prompt, style,
+                                                  duration, song_id, kind=kind, extra=extra,
+                                                  task_id=task_id)
+
+                            completed_songs_queue.append({
+                                'song_id': song_id,
+                                'filename': filename,
+                                'title': song_title,
+                                'job_id': job_id or task_id,
+                                'kind': kind,
+                                'url': f'/generated_music/{filename}',
+                                'completed_at': datetime.now().isoformat(),
+                                'prompt': prompt,
+                                'lyrics': song_lyrics,
+                            })
                         except Exception as exc:
                             logger.warning(f'Callback download error: {exc}')
 

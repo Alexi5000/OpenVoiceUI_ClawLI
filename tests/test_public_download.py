@@ -71,3 +71,31 @@ def test_provider_host_constraint_and_https_downgrade():
         _public_target('http://media.example/x', require_https=True)
     with pytest.raises(ValueError):
         _public_target('https://user:password@media.example/x')
+
+
+def test_suno_callback_preserves_saved_track_and_completion_queue(monkeypatch, tmp_path):
+    from flask import Flask
+    from routes import suno
+    monkeypatch.setattr(suno, 'GENERATED_MUSIC_DIR', tmp_path)
+    monkeypatch.setattr(suno, 'GENERATED_METADATA_FILE', tmp_path / 'metadata.json')
+    monkeypatch.setattr(suno, 'SUNO_WEBHOOK_SECRET', '')
+    monkeypatch.setattr(suno, 'suno_jobs', {'job': {'task_id': 'task', 'status': 'pending', 'prompt': 'hello', 'style': 'jazz'}})
+    monkeypatch.setattr(suno, 'completed_songs_queue', [])
+    monkeypatch.setattr(suno, '_is_safe_download_url', lambda url: True)
+    app = Flask(__name__)
+    app.register_blueprint(suno.suno_bp)
+    with patch.object(suno, 'download_public', return_value=b'audio') as download:
+        response = app.test_client().post('/api/suno/callback', json={
+            'code': 200,
+            'data': {'callbackType': 'complete', 'task_id': 'task', 'data': [
+                {'id': 'song', 'title': 'My Track', 'audio_url': 'https://media.example/track.mp3', 'duration': 10},
+            ]},
+        })
+    assert response.status_code == 200
+    download.assert_called_once()
+    assert download.call_args.kwargs['require_https'] is True
+    assert suno.suno_jobs['job']['status'] == 'complete'
+    assert len(suno.completed_songs_queue) == 1
+    entry = suno.completed_songs_queue[0]
+    assert (tmp_path / entry['filename']).read_bytes() == b'audio'
+    assert suno._load_generated_metadata()[entry['filename']]['suno_id'] == 'song'
