@@ -32,6 +32,7 @@ from pathlib import Path
 
 import requests as http
 from flask import Blueprint, jsonify, request
+from services.public_download import download_public, write_media_file
 
 logger = logging.getLogger(__name__)
 meshy_bp = Blueprint('meshy', __name__)
@@ -65,10 +66,13 @@ def _unique_name(stem: str, ext: str = '.glb') -> str:
 
 def _download_and_save(url: str, dest: Path) -> bool:
     try:
-        r = http.get(url, timeout=60, stream=True)
-        r.raise_for_status()
+        filename = dest.name
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}\.(?:glb|png|jpg|jpeg|webp)', filename):
+            raise ValueError('Invalid model download filename')
+        dest = CANVAS_DIR / filename
+        content = download_public(url, max_bytes=256 * 1024 * 1024, timeout=60)
         CANVAS_DIR.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(r.content)
+        write_media_file(CANVAS_DIR, filename, content)
         return True
     except Exception as exc:
         logger.warning('Meshy download failed %s: %s', url, exc)

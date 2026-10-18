@@ -20,6 +20,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -36,6 +37,7 @@ from flask import Blueprint, jsonify, request
 # ---------------------------------------------------------------------------
 
 from services.paths import GENERATED_MUSIC_DIR
+from services.public_download import download_public, write_media_file
 
 GENERATED_MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 GENERATED_METADATA_FILE = GENERATED_MUSIC_DIR / 'generated_metadata.json'
@@ -1044,25 +1046,12 @@ def _action_status(job_id: str):
                         if not save_path.exists():
                             if not _is_safe_download_url(audio_url):
                                 continue
-                            audio_resp = http_requests.get(audio_url, timeout=60, stream=True)
-                            if audio_resp.status_code == 200:
-                                content_length = int(audio_resp.headers.get('Content-Length', 0))
-                                if content_length > SUNO_MAX_DOWNLOAD_BYTES:
-                                    logger.warning(f'Suno download rejected: Content-Length {content_length} exceeds limit')
-                                    continue
-                                chunks = []
-                                total = 0
-                                for chunk in audio_resp.iter_content(chunk_size=65536):
-                                    total += len(chunk)
-                                    if total > SUNO_MAX_DOWNLOAD_BYTES:
-                                        logger.warning(f'Suno download aborted: exceeded {SUNO_MAX_DOWNLOAD_BYTES} bytes')
-                                        break
-                                    chunks.append(chunk)
-                                else:
-                                    save_path.write_bytes(b''.join(chunks))
-                                    logger.info(f'Suno downloaded: {song_title} → {filename}')
-                            else:
-                                logger.warning(f'Suno download failed: {audio_resp.status_code}')
+                            try:
+                                content = download_public(audio_url, max_bytes=SUNO_MAX_DOWNLOAD_BYTES, timeout=60)
+                                save_path.write_bytes(content)
+                                logger.info(f'Suno downloaded: {song_title} → {filename}')
+                            except Exception as exc:
+                                logger.warning('Suno download rejected: %s', exc)
                                 continue
 
                         kind = job.get('kind', 'song')
@@ -1697,19 +1686,22 @@ def _find_stem_urls(obj, found: dict):
 
 def _persist_stem_urls(urls: dict, name_stem: str) -> dict:
     """Download remote stem URLs into the stems dir. Returns local URLs saved."""
+    if not re.fullmatch(r'[\w-]{1,60}', name_stem):
+        raise ValueError('Invalid stem filename')
     stems_dir = _stems_dir()
     stems_dir.mkdir(parents=True, exist_ok=True)
     saved = {}
     for kind_key, url in urls.items():
+        if kind_key not in {'vocal', 'instrumental'}:
+            continue
         if not _is_safe_download_url(url) or not url.lower().startswith('https://'):
             continue
         p = stems_dir / f'{name_stem}-{kind_key}.mp3'
         if not p.exists():
             try:
-                r = http_requests.get(url, timeout=120)
-                if r.status_code == 200 and 0 < len(r.content) <= SUNO_MAX_DOWNLOAD_BYTES:
-                    p.write_bytes(r.content)
-                    logger.info(f'stems: downloaded {kind_key} → {p.name} ({len(r.content)} bytes)')
+                content = download_public(url, max_bytes=SUNO_MAX_DOWNLOAD_BYTES, timeout=120, require_https=True)
+                write_media_file(stems_dir, p.name, content)
+                logger.info('Downloaded stem audio (%d bytes)', len(content))
             except Exception as exc:
                 logger.warning(f'stems: download failed ({kind_key}): {exc}')
                 continue
@@ -2512,69 +2504,56 @@ def suno_callback():
                             logger.warning('Unsigned Suno callback: rejecting non-https audioUrl')
                             continue
                         try:
-                            audio_resp = http_requests.get(audio_url, timeout=60, stream=True)
-                            if audio_resp.status_code == 200:
-                                content_length = int(audio_resp.headers.get('Content-Length', 0))
-                                if content_length > SUNO_MAX_DOWNLOAD_BYTES:
-                                    logger.warning(f'Callback download rejected: size {content_length} exceeds limit')
-                                    continue
-                                chunks = []
-                                total = 0
-                                for chunk in audio_resp.iter_content(chunk_size=65536):
-                                    total += len(chunk)
-                                    if total > SUNO_MAX_DOWNLOAD_BYTES:
-                                        logger.warning(f'Callback download aborted: exceeded {SUNO_MAX_DOWNLOAD_BYTES} bytes')
-                                        break
-                                    chunks.append(chunk)
-                                else:
-                                    save_path.write_bytes(b''.join(chunks))
-                                    logger.info(f'Callback downloaded: {song_title} → {filename}')
+                            content = download_public(audio_url, max_bytes=SUNO_MAX_DOWNLOAD_BYTES,
+                                                      timeout=60, require_https=_require_https)
+                            save_path.write_bytes(content)
+                            logger.info('Downloaded callback audio (%d bytes)', len(content))
 
-                                # Find matching job
-                                prompt = ''
-                                style = ''
-                                job_id = None
-                                kind = 'song'
-                                extra = {}
-                                for jid, job in suno_jobs.items():
-                                    if job.get('task_id') == task_id:
-                                        job['status'] = 'complete'
-                                        job['song_id'] = song_id
-                                        job['url'] = f'/generated_music/{filename}'
-                                        prompt = job.get('prompt', '')
-                                        style = job.get('style', '')
-                                        job_id = jid
-                                        kind = job.get('kind', 'song')
-                                        if kind == 'jingle':
-                                            extra = {
-                                                'brand': job.get('brand', ''),
-                                                'style_key': job.get('style_key', ''),
-                                                'vocal_gender': job.get('vocal_gender', ''),
-                                                'instrumental': job.get('instrumental', False),
-                                            }
-                                        break
+                            # Find matching job
+                            prompt = ''
+                            style = ''
+                            job_id = None
+                            kind = 'song'
+                            extra = {}
+                            for jid, job in suno_jobs.items():
+                                if job.get('task_id') == task_id:
+                                    job['status'] = 'complete'
+                                    job['song_id'] = song_id
+                                    job['url'] = f'/generated_music/{filename}'
+                                    prompt = job.get('prompt', '')
+                                    style = job.get('style', '')
+                                    job_id = jid
+                                    kind = job.get('kind', 'song')
+                                    if kind == 'jingle':
+                                        extra = {
+                                            'brand': job.get('brand', ''),
+                                            'style_key': job.get('style_key', ''),
+                                            'vocal_gender': job.get('vocal_gender', ''),
+                                            'instrumental': job.get('instrumental', False),
+                                        }
+                                    break
 
-                                # Capture lyrics from Suno response (description-mode jingles
-                                # have Suno-written lyrics; custom-mode songs have provided lyrics)
-                                song_lyrics = song.get('prompt', '') or song.get('lyrics', '')
-                                if song_lyrics:
-                                    extra['lyrics'] = song_lyrics
+                            # Capture lyrics from Suno response (description-mode jingles
+                            # have Suno-written lyrics; custom-mode songs have provided lyrics)
+                            song_lyrics = song.get('prompt', '') or song.get('lyrics', '')
+                            if song_lyrics:
+                                extra['lyrics'] = song_lyrics
 
-                                _add_song_to_metadata(filename, song_title, prompt, style,
-                                                      duration, song_id, kind=kind, extra=extra,
-                                                      task_id=task_id)
+                            _add_song_to_metadata(filename, song_title, prompt, style,
+                                                  duration, song_id, kind=kind, extra=extra,
+                                                  task_id=task_id)
 
-                                completed_songs_queue.append({
-                                    'song_id': song_id,
-                                    'filename': filename,
-                                    'title': song_title,
-                                    'job_id': job_id or task_id,
-                                    'kind': kind,
-                                    'url': f'/generated_music/{filename}',
-                                    'completed_at': datetime.now().isoformat(),
-                                    'prompt': prompt,
-                                    'lyrics': song_lyrics,
-                                })
+                            completed_songs_queue.append({
+                                'song_id': song_id,
+                                'filename': filename,
+                                'title': song_title,
+                                'job_id': job_id or task_id,
+                                'kind': kind,
+                                'url': f'/generated_music/{filename}',
+                                'completed_at': datetime.now().isoformat(),
+                                'prompt': prompt,
+                                'lyrics': song_lyrics,
+                            })
                         except Exception as exc:
                             logger.warning(f'Callback download error: {exc}')
 
