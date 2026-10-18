@@ -54,22 +54,27 @@ def test_search_keeps_query_separate_from_destination_and_preserves_proxy(monkey
         assert get.call_args.kwargs['proxies']['https'] == 'socks5h://configured-proxy:1080'
 
 
-def test_canvas_category_update_encodes_page_id_as_one_segment():
+@pytest.mark.parametrize('method_name', ['movePageToCategory', 'deletePage', 'toggleStar'])
+def test_canvas_mutations_encode_page_id_as_one_segment(method_name):
     source = Path('src/app.js').read_text()
-    method = source.split('            async movePageToCategory(', 1)[1].split('\n            },', 1)[0]
+    method = source.split(f'            async {method_name}(', 1)[1].split('\n            },', 1)[0]
     script = '''
 const assert = require('node:assert/strict');
 const CONFIG = {serverUrl: 'https://configured.example'};
 const calls = [];
-const fetch = async (...args) => {calls.push(args);};
-const methods = {async movePageToCategory(''' + method + '''}};
+const fetch = async (...args) => {calls.push(args); return {ok: true};};
+const document = {querySelector: () => null};
+const methods = {async ''' + method_name + '(' + method + '''}};
 (async () => {
  const pageId = '../../admin?x=1#fragment';
- const instance = {...methods, manifest: {pages: {[pageId]: {}}, categories: {}, uncategorized: []}, render() {}, setupDragDrop() {}};
- await instance.movePageToCategory(pageId, 'new');
+ const instance = {...methods, manifest: {pages: {[pageId]: {}}, categories: {}, uncategorized: []}, render() {}, setupDragDrop() {}, async loadManifest() {}};
+ await instance[Object.keys(methods)[0]](pageId, 'new');
  assert.equal(calls[0][0], 'https://configured.example/api/canvas/manifest/page/' + encodeURIComponent(pageId));
- await instance.movePageToCategory('..', 'new');
+ for (const invalid of ['', '.', '..', null, {}]) await instance[Object.keys(methods)[0]](invalid, 'new');
  assert.equal(calls.length, 1);
+ instance.manifest.pages['normal-page'] = {};
+ await instance[Object.keys(methods)[0]]('normal-page', 'new');
+ assert.equal(calls[1][0], 'https://configured.example/api/canvas/manifest/page/normal-page');
 })().catch(error => {console.error(error); process.exit(1);});
 '''
     subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
