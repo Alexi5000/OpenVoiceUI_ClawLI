@@ -11,6 +11,8 @@ token + current git hash to api.pinokio.co, then redirects back to beta.pinokio.
 
 import json
 import os
+import re
+from urllib.parse import urlsplit
 import subprocess
 import time
 
@@ -20,12 +22,25 @@ from flask import Blueprint, Response, jsonify, request
 registry_bp = Blueprint('registry', __name__)
 
 
+def _configured_registry() -> str:
+    registry = os.getenv('PINOKIO_REGISTRY_URL', 'https://api.pinokio.co').strip().rstrip('/')
+    parsed = urlsplit(registry)
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or any(ord(char) < 33 for char in registry):
+        raise ValueError('Invalid PINOKIO_REGISTRY_URL')
+    return registry
+
+
 @registry_bp.route('/registry/checkin')
 def registry_checkin():
     return_url = request.args.get('return', '')
     repo       = request.args.get('repo', 'OpenVoiceUI')
     app_slug   = request.args.get('app', '')
-    registry   = request.args.get('registry', 'https://api.pinokio.co')
+    try:
+        registry = _configured_registry()
+    except ValueError:
+        return jsonify({'ok': False, 'error': 'invalid_registry_configuration'}), 500
+    if request.args.get('registry', registry).rstrip('/') != registry:
+        return jsonify({'ok': False, 'error': 'untrusted_registry'}), 400
 
     # Sanitize return_url — only allow http/https redirects
     if return_url and not return_url.startswith(('http://', 'https://')):
@@ -262,13 +277,20 @@ def _get_git_sha(repo_url: str) -> str:
 
     # 4. Fetch from GitHub API — repo_url like https://github.com/OWNER/REPO
     try:
-        parts = repo_url.rstrip('/').rstrip('.git').split('/')
-        if len(parts) >= 2:
-            owner, repo = parts[-2], parts[-1]
+        parsed = urlsplit(repo_url)
+        if parsed.scheme not in {'http', 'https'} or parsed.netloc.lower() != 'github.com' or parsed.query or parsed.fragment:
+            return ''
+        repo_path = parsed.path.rstrip('/')
+        if repo_path.endswith('.git'):
+            repo_path = repo_path[:-4]
+        match = re.fullmatch(r'/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)', repo_path)
+        if match and match.group(2) not in {'.', '..'}:
+            owner, repo = match.groups()
             resp = requests.get(
                 f'https://api.github.com/repos/{owner}/{repo}/commits/main',
                 headers={'Accept': 'application/vnd.github.sha'},
                 timeout=8,
+                allow_redirects=False,
             )
             if resp.ok:
                 return resp.text.strip()
@@ -320,7 +342,12 @@ def checkpoints_snapshot():
     Creates a git snapshot of the app and publishes it to api.pinokio.co.
     """
     token    = request.headers.get('X-Registry-Token', '').strip()
-    registry = request.args.get('registry', 'https://api.pinokio.co').rstrip('/')
+    try:
+        registry = _configured_registry()
+    except ValueError:
+        return jsonify({'ok': False, 'error': 'invalid_registry_configuration'}), 500
+    if request.args.get('registry', registry).rstrip('/') != registry:
+        return jsonify({'ok': False, 'error': 'untrusted_registry'}), 400
     publish  = request.args.get('publish', '0') == '1'
     repo_url = request.args.get('repo', 'https://github.com/MCERQUA/OpenVoiceUI')
     app_slug = request.args.get('app', 'github-com-mcerqua-openvoiceui')
@@ -370,11 +397,12 @@ def checkpoints_snapshot():
             },
             json=post_body,
             timeout=15,
+            allow_redirects=False,
         )
     except requests.RequestException as e:
         return jsonify({'ok': False, 'error': 'publish_failed', 'detail': str(e)}), 502
 
-    if not resp.ok:
+    if not 200 <= resp.status_code < 300:
         try:
             detail = resp.json()
         except Exception:
