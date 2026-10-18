@@ -34,6 +34,7 @@ from routes.static_files import _safe_path
 # ---------------------------------------------------------------------------
 
 from services.paths import MUSIC_DIR, GENERATED_MUSIC_DIR
+from services.public_download import download_public
 
 MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 GENERATED_MUSIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -974,13 +975,11 @@ _BC_KIND_MAP = {"a": "album", "t": "track", "album": "album", "track": "track"}
 
 
 def _fetch_bc_page(url):
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "Mozilla/5.0 (OpenVoiceUI music-resolver/1.0)",
-    })
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.read(1_500_000).decode("utf-8", errors="replace")
-    except (urllib.error.HTTPError, urllib.error.URLError):
+        return download_public(url, max_bytes=1_500_000, timeout=10,
+                               allowed_host_suffix='bandcamp.com').decode('utf-8', errors='replace')
+    except Exception as exc:
+        logger.warning('Bandcamp download failed: %s', exc)
         return None
 
 
