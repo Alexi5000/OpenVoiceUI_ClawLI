@@ -1686,7 +1686,7 @@ def _find_stem_urls(obj, found: dict):
 
 def _persist_stem_urls(urls: dict, name_stem: str) -> dict:
     """Download remote stem URLs into the stems dir. Returns local URLs saved."""
-    if not re.fullmatch(r'[A-Za-z0-9_-]+', name_stem):
+    if not re.fullmatch(r'[\w-]+', name_stem):
         raise ValueError('Invalid stem filename')
     stems_dir = _stems_dir()
     stems_dir.mkdir(parents=True, exist_ok=True)

@@ -99,3 +99,17 @@ def test_suno_callback_preserves_saved_track_and_completion_queue(monkeypatch, t
     entry = suno.completed_songs_queue[0]
     assert (tmp_path / entry['filename']).read_bytes() == b'audio'
     assert suno._load_generated_metadata()[entry['filename']]['suno_id'] == 'song'
+
+
+def test_stem_download_preserves_unicode_names_and_rejects_traversal(monkeypatch, tmp_path):
+    from routes import suno
+    monkeypatch.setattr(suno, '_stems_dir', lambda: tmp_path)
+    monkeypatch.setattr(suno, '_is_safe_download_url', lambda url: True)
+    monkeypatch.setattr(suno, '_stem_clear_pending', lambda stem: None)
+    with patch.object(suno, 'download_public', return_value=b'audio') as download:
+        urls = suno._persist_stem_urls({'vocal': 'https://media.example/a.mp3'}, 'café')
+        assert urls['vocal'].endswith('/café-vocal.mp3')
+        assert (tmp_path / 'café-vocal.mp3').read_bytes() == b'audio'
+        with pytest.raises(ValueError):
+            suno._persist_stem_urls({'vocal': 'https://media.example/a.mp3'}, '../escape')
+        assert download.call_count == 1
