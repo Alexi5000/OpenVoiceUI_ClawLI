@@ -413,15 +413,26 @@ function goDesktop() {
 function updateBreadcrumb(path) {
   const bc = document.getElementById('breadcrumb');
   const parts = path ? path.split('/').filter(Boolean) : [];
-  let html = '<span class="bc-part" onclick="navigate(\'\')">My Files</span>';
+  bc.replaceChildren();
+  const root = document.createElement('span');
+  root.className = 'bc-part';
+  root.textContent = 'My Files';
+  root.addEventListener('click', function() { navigate(''); });
+  bc.appendChild(root);
   let built = '';
   for (let i = 0; i < parts.length; i++) {
     built += (built ? '/' : '') + parts[i];
     const p = built;
-    html += '<span class="bc-sep">\u203A</span>';
-    html += '<span class="bc-part" onclick="navigate(\'' + esc(p) + '\')">' + escHtml(parts[i]) + '</span>';
+    const separator = document.createElement('span');
+    separator.className = 'bc-sep';
+    separator.textContent = '\u203A';
+    bc.appendChild(separator);
+    const item = document.createElement('span');
+    item.className = 'bc-part';
+    item.textContent = parts[i];
+    item.addEventListener('click', function() { navigate(p); });
+    bc.appendChild(item);
   }
-  bc.innerHTML = html;
   document.getElementById('st-path').textContent = 'My Files' + (path ? '/' + path : '');
 }
 
@@ -708,16 +719,30 @@ async function buildQuickAccess() {
     if (data.unavailable || data.error || !data.entries) return;
     var sites = data.entries.filter(function(e) { return e.type === 'dir' && !e.name.endsWith('.old') && !e.name.endsWith('.old-starter'); });
     if (!sites.length) return;
-    var html = '';
+    var items = [];
     for (var i = 0; i < Math.min(sites.length, 4); i++) {
-      var s = sites[i];
-      var shortName = s.name.replace(/-website$/, '').replace(/-web-\d+$/, '').replace(/-/g, ' ');
-      // Add images shortcut
-      html += '<div class="sb-item" onclick="navigate(\'' + esc('Websites/' + s.name + '/public/images') + '\')" style="padding-left:18px"><span class="sb-icon">\uD83D\uDDBC\uFE0F</span><span class="sb-label">' + escHtml(shortName) + ' images</span></div>';
-      // Add /ai/ shortcut
-      html += '<div class="sb-item" onclick="navigate(\'' + esc('Websites/' + s.name + '/ai') + '\')" style="padding-left:18px"><span class="sb-icon">\uD83E\uDD16</span><span class="sb-label">' + escHtml(shortName) + ' /ai</span></div>';
+      const siteName = sites[i].name;
+      const shortName = siteName.replace(/-website$/, '').replace(/-web-\d+$/, '').replace(/-/g, ' ');
+      for (const shortcut of [
+        {suffix: '/public/images', icon: '\uD83D\uDDBC\uFE0F', label: ' images'},
+        {suffix: '/ai', icon: '\uD83E\uDD16', label: ' /ai'}
+      ]) {
+        const item = document.createElement('div');
+        item.className = 'sb-item';
+        item.style.paddingLeft = '18px';
+        const icon = document.createElement('span');
+        icon.className = 'sb-icon';
+        icon.textContent = shortcut.icon;
+        const label = document.createElement('span');
+        label.className = 'sb-label';
+        label.textContent = shortName + shortcut.label;
+        item.appendChild(icon);
+        item.appendChild(label);
+        item.addEventListener('click', function() { navigate('Websites/' + siteName + shortcut.suffix); });
+        items.push(item);
+      }
     }
-    container.innerHTML = html;
+    container.replaceChildren(...items);
   } catch(e) {}
 }
 
@@ -827,7 +852,6 @@ function formatDate(ts) {
   return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
 }
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function esc(s) { return String(s).replace(/'/g,"\\'"); }
 
 /* SIDEBAR CONDENSED MODE — toggle icon-only when tree needs to scroll */
 function updateSidebarCondensed() {
