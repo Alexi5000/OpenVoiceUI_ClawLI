@@ -275,3 +275,38 @@ def test_proxy_rejects_traversal_and_control_characters(canvas_client, route, pa
         response = canvas_client.get(route + path)
         assert response.status_code == 400
         send.assert_not_called()
+
+
+@pytest.mark.parametrize('route', ['/canvas-sse/events', '/canvas-session/default', '/website-dev/index.html'])
+def test_proxy_does_not_follow_upstream_redirects(canvas_client, route, monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    import routes.canvas as canvas
+
+    requested_paths = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requested_paths.append(self.path)
+            self.send_response(302)
+            self.send_header('Location', '/redirect-target')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    for name in ['CANVAS_SSE_PORT', 'CANVAS_SESSION_PORT', 'WEBSITE_DEV_PORT']:
+        monkeypatch.setattr(canvas, name, server.server_port)
+    try:
+        response = canvas_client.get(route)
+        response.get_data()
+        assert len(requested_paths) == 1
+        assert '/redirect-target' not in requested_paths
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
