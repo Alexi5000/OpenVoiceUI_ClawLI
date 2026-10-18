@@ -310,3 +310,15 @@ def test_proxy_does_not_follow_upstream_redirects(canvas_client, route, monkeypa
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+@pytest.mark.parametrize('path,expected', [
+    ('folder/hello world.txt', 'folder/hello%20world.txt'),
+    ('目录/été.html', '%E7%9B%AE%E5%BD%95/%C3%A9t%C3%A9.html'),
+    ('literal%2Fname', 'literal%252Fname'),
+    ('nested/name@part:one', 'nested/name%40part%3Aone'),
+    ('', ''),
+])
+def test_proxy_path_contract_retains_supported_names(path, expected):
+    from routes.canvas import _encoded_proxy_path
+    assert _encoded_proxy_path(path) == expected
