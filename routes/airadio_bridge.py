@@ -38,6 +38,7 @@ from pathlib import Path
 import requests as http_requests
 from flask import Blueprint, jsonify, request
 
+from services.provider_paths import encode_provider_path
 from services.paths import (
     GENERATED_MUSIC_DIR,
     KNOWN_FACES_DIR,
@@ -271,6 +272,11 @@ def _airadio_call(method, path, json=None, files=None, params=None, data=None):
             outbound_headers = {}
             mode = "public"
 
+    try:
+        outbound_path = encode_provider_path(outbound_path)
+    except ValueError:
+        return {"ok": False, "data": None, "status": 400, "mode": mode,
+                "error": {"code": "VALIDATION_FAILED", "message": "Invalid provider path"}}
     url = f"{AIRADIO_URL}{outbound_path}"
     try:
         print(f"📻 AI-Radio [{mode}] {method} {outbound_path}")
@@ -283,6 +289,7 @@ def _airadio_call(method, path, json=None, files=None, params=None, data=None):
             params=params,
             data=data,
             timeout=AIRADIO_TIMEOUT,
+            allow_redirects=False,
         )
     except http_requests.Timeout as exc:
         logger.warning("AI-Radio timeout: %s %s — %s", method, path, exc)
