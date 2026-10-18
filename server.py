@@ -1402,9 +1402,9 @@ def web_search():
     session_proxies = {"http": proxy_server, "https": proxy_server} if proxy_server else None
 
     try:
-        encoded = urllib.parse.quote_plus(query)
         resp = requests.get(
-            f"https://html.duckduckgo.com/html/?q={encoded}",
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
             proxies=session_proxies,
             timeout=15,
