@@ -18,6 +18,7 @@ import time
 from datetime import datetime
 import mimetypes
 from pathlib import Path
+from urllib.parse import quote
 
 import requests as http_requests
 from flask import Blueprint, Response, g, jsonify, redirect, request, send_file
@@ -820,14 +821,28 @@ def canvas_proxy():
         return '<html><body><h1>Canvas Error</h1><p>Internal server error</p></body></html>', 500
 
 
+def _encoded_proxy_path(path: str) -> str:
+    if any(segment in {'.', '..'} for segment in path.split('/')) or '\\' in path or any(ord(char) < 32 or ord(char) == 127 for char in path):
+        raise ValueError('Invalid proxy path')
+    encoded_path = '/'.join(quote(segment, safe='') for segment in path.split('/'))
+    if not re.fullmatch(r'(?:[A-Za-z0-9_.~/-]|%[0-9A-F]{2})*', encoded_path):
+        raise ValueError('Invalid encoded proxy path')
+    return encoded_path
+
+
 @canvas_bp.route('/canvas-sse/<path:path>')
 def canvas_sse_proxy(path):
     """Proxy SSE events from Canvas server."""
+    try:
+        path = _encoded_proxy_path(path)
+    except ValueError:
+        return 'Invalid proxy path', 400
     try:
         resp = http_requests.get(
             f'http://localhost:{CANVAS_SSE_PORT}/{path}',
             stream=True,
             headers={'Accept': 'text/event-stream'},
+            allow_redirects=False,
         )
 
         def generate():
@@ -1078,17 +1093,21 @@ WEBSITE_DEV_PORT = int(os.getenv('WEBSITE_DEV_PORT', '15050'))
 @canvas_bp.route('/website-dev/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
 def website_dev_proxy(path=''):
     """Proxy requests to the local website dev server (for HTTPS canvas compatibility)."""
+    try:
+        path = _encoded_proxy_path(path)
+    except ValueError:
+        return 'Invalid proxy path', 400
     import re as re_module
     try:
         dev_url = f'http://localhost:{WEBSITE_DEV_PORT}/{path}'
         if request.method == 'GET':
-            resp = http_requests.get(dev_url, params=request.args, timeout=30, stream=True)
+            resp = http_requests.get(dev_url, params=request.args, timeout=30, stream=True, allow_redirects=False)
         elif request.method == 'POST':
-            resp = http_requests.post(dev_url, json=request.get_json(silent=True), data=request.get_data(), timeout=30, stream=True)
+            resp = http_requests.post(dev_url, json=request.get_json(silent=True), data=request.get_data(), timeout=30, stream=True, allow_redirects=False)
         elif request.method == 'PUT':
-            resp = http_requests.put(dev_url, json=request.get_json(silent=True), data=request.get_data(), timeout=30, stream=True)
+            resp = http_requests.put(dev_url, json=request.get_json(silent=True), data=request.get_data(), timeout=30, stream=True, allow_redirects=False)
         elif request.method == 'DELETE':
-            resp = http_requests.delete(dev_url, timeout=30, stream=True)
+            resp = http_requests.delete(dev_url, timeout=30, stream=True, allow_redirects=False)
         else:
             return 'Method not allowed', 405
 
@@ -1163,6 +1182,10 @@ def openclaw_ui_proxy(path=''):
 @canvas_bp.route('/canvas-session/<path:path>', methods=['GET', 'POST'])
 def canvas_session_proxy(path):
     """Proxy Canvas session API requests."""
+    try:
+        path = _encoded_proxy_path(path)
+    except ValueError:
+        return 'Invalid proxy path', 400
     _default_session = {
         'id': 'default',
         'stats': {'imageCount': 0, 'pageCount': 0, 'dataCount': 0, 'commandCount': 0},
@@ -1171,13 +1194,14 @@ def canvas_session_proxy(path):
     }
     try:
         if request.method == 'GET':
-            resp = http_requests.get(f'http://localhost:{CANVAS_SESSION_PORT}/api/session/{path}', timeout=5)
+            resp = http_requests.get(f'http://localhost:{CANVAS_SESSION_PORT}/api/session/{path}', timeout=5, allow_redirects=False)
         else:
             resp = http_requests.post(
                 f'http://localhost:{CANVAS_SESSION_PORT}/api/session/{path}',
                 json=request.get_json(),
                 headers={'Content-Type': 'application/json'},
                 timeout=5,
+                allow_redirects=False,
             )
         try:
             return jsonify(resp.json()), resp.status_code

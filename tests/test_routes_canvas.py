@@ -235,3 +235,90 @@ class TestHandlePageMetadataManifestWrite:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["status"] == "ok"
+
+
+@pytest.mark.parametrize('route,method,base', [
+    ('/canvas-sse/', 'GET', 'http://localhost:3030/'),
+    ('/canvas-session/', 'GET', 'http://localhost:3002/api/session/'),
+    ('/canvas-session/', 'POST', 'http://localhost:3002/api/session/'),
+    ('/website-dev/', 'GET', 'http://localhost:15050/'),
+    ('/website-dev/', 'POST', 'http://localhost:15050/'),
+    ('/website-dev/', 'PUT', 'http://localhost:15050/'),
+    ('/website-dev/', 'DELETE', 'http://localhost:15050/'),
+])
+def test_proxy_preserves_path_boundary_and_disables_redirects(canvas_client, route, method, base, monkeypatch):
+    import routes.canvas as canvas
+    import requests
+    monkeypatch.setattr(canvas, 'CANVAS_SSE_PORT', 3030)
+    monkeypatch.setattr(canvas, 'CANVAS_SESSION_PORT', 3002)
+    monkeypatch.setattr(canvas, 'WEBSITE_DEV_PORT', 15050)
+    with patch.object(canvas.http_requests, method.lower()) as send:
+        send.return_value.status_code = 200
+        send.return_value.headers = {'content-type': 'application/json'}
+        send.return_value.iter_content.return_value = [b'{}']
+        send.return_value.json.return_value = {'ok': True}
+        response = canvas_client.open(route + 'nested/a%3Fb%23c%40evil.test?legit=value', method=method, json={})
+        assert response.status_code == 200
+        url = send.call_args.args[0]
+        prepared = requests.Request(method, url).prepare()
+        assert prepared.url == base + 'nested/a%3Fb%23c%40evil.test'
+        assert send.call_args.kwargs['allow_redirects'] is False
+        if route == '/website-dev/' and method == 'GET':
+            assert send.call_args.kwargs['params']['legit'] == 'value'
+
+
+@pytest.mark.parametrize('route', ['/canvas-sse/', '/canvas-session/', '/website-dev/'])
+@pytest.mark.parametrize('path', ['../admin', 'folder/../admin', 'folder/./admin', 'folder%5Cadmin', 'folder%00admin'])
+def test_proxy_rejects_traversal_and_control_characters(canvas_client, route, path):
+    import routes.canvas as canvas
+    with patch.object(canvas.http_requests, 'get') as send:
+        response = canvas_client.get(route + path)
+        assert response.status_code == 400
+        send.assert_not_called()
+
+
+@pytest.mark.parametrize('route', ['/canvas-sse/events', '/canvas-session/default', '/website-dev/index.html'])
+def test_proxy_does_not_follow_upstream_redirects(canvas_client, route, monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    import routes.canvas as canvas
+
+    requested_paths = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requested_paths.append(self.path)
+            self.send_response(302)
+            self.send_header('Location', '/redirect-target')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    for name in ['CANVAS_SSE_PORT', 'CANVAS_SESSION_PORT', 'WEBSITE_DEV_PORT']:
+        monkeypatch.setattr(canvas, name, server.server_port)
+    try:
+        response = canvas_client.get(route)
+        response.get_data()
+        assert len(requested_paths) == 1
+        assert '/redirect-target' not in requested_paths
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.parametrize('path,expected', [
+    ('folder/hello world.txt', 'folder/hello%20world.txt'),
+    ('目录/été.html', '%E7%9B%AE%E5%BD%95/%C3%A9t%C3%A9.html'),
+    ('literal%2Fname', 'literal%252Fname'),
+    ('nested/name@part:one', 'nested/name%40part%3Aone'),
+    ('', ''),
+])
+def test_proxy_path_contract_retains_supported_names(path, expected):
+    from routes.canvas import _encoded_proxy_path
+    assert _encoded_proxy_path(path) == expected
