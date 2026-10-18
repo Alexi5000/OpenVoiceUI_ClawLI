@@ -824,7 +824,7 @@ def canvas_proxy():
 def _encoded_proxy_path(path: str) -> str:
     if any(segment in {'.', '..'} for segment in path.split('/')) or '\\' in path or any(ord(char) < 32 or ord(char) == 127 for char in path):
         raise ValueError('Invalid proxy path')
-    return quote(path, safe='/')
+    return '/'.join(quote(segment, safe='') for segment in path.split('/'))
 
 
 @canvas_bp.route('/canvas-sse/<path:path>')
