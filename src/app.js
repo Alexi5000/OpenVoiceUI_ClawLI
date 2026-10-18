@@ -8440,6 +8440,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
             },
 
             async deletePage(pageId) {
+                if (typeof pageId !== 'string' || !pageId || pageId === '.' || pageId === '..') return;
                 console.log('Archiving page:', pageId);
 
                 // Delete from server FIRST
@@ -8737,6 +8738,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
             },
 
             async toggleStar(pageId) {
+                if (typeof pageId !== 'string' || !pageId || pageId === '.' || pageId === '..') return;
                 if (!pageId || !this.manifest.pages[pageId]) return;
 
                 const page = this.manifest.pages[pageId];
