@@ -252,6 +252,34 @@ def registry_checkin():
     return Response(html, content_type='text/html')
 
 
+_GITHUB_COMMITS_URL = 'https://api.github.com/repos/{repo}/commits/main'
+_DEFAULT_GITHUB_REPO = 'MCERQUA/OpenVoiceUI'
+# owner: GitHub login rules; repo: GitHub repository-name characters.
+_GITHUB_REPO_RE = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9_.-]{1,100}')
+
+
+def _valid_repo_slug(slug: str) -> bool:
+    return bool(_GITHUB_REPO_RE.fullmatch(slug)) and slug.split('/', 1)[1] not in {'.', '..'}
+
+
+def _configured_github_repo() -> str:
+    """Operator-configured ``owner/repo`` used for the GitHub commit lookup."""
+    slug = os.getenv('OPENVOICE_GITHUB_REPO', _DEFAULT_GITHUB_REPO).strip()
+    return slug if _valid_repo_slug(slug) else ''
+
+
+def _parse_github_repo(repo_url: str) -> str:
+    """Return ``owner/repo`` for a strict ``https://github.com/owner/repo`` URL, else ''."""
+    parsed = urlsplit(repo_url or '')
+    if parsed.scheme not in {'http', 'https'} or parsed.netloc.lower() != 'github.com' or parsed.query or parsed.fragment:
+        return ''
+    repo_path = parsed.path.rstrip('/')
+    if repo_path.endswith('.git'):
+        repo_path = repo_path[:-4]
+    slug = repo_path[1:] if repo_path.startswith('/') else ''
+    return slug if _valid_repo_slug(slug) else ''
+
+
 def _get_git_sha(repo_url: str) -> str:
     """Get the real git commit SHA — try local git first, then GitHub API."""
     app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -275,19 +303,16 @@ def _get_git_sha(repo_url: str) -> str:
     if os.path.exists(hash_file):
         return open(hash_file).read().strip()
 
-    # 4. Fetch from GitHub API — repo_url like https://github.com/OWNER/REPO
+    # 4. Fetch from GitHub API. The destination is fully server-constant: a
+    #    fixed host and path prefix plus the operator-configured app repository
+    #    (OPENVOICE_GITHUB_REPO). The request's repo_url is only compared against
+    #    that configuration; it never contributes characters to the URL.
     try:
-        parsed = urlsplit(repo_url)
-        if parsed.scheme not in {'http', 'https'} or parsed.netloc.lower() != 'github.com' or parsed.query or parsed.fragment:
-            return ''
-        repo_path = parsed.path.rstrip('/')
-        if repo_path.endswith('.git'):
-            repo_path = repo_path[:-4]
-        match = re.fullmatch(r'/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)', repo_path)
-        if match and match.group(2) not in {'.', '..'}:
-            owner, repo = match.groups()
+        configured = _configured_github_repo()
+        requested = _parse_github_repo(repo_url)
+        if configured and requested and requested.lower() == configured.lower():
             resp = requests.get(
-                f'https://api.github.com/repos/{owner}/{repo}/commits/main',
+                _GITHUB_COMMITS_URL.format(repo=configured),
                 headers={'Accept': 'application/vnd.github.sha'},
                 timeout=8,
                 allow_redirects=False,
