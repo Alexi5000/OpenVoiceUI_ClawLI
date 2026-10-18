@@ -83,7 +83,8 @@ def _save_generated_image(url: str, ext_hint: str = 'jpg') -> str:
     filename = f'ai-gen-{int(time.time() * 1000)}.{ext}'
     path = UPLOADS_DIR / filename
     content = download_public(url, max_bytes=64 * 1024 * 1024, timeout=60)
-    path.write_bytes(content)
+    with open(path, 'wb') as output:
+        output.write(content)
     logger.info('fal: saved generated image → %s (%d bytes)', path, path.stat().st_size)
     return f'/uploads/{filename}'
 

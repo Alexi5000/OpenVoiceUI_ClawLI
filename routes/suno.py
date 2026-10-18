@@ -1686,7 +1686,7 @@ def _find_stem_urls(obj, found: dict):
 
 def _persist_stem_urls(urls: dict, name_stem: str) -> dict:
     """Download remote stem URLs into the stems dir. Returns local URLs saved."""
-    if not re.fullmatch(r'[\w-]+', name_stem):
+    if not re.fullmatch(r'[\w-]{1,60}', name_stem):
         raise ValueError('Invalid stem filename')
     stems_dir = _stems_dir()
     stems_dir.mkdir(parents=True, exist_ok=True)
@@ -1700,7 +1700,8 @@ def _persist_stem_urls(urls: dict, name_stem: str) -> dict:
         if not p.exists():
             try:
                 content = download_public(url, max_bytes=SUNO_MAX_DOWNLOAD_BYTES, timeout=120, require_https=True)
-                p.write_bytes(content)
+                with open(p, 'wb') as output:
+                    output.write(content)
                 logger.info('Downloaded stem audio (%d bytes)', len(content))
             except Exception as exc:
                 logger.warning(f'stems: download failed ({kind_key}): {exc}')
