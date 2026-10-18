@@ -16,6 +16,7 @@ import base64
 import json
 import logging
 import os
+import re
 import threading
 import time
 import requests as http
@@ -201,8 +202,10 @@ def _generate_gemini(model, prompt, images):
         'contents': [{'role': 'user', 'parts': parts}],
         'generationConfig': {'responseModalities': ['IMAGE', 'TEXT']},
     }
-    url = f'{GEMINI_BASE}/{model}:generateContent?key={GEMINI_KEY}'
-    resp = http.post(url, json=payload, timeout=90)
+    if not isinstance(model, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', model):
+        raise ValueError('Invalid Gemini model identifier')
+    url = f'{GEMINI_BASE}/{model}:generateContent'
+    resp = http.post(url, headers={'x-goog-api-key': GEMINI_KEY}, json=payload, timeout=90, allow_redirects=False)
     # JamBot Books: in-container Gemini image gen (requests, no SDK to attach).
     try:
         from services.jambot_books_hook import record_provider_call
@@ -351,8 +354,10 @@ def _generate_imagen(model, prompt, aspect='1:1'):
         'instances': [{'prompt': prompt}],
         'parameters': {'sampleCount': 1, 'aspectRatio': aspect},
     }
-    url = f'{GEMINI_BASE}/{model}:predict?key={GEMINI_KEY}'
-    resp = http.post(url, json=payload, timeout=90)
+    if not isinstance(model, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', model):
+        raise ValueError('Invalid Imagen model identifier')
+    url = f'{GEMINI_BASE}/{model}:predict'
+    resp = http.post(url, headers={'x-goog-api-key': GEMINI_KEY}, json=payload, timeout=90, allow_redirects=False)
     # JamBot Books: in-container Imagen gen (same Google generativelanguage API + key).
     try:
         from services.jambot_books_hook import record_provider_call

@@ -19,7 +19,6 @@ import base64
 import json
 import logging
 import os
-import re
 import subprocess
 import uuid
 from datetime import datetime, timezone
@@ -39,7 +38,6 @@ AUDIO_CLIPS_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_TEXT_LEN = 8000
 DEFAULT_LEADING_SILENCE_MS = 1000
-SAFE_SLUG = re.compile(r'[^a-zA-Z0-9_-]+')
 
 
 def _load_manifest():
@@ -58,10 +56,9 @@ def _save_manifest(m):
     tmp.replace(AUDIO_CLIPS_MANIFEST)
 
 
-def _make_id(label: str) -> str:
-    slug = SAFE_SLUG.sub('-', label.strip())[:40].strip('-').lower() or 'clip'
+def _make_id() -> str:
     ts = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
-    return f"{ts}-{slug}-{uuid.uuid4().hex[:6]}"
+    return f"{ts}-{uuid.uuid4().hex}"
 
 
 def _encode_mp3_with_silence(input_path, mp3_path, leading_silence_ms):
@@ -121,7 +118,7 @@ def generate_clip():
         logger.exception('TTS generation failed')
         return jsonify({'error': f'TTS generation failed: {e}'}), 500
 
-    clip_id = _make_id(label)
+    clip_id = _make_id()
     raw_path = AUDIO_CLIPS_DIR / f"{clip_id}.raw"
     raw_path.write_bytes(audio_bytes)
 
