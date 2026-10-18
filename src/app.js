@@ -195,6 +195,16 @@ connectAiradio();
         // Map is injected by Flask from DEVSITE_MAP env var (set per user in compose/.env).
         // Example: {"dev-nick.jam-bot.com": "https://nick.jam-bot.com/devsite-printguys-web-2/"}
         function resolveCanvasUrl(url) {
+            if (typeof url !== 'string' || !url.trim()) return null;
+            const isWebUrl = value => {
+                try {
+                    const parsed = new URL(value, window.location.href);
+                    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+                } catch {
+                    return false;
+                }
+            };
+            if (!isWebUrl(url)) return null;
             // Block private/internal IPs — browser can never reach Docker internals
             // Matches 10.x, 172.16-31.x, 192.168.x, localhost, 127.x
             const privateIpPattern = /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?\//i;
@@ -207,7 +217,8 @@ connectAiradio();
                 const fromUrl = from.includes('://') ? from : 'https://' + from;
                 if (url.toLowerCase().startsWith(fromUrl.toLowerCase())) {
                     const remainder = url.slice(fromUrl.length).replace(/^\//, '');
-                    return remainder ? to + remainder : to;
+                    const mappedUrl = remainder ? to + remainder : to;
+                    return isWebUrl(mappedUrl) ? mappedUrl : null;
                 }
             }
             return url;
@@ -7846,7 +7857,8 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                         case 'open-url':
                             // Load external URL in the iframe
                             if (url) {
-                                const resolvedUrl = resolveCanvasUrl(url) || url;
+                                const resolvedUrl = resolveCanvasUrl(url);
+                                if (!resolvedUrl) break;
                                 const iframe = document.getElementById('canvas-iframe');
                                 const container = document.getElementById('canvas-container');
                                 if (iframe) iframe.src = resolvedUrl;
