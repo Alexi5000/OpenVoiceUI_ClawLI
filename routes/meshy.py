@@ -174,6 +174,10 @@ def poll_task(task_id):
 
     kind = request.args.get('kind', 'text-to-3d')
     name_hint = request.args.get('name', '')
+    if kind not in {'text-to-3d', 'image-to-3d'}:
+        return jsonify(error='Invalid task kind'), 400
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', task_id):
+        return jsonify(error='Invalid task identifier'), 400
 
     # API version depends on kind
     ver = 'v2' if kind == 'text-to-3d' else 'v1'

@@ -173,6 +173,8 @@ def _gemini_vision(image_b64: str, mime: str, prompt: str, model: str) -> str:
     # HTTPError message embeds the full URL — so a single 404 on a bad model name writes the live
     # GEMINI_API_KEY into the log, the exception, and any transcript that captures it. Measured
     # 2026-09-06: a fallback test did exactly that. x-goog-api-key keeps it out of every error path.
+    if not isinstance(model, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', model):
+        raise ValueError('Invalid Gemini model identifier')
     resp = requests.post(
         f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
         headers={'x-goog-api-key': key},
@@ -181,6 +183,7 @@ def _gemini_vision(image_b64: str, mime: str, prompt: str, model: str) -> str:
             {'inline_data': {'mime_type': mime, 'data': image_b64}},
         ]}]},
         timeout=60,
+        allow_redirects=False,
     )
     resp.raise_for_status()
     cands = resp.json().get('candidates') or []
