@@ -8444,7 +8444,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
 
                 // Delete from server FIRST
                 try {
-                    const response = await fetch(`${CONFIG.serverUrl}/api/canvas/manifest/page/${pageId}`, {
+                    const response = await fetch(`${CONFIG.serverUrl}/api/canvas/manifest/page/${encodeURIComponent(pageId)}`, {
                         method: 'DELETE'
                     });
                     if (!response.ok) {
@@ -8581,6 +8581,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
             },
 
             async movePageToCategory(pageId, newCategory) {
+                if (typeof pageId !== 'string' || !pageId || pageId === '.' || pageId === '..') return;
                 console.log(`Moving page ${pageId} to category ${newCategory}`);
 
                 // Update local manifest
@@ -8619,7 +8620,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
 
                 // Save to server
                 try {
-                    await fetch(`${CONFIG.serverUrl}/api/canvas/manifest/page/${pageId}`, {
+                    await fetch(`${CONFIG.serverUrl}/api/canvas/manifest/page/${encodeURIComponent(pageId)}`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ category: newCategory })
@@ -8749,7 +8750,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
 
                 // Save to server
                 try {
-                    await fetch(`${CONFIG.serverUrl}/api/canvas/manifest/page/${pageId}`, {
+                    await fetch(`${CONFIG.serverUrl}/api/canvas/manifest/page/${encodeURIComponent(pageId)}`, {
                         method: 'PATCH',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ starred: page.starred })

@@ -44,6 +44,8 @@ FAL_MODELS = {
     'fal-ai/recraft-v3',
 }
 
+FAL_ENDPOINTS = {model: f'{FAL_BASE}/{model}' for model in FAL_MODELS}
+
 # ---------------------------------------------------------------------------
 # Per-call provider receipt (JamFlow Watch live pulse) — same pattern as suno.py.
 # ---------------------------------------------------------------------------
@@ -99,7 +101,7 @@ def fal_image():
         return jsonify({'error': 'prompt is required'}), 400
 
     model = body.get('model') or DEFAULT_MODEL
-    if model not in FAL_MODELS:
+    if not isinstance(model, str) or model not in FAL_ENDPOINTS:
         return jsonify({'error': f'unsupported model {model}',
                         'supported': sorted(FAL_MODELS)}), 400
 
@@ -115,10 +117,10 @@ def fal_image():
 
     logger.info('fal: model=%s prompt_len=%d num=%d', model, len(prompt), num_images)
     try:
-        resp = http.post(f'{FAL_BASE}/{model}',
+        resp = http.post(FAL_ENDPOINTS[model],
                          headers={'Authorization': f'Key {FAL_KEY}',
                                   'Content-Type': 'application/json'},
-                         json=payload, timeout=120)
+                         json=payload, timeout=120, allow_redirects=False)
     except Exception as e:  # noqa: BLE001
         logger.exception('fal: request failed')
         return jsonify({'error': f'fal request failed: {e}'}), 502
