@@ -113,3 +113,18 @@ def test_stem_download_preserves_unicode_names_and_rejects_traversal(monkeypatch
         with pytest.raises(ValueError):
             suno._persist_stem_urls({'vocal': 'https://media.example/a.mp3'}, '../escape')
         assert download.call_count == 1
+
+
+def test_media_writer_confines_paths_and_rejects_external_symlinks(tmp_path):
+    from services.public_download import write_media_file
+    root = tmp_path / 'media'
+    root.mkdir()
+    secret = tmp_path / 'secret'
+    secret.write_bytes(b'private')
+    (root / 'link').symlink_to(secret)
+    for filename in ('../secret', str(secret), 'link'):
+        with pytest.raises(ValueError):
+            write_media_file(root, filename, b'overwrite')
+    assert secret.read_bytes() == b'private'
+    write_media_file(root, 'café-vocal.mp3', b'audio')
+    assert (root / 'café-vocal.mp3').read_bytes() == b'audio'

@@ -75,3 +75,14 @@ def download_public(url, *, max_bytes, timeout=60, require_https=False, allowed_
                     raise ValueError('Download returned an empty resource')
                 return b''.join(chunks)
     raise ValueError('Too many download redirects')
+
+
+def write_media_file(directory, filename, content):
+    import os
+    root = os.path.realpath(directory)
+    destination = os.path.realpath(os.path.join(root, filename))
+    if not destination.startswith(root + os.sep):
+        raise ValueError('Media output escapes its storage directory')
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'wb') as output:
+        output.write(content)

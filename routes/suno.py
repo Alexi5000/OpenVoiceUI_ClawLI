@@ -37,7 +37,7 @@ from flask import Blueprint, jsonify, request
 # ---------------------------------------------------------------------------
 
 from services.paths import GENERATED_MUSIC_DIR
-from services.public_download import download_public
+from services.public_download import download_public, write_media_file
 
 GENERATED_MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 GENERATED_METADATA_FILE = GENERATED_MUSIC_DIR / 'generated_metadata.json'
@@ -1700,8 +1700,7 @@ def _persist_stem_urls(urls: dict, name_stem: str) -> dict:
         if not p.exists():
             try:
                 content = download_public(url, max_bytes=SUNO_MAX_DOWNLOAD_BYTES, timeout=120, require_https=True)
-                with open(p, 'wb') as output:
-                    output.write(content)
+                write_media_file(stems_dir, p.name, content)
                 logger.info('Downloaded stem audio (%d bytes)', len(content))
             except Exception as exc:
                 logger.warning(f'stems: download failed ({kind_key}): {exc}')

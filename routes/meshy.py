@@ -32,7 +32,7 @@ from pathlib import Path
 
 import requests as http
 from flask import Blueprint, jsonify, request
-from services.public_download import download_public
+from services.public_download import download_public, write_media_file
 
 logger = logging.getLogger(__name__)
 meshy_bp = Blueprint('meshy', __name__)
@@ -72,8 +72,7 @@ def _download_and_save(url: str, dest: Path) -> bool:
         dest = CANVAS_DIR / filename
         content = download_public(url, max_bytes=256 * 1024 * 1024, timeout=60)
         CANVAS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(CANVAS_DIR / os.path.basename(filename), 'wb') as output:
-            output.write(content)
+        write_media_file(CANVAS_DIR, filename, content)
         return True
     except Exception as exc:
         logger.warning('Meshy download failed %s: %s', url, exc)

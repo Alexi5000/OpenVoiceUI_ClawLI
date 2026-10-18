@@ -24,7 +24,7 @@ from pathlib import Path
 
 import requests as http
 from flask import Blueprint, jsonify, request
-from services.public_download import download_public
+from services.public_download import download_public, write_media_file
 
 from services.paths import UPLOADS_DIR
 
@@ -83,8 +83,7 @@ def _save_generated_image(url: str, ext_hint: str = 'jpg') -> str:
     filename = f'ai-gen-{int(time.time() * 1000)}.{ext}'
     path = UPLOADS_DIR / filename
     content = download_public(url, max_bytes=64 * 1024 * 1024, timeout=60)
-    with open(path, 'wb') as output:
-        output.write(content)
+    write_media_file(UPLOADS_DIR, filename, content)
     logger.info('fal: saved generated image → %s (%d bytes)', path, path.stat().st_size)
     return f'/uploads/{filename}'
 
