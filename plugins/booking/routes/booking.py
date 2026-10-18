@@ -46,6 +46,7 @@ import requests as http_requests
 from flask import Blueprint, jsonify, request
 
 from services.paths import UPLOADS_DIR
+from services.provider_paths import encode_provider_path
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +166,10 @@ def _proxy(method: str, path: str, *, params=None, json_body=None):
     if not _api_key():
         return _not_configured()
 
+    try:
+        path = encode_provider_path(path)
+    except ValueError:
+        return jsonify({"ok": False, "error": "Invalid booking path"}), 400
     url = f"{_api_url()}{path}"
     try:
         resp = http_requests.request(
@@ -174,6 +179,7 @@ def _proxy(method: str, path: str, *, params=None, json_body=None):
             params=params,
             json=json_body,
             timeout=CAL_TIMEOUT,
+            allow_redirects=False,
         )
     except http_requests.ConnectionError:
         return jsonify({
