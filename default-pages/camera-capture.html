@@ -555,6 +555,7 @@ let authReady = false;
 // ════════════════════════════════════════════════════════════════
 let _authToken = null;
 window.addEventListener('message', e => {
+    if (e.origin !== window.location.origin || e.source !== window.parent) return;
   if (!e.data) return;
   if (e.data.type === 'auth-token') {
     _authToken = e.data.token;

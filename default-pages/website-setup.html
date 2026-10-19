@@ -3183,6 +3183,7 @@ function toast(msg){
 if(window._canvasAuthToken){init()}else{
   let inited=false;
   window.addEventListener('message',function(e){
+    if (e.origin !== window.location.origin || e.source !== window.parent) return;
     if(e.data&&e.data.type==='auth-token'&&!inited){inited=true;init()}
   });
   setTimeout(()=>{if(!inited){inited=true;init()}},200);

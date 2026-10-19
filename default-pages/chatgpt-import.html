@@ -641,6 +641,7 @@
     // ---- Auth ----
     let authToken = null;
     window.addEventListener('message', e => {
+    if (e.origin !== window.location.origin || e.source !== window.parent) return;
       if (e.data && e.data.type === 'auth-token') authToken = e.data.token;
     });
     function authFetch(url, opts = {}) {
