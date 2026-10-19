@@ -6,6 +6,7 @@
  *
  * Loaded by thin-shell index.html via: <script type="module" src="src/app.js">
  */
+import { createMusicEmbed } from './security/music-embed.mjs';
 import { inject } from './ui/AppShell.js';
 import { initUpdateChecker } from './ui/UpdateBanner.js';
 import { connectAiradio } from './shell/airadio-bridge.js';
@@ -1444,8 +1445,8 @@ connectAiradio();
                 this.currentTrack = title;
                 if (this.trackName) this.trackName.textContent = title;
 
-                const embedIframe = `<iframe width="100%" height="166" scrolling="no" frameborder="no" allow="autoplay" src="https://w.soundcloud.com/player/?url=${encodeURIComponent(trackUrl)}&auto_play=true&visual=true&show_artwork=true&show_comments=false"></iframe>`;
-                this._renderEmbed('soundcloud', embedIframe);
+                const embedUrl = `https://w.soundcloud.com/player/?url=${encodeURIComponent(trackUrl)}&auto_play=true&visual=true&show_artwork=true&show_comments=false`;
+                this._renderEmbed('soundcloud', embedUrl);
 
                 if (this.button) this.button.classList.add('active');
                 if (this.panel) {
@@ -1466,24 +1467,21 @@ connectAiradio();
 
                 let title = trackOrAlbumUrl;
                 let artist = 'Bandcamp';
-                let embedHtml = null;
+                let embedUrl = null;
                 try {
                     const r = await fetch(`${CONFIG.serverUrl}/api/music/bandcamp/resolve?url=${encodeURIComponent(trackOrAlbumUrl)}`).then(r => r.json());
                     if (r && r.ok) {
                         title = r.title || title;
                         artist = r.artist || artist;
-                        embedHtml = r.embed_html || null;
-                        this.currentMetadata = { ...this.currentMetadata, title, artist, kind: r.kind, artwork: r.artwork, embedUrl: r.embed_url, embedHtml };
+                        embedUrl = r.embed_url || null;
+                        this.currentMetadata = { ...this.currentMetadata, title, artist, kind: r.kind, artwork: r.artwork, embedUrl };
                     }
                 } catch (e) { console.warn('[MusicModule] BC resolve failed:', e); }
 
                 this.currentTrack = title;
                 if (this.trackName) this.trackName.textContent = title;
 
-                if (!embedHtml) {
-                    embedHtml = `<div style="padding:12px;text-align:center;"><a href="${trackOrAlbumUrl}" target="_blank" rel="noopener" style="color:#3b82f6">Open on Bandcamp</a></div>`;
-                }
-                this._renderEmbed('bandcamp', embedHtml);
+                this._renderEmbed('bandcamp', embedUrl, trackOrAlbumUrl);
 
                 if (this.button) this.button.classList.add('active');
                 if (this.panel) {
@@ -1533,7 +1531,7 @@ connectAiradio();
                 }
             },
 
-            _renderEmbed(provider, iframeHtml) {
+            _renderEmbed(provider, embedUrl, fallbackUrl) {
                 // Render the embed as a SEPARATE floating element attached to <body>, not inside
                 // the music panel. Music panel is bottom-anchored, so content appended inside it
                 // grows it upward and pushes everything above (chat, controls) up the screen.
@@ -1593,8 +1591,9 @@ connectAiradio();
                 }
                 wrap.dataset.provider = provider;
                 const slot = wrap.querySelector('.embed-content');
-                if (slot) slot.innerHTML = iframeHtml || '';
-                wrap.style.display = iframeHtml ? 'block' : 'none';
+                const embed = createMusicEmbed(document, provider, embedUrl, fallbackUrl);
+                if (slot) slot.replaceChildren(...(embed ? [embed] : []));
+                wrap.style.display = embed ? 'block' : 'none';
             },
 
             _clearExternalEmbed() {
@@ -7701,7 +7700,7 @@ connectAiradio();
                 const esc = (s) => String(s || '').replace(/[&<>"']/g, (c) => (
                     {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]
                 ));
-                let meta = { title: url, artist: provider, artwork: '', embedHtml: '' };
+                let meta = { title: url, artist: provider, artwork: '', embedUrl: provider === 'soundcloud' ? `https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}` : null };
 
                 try {
                     if (provider === 'soundcloud') {
@@ -7712,7 +7711,7 @@ connectAiradio();
                             meta.title = oe.title || url;
                             meta.artist = oe.author_name || provider;
                             meta.artwork = oe.thumbnail_url || '';
-                            meta.embedHtml = oe.html || '';
+
                         }
                     } else if (provider === 'bandcamp') {
                         // Bandcamp has no oEmbed + page needs server-side fetch (no CORS)
@@ -7721,13 +7720,14 @@ connectAiradio();
                             meta.title = r.title || url;
                             meta.artist = r.artist || provider;
                             meta.artwork = r.artwork || '';
-                            meta.embedHtml = r.embed_html || '';
+                            meta.embedUrl = r.embed_url || null;
                         }
                     }
                 } catch (e) {
                     console.warn('[openEmbedCanvasPage] resolve failed:', e);
                 }
 
+                const safeEmbed = createMusicEmbed(document, provider, meta.embedUrl, url);
                 const pageHtml = `<!doctype html><html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -7749,7 +7749,7 @@ connectAiradio();
 ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
 <h1>${esc(meta.title) || '(untitled)'}</h1>
 <div class="artist">${esc(meta.artist)}</div>
-<div class="embed">${meta.embedHtml || `<a class="open" href="${esc(url)}" target="_blank" rel="noopener">Open on ${esc(provider)}</a>`}</div>
+<div class="embed">${safeEmbed?.outerHTML || ''}</div>
 </body></html>`;
 
                 const stamp = Date.now().toString(36);
