@@ -12,7 +12,7 @@
 //   - docker cp avoids single-quote issues with cmd.exe
 //   - No sh -c with single quotes (Windows doesn't support them)
 
-const { execSync } = require("child_process");
+const { execSync, execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -31,6 +31,21 @@ function exec(cmd, opts) {
     { encoding: "utf8", timeout: 15000, stdio: ["pipe", "pipe", "pipe"], env: EXEC_ENV },
     opts || {}
   )).trim();
+}
+
+function copyStagedFiles(containerId, files) {
+  const staging = fs.mkdtempSync(path.join(require("os").tmpdir(), "ovu-device-"));
+  try {
+    files.forEach(function(file, index) {
+      const source = path.join(staging, String(index) + ".json");
+      fs.writeFileSync(source, file.content, { flag: "wx", mode: 0o644 });
+      execFileSync("docker", ["cp", source, containerId + ":" + file.destination], {
+        encoding: "utf8", timeout: 15000, stdio: ["pipe", "pipe", "pipe"], env: EXEC_ENV
+      });
+    });
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
 }
 
 function writePairedJson(deviceId, publicKeyPem) {
@@ -106,84 +121,78 @@ function writePairedJson(deviceId, publicKeyPem) {
   // Fallback: openclaw container created devices/ as root via bind mount.
   // Write via docker cp into the container — bind mount reflects it on host too.
   console.log("  devices/ is root-owned — writing via docker cp");
-  var os = require("os");
-  var tmpPaired = path.join(os.tmpdir(), "ovu-paired.json");
-  var tmpPending = path.join(os.tmpdir(), "ovu-pending.json");
-  fs.writeFileSync(tmpPaired, pairedContent);
-  fs.writeFileSync(tmpPending, "{}\n");
-
   var cid = exec(COMPOSE + " ps -q openclaw");
   if (!cid) throw new Error("openclaw container not found for docker cp fallback");
-  exec("docker cp " + JSON.stringify(tmpPaired) + " " + cid + ":/root/.openclaw/devices/paired.json");
-  exec("docker cp " + JSON.stringify(tmpPending) + " " + cid + ":/root/.openclaw/devices/pending.json");
-
-  try { fs.unlinkSync(tmpPaired); } catch (e2) { /* ignore */ }
-  try { fs.unlinkSync(tmpPending); } catch (e2) { /* ignore */ }
+  copyStagedFiles(cid, [
+    { content: pairedContent, destination: "/root/.openclaw/devices/paired.json" },
+    { content: "{}\n", destination: "/root/.openclaw/devices/pending.json" }
+  ]);
 }
 
-// Step 1: Check if the container already has a device identity (from a previous run)
-var containerIdentity = null;
-try {
-  var out = exec(COMPOSE + " exec -T openvoiceui cat " + CONTAINER_PATH);
-  if (out && out.startsWith("{")) {
-    containerIdentity = JSON.parse(out);
-    if (!containerIdentity.deviceId) containerIdentity = null;
-  }
-} catch (e) {
-  // File doesn't exist — fresh volume
-}
-
-if (containerIdentity) {
-  // Scenario 2: Container already has an identity (Docker volume persisted it).
-  // Update paired.json to match whatever the container has.
-  console.log("  Found existing device identity: " + containerIdentity.deviceId.slice(0, 16) + "...");
-
+function main() {
+  // Step 1: Check if the container already has a device identity (from a previous run)
+  var containerIdentity = null;
   try {
-    writePairedJson(containerIdentity.deviceId, containerIdentity.publicKeyPem);
-    console.log("  Updated paired.json to match container identity");
-
-    // Save locally so they stay in sync
-    fs.writeFileSync(IDENTITY_FILE, JSON.stringify(containerIdentity, null, 2) + "\n");
-
-    // No restart needed — openclaw-data/ is a bind mount so paired.json
-    // changes are immediately visible inside the container. OpenClaw reads
-    // paired.json on each WS connection attempt (getPairedDevice()), not
-    // just at startup. DO NOT restart openclaw here — openvoiceui uses
-    // network_mode: "service:openclaw" so restarting openclaw kills both.
-    console.log("  Device is now paired (no restart needed — bind mount is live)");
+    var out = exec(COMPOSE + " exec -T openvoiceui cat " + CONTAINER_PATH);
+    if (out && out.startsWith("{")) {
+      containerIdentity = JSON.parse(out);
+      if (!containerIdentity.deviceId) containerIdentity = null;
+    }
   } catch (e) {
-    console.log("  Warning: could not sync identity: " + e.message);
-  }
-} else {
-  // Scenario 1: Fresh install — no identity in container yet.
-  // Inject the pre-paired identity that setup-config.js generated.
-  if (!fs.existsSync(IDENTITY_FILE)) {
-    console.log("  No pre-paired device identity found — skipping");
-    process.exit(0);
+    // File doesn't exist — fresh volume
   }
 
-  var identity = fs.readFileSync(IDENTITY_FILE, "utf8");
+  if (containerIdentity) {
+    // Scenario 2: Container already has an identity (Docker volume persisted it).
+    // Update paired.json to match whatever the container has.
+    console.log("  Found existing device identity: " + containerIdentity.deviceId.slice(0, 16) + "...");
 
-  try {
-    // Get the container ID for docker cp (avoids shell quoting issues on Windows)
-    var containerId = exec(COMPOSE + " ps -q openvoiceui");
-    if (!containerId) throw new Error("openvoiceui container not found");
+    try {
+      writePairedJson(containerIdentity.deviceId, containerIdentity.publicKeyPem);
+      console.log("  Updated paired.json to match container identity");
 
-    // Ensure uploads dir exists (use double quotes, not single quotes — Windows compat)
-    exec(COMPOSE + ' exec -T openvoiceui mkdir -p /app/runtime/uploads');
+      // Save locally so they stay in sync
+      fs.writeFileSync(IDENTITY_FILE, JSON.stringify(containerIdentity, null, 2) + "\n");
 
-    // Write identity to a temp file and docker cp it in
-    // docker cp avoids all shell quoting and stdin piping issues
-    var tmpFile = path.join("openclaw-data", ".tmp-device-identity.json");
-    fs.writeFileSync(tmpFile, identity);
-    exec("docker cp " + JSON.stringify(tmpFile) + " " + containerId + ":" + CONTAINER_PATH);
+      // No restart needed — openclaw-data/ is a bind mount so paired.json
+      // changes are immediately visible inside the container. OpenClaw reads
+      // paired.json on each WS connection attempt (getPairedDevice()), not
+      // just at startup. DO NOT restart openclaw here — openvoiceui uses
+      // network_mode: "service:openclaw" so restarting openclaw kills both.
+      console.log("  Device is now paired (no restart needed — bind mount is live)");
+    } catch (e) {
+      console.log("  Warning: could not sync identity: " + e.message);
+    }
+  } else {
+    // Scenario 1: Fresh install — no identity in container yet.
+    // Inject the pre-paired identity that setup-config.js generated.
+    if (!fs.existsSync(IDENTITY_FILE)) {
+      console.log("  No pre-paired device identity found — skipping");
+      process.exit(0);
+    }
 
-    // Clean up temp file
-    try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
+    var identity = fs.readFileSync(IDENTITY_FILE, "utf8");
 
-    var deviceId = JSON.parse(identity).deviceId || "unknown";
-    console.log("  Injected pre-paired device identity: " + deviceId.slice(0, 16) + "...");
-  } catch (e) {
-    console.log("  Warning: Could not inject device identity: " + e.message.split("\n")[0]);
+    try {
+      // Get the container ID for docker cp (avoids shell quoting issues on Windows)
+      var containerId = exec(COMPOSE + " ps -q openvoiceui");
+      if (!containerId) throw new Error("openvoiceui container not found");
+
+      // Ensure uploads dir exists (use double quotes, not single quotes — Windows compat)
+      exec(COMPOSE + ' exec -T openvoiceui mkdir -p /app/runtime/uploads');
+
+      // Write identity to a temp file and docker cp it in
+      // docker cp avoids all shell quoting and stdin piping issues
+      copyStagedFiles(containerId, [{ content: identity, destination: CONTAINER_PATH }]);
+
+      var deviceId = JSON.parse(identity).deviceId || "unknown";
+      console.log("  Injected pre-paired device identity: " + deviceId.slice(0, 16) + "...");
+    } catch (e) {
+      console.log("  Warning: Could not inject device identity: " + e.message.split("\n")[0]);
+    }
   }
+
 }
+
+module.exports = { copyStagedFiles };
+if (require.main === module) main();

@@ -31,5 +31,8 @@ jobs:
       - name: Run music embed security regressions
         run: node --test tests/js/music-embed.test.mjs
 
+      - name: Run device staging security regressions
+        run: node --test tests/js/device-staging.test.cjs
+
       - name: Run tests
         run: python -m pytest tests/ --tb=short -q
