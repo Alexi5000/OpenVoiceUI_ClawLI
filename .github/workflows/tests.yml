@@ -37,5 +37,8 @@ jobs:
       - name: Run gallery security regressions
         run: node --test tests/js/gallery-security.test.cjs
 
+      - name: Run session ID security regressions
+        run: node --test tests/js/session-id.test.mjs
+
       - name: Run tests
         run: python -m pytest tests/ --tb=short -q

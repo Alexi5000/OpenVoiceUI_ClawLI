@@ -6,6 +6,7 @@
  *
  * Loaded by thin-shell index.html via: <script type="module" src="src/app.js">
  */
+import { createSessionId } from './security/session-id.mjs';
 import { createMusicEmbed } from './security/music-embed.mjs';
 import { inject } from './ui/AppShell.js';
 import { initUpdateChecker } from './ui/UpdateBanner.js';
@@ -4052,7 +4053,7 @@ connectAiradio();
                 this._voiceActive = true;  // Mark call as active
                 this._sessionGreeted = false;  // Reset so every new call gets a greeting
                 // Generate new session ID for this call
-                this.sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+                this.sessionId = createSessionId();
                 window._activeSessionId = this.sessionId;
                 console.log('New conversation session:', this.sessionId);
 
@@ -6104,7 +6105,7 @@ connectAiradio();
                 this.isProcessing = true;
 
                 // Generate new session ID for this call
-                this.sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+                this.sessionId = createSessionId();
                 window._activeSessionId = this.sessionId;
                 console.log('New conversation session:', this.sessionId);
 

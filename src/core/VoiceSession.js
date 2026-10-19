@@ -21,7 +21,8 @@
  *   await session.start();
  *
  *   // Subscribe via EventBus:
- *   import { eventBus } from './core/EventBus.js';
+ *   import { createSessionId } from '../security/session-id.mjs';
+import { eventBus } from './core/EventBus.js';
  *   eventBus.on('session:message',   ({ role, text }) => { ... });
  *   eventBus.on('session:streaming', ({ text }) => { ... });
  *   eventBus.on('session:thinking',  () => { ... });
@@ -142,7 +143,7 @@ export class VoiceSession {
         }
 
         // Generate session ID
-        this.sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        this.sessionId = createSessionId();
         console.log('[VoiceSession] Session started:', this.sessionId);
 
         // Send greeting first (awaits TTS playback before starting STT)
