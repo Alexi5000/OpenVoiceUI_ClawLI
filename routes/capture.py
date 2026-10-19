@@ -495,14 +495,14 @@ def upload_photo(album_id):
     }
 
     album_dir = _album_file(album_id)
-    media_path = album_dir / 'media' / f"{photo_id}{ext}"
+    media_path = _album_file(album_id, 'media', f"{photo_id}{ext}")
 
     # Save the uploaded file
     file.save(str(media_path))
 
     # Strip EXIF and generate thumbnail for photos
     if not is_video:
-        clean_path = album_dir / 'media' / f"{photo_id}.jpg"
+        clean_path = _album_file(album_id, 'media', f"{photo_id}.jpg")
         _strip_exif_keep_orientation(media_path, clean_path)
         # If we converted to .jpg and the original was not .jpg, remove the original
         if clean_path != media_path:
@@ -513,7 +513,7 @@ def upload_photo(album_id):
             media_path = clean_path
             photo_record['id'] = photo_id  # stays the same
 
-        thumb_path = album_dir / 'thumbs' / f"{photo_id}.jpg"
+        thumb_path = _album_file(album_id, 'thumbs', f"{photo_id}.jpg")
         _make_thumbnail(media_path, thumb_path)
 
     # Append photo record to album.json under flock

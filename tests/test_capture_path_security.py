@@ -100,3 +100,17 @@ def test_index_entry_with_traversal_id_is_skipped(env):
     assert r.status_code == 200 and r.json['total_albums'] == 0
     r = client.get('/api/capture/albums/nearby', query_string={'lat': 1, 'lng': 1})
     assert r.status_code == 200 and r.json == []
+
+
+def test_upload_rejects_symlinked_media_subdirectory(env):
+    client, albums, _, outside = env
+    aid = client.post('/api/capture/albums', json={'name': 'Job'}).json['id']
+    media = albums / aid / 'media'
+    media.rmdir()
+    media.symlink_to(outside, target_is_directory=True)
+    before = set(outside.iterdir())
+    response = client.post(f'/api/capture/albums/{aid}/photos',
+                           data={'file': (_jpeg(), 'p.jpg')},
+                           content_type='multipart/form-data')
+    assert response.status_code == 400
+    assert set(outside.iterdir()) == before
