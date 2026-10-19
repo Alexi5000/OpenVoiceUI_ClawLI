@@ -109,7 +109,7 @@ def submit_issue():
         return jsonify({'ok': True, 'saved': filename})
     # Local save failed but we still accepted the report (forwarded if public).
     # Report it as accepted so the user isn't blocked, with a soft warning.
-    return jsonify({'ok': True, 'saved': None, 'warning': 'stored remotely only', 'detail': save_error})
+    return jsonify({'ok': True, 'saved': None, 'warning': 'stored remotely only'})
 
 
 @report_issue_bp.route('/api/report-issues', methods=['GET'])

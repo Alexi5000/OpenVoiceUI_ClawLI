@@ -237,7 +237,7 @@ def restore_version(page_id: str, timestamp: int) -> bool:
         version_file = safe_join(_versions_dir(), f'{page_id}.{int(timestamp)}.html', allow_base=False)
         current_file = safe_join(CANVAS_PAGES_DIR, f'{page_id}.html', allow_base=False)
     except (UnsafePathError, TypeError, ValueError):
-        logger.error(f'Invalid version restore request: {page_id!r}')
+        logger.error('Invalid version restore request')
         return False
 
     if not version_file.exists():

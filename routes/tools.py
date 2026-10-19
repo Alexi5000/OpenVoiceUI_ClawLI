@@ -115,7 +115,7 @@ def _profile_tool_grants(profile_id: Optional[str]) -> Tuple[Set[str], Set[str]]
         path = safe_join(_profiles_dir(), f"{profile_id}.json", allow_base=False)
     except (UnsafePathError, TypeError):
         # A profile id that escapes the profiles dir grants nothing (fail closed).
-        logger.warning("tools: invalid profile id %r — no tools granted", profile_id)
+        logger.warning("tools: invalid profile id — no tools granted")
         return set(), set()
     if not path.exists():
         logger.warning("tools: unknown profile %r — no tools granted", profile_id)

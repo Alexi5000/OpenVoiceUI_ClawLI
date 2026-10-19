@@ -231,10 +231,10 @@ def _read_json(path: Path) -> dict:
         except json.JSONDecodeError:
             return _parse_jsonc(text)
     except (PermissionError, OSError) as exc:
-        logger.warning(f"Cannot read {path}: {exc}")
+        logger.warning("Cannot read vault JSON file")
         return {}
     except Exception as exc:
-        logger.error(f"Failed to read {path}: {exc}")
+        logger.error("Failed to parse vault JSON file")
         return {}
 
 

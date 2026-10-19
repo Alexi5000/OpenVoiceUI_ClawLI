@@ -214,7 +214,7 @@ def _download_remote_plugin(plugin_id: str) -> Optional[Path]:
                     try:
                         dest_file = safe_join(tmp_dir, rel_path, allow_base=False)
                     except UnsafePathError:
-                        logger.warning(f"Skipping unsafe archive member in plugin '{plugin_id}': {member!r}")
+                        logger.warning("Skipping unsafe plugin archive member")
                         continue
                     dest_file.parent.mkdir(parents=True, exist_ok=True)
                     dest_file.write_bytes(zf.read(member))
@@ -384,7 +384,7 @@ def install_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
                         src = safe_join(dest, file_rel, allow_base=False)
                         dst = safe_join(lore_dest, rel_from_lore, allow_base=False)
                     except (UnsafePathError, TypeError):
-                        logger.warning(f"Skipping unsafe lore path in plugin '{plugin_id}': {file_rel!r}")
+                        logger.warning("Skipping unsafe plugin lore path")
                         continue
                     if src.is_file() and not dst.exists():
                         dst.parent.mkdir(parents=True, exist_ok=True)
