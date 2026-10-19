@@ -11,9 +11,12 @@ Architecture:
   - Sync engine pushes credentials to consumers (openclaw.json, plugin .env files, etc.)
 """
 import json
+import errno
 import logging
 import os
 import re
+import stat
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -914,25 +917,45 @@ def _update_env_file(path: Path, updates: dict) -> bool:
     # Fall back to direct write if the parent dir isn't writable but the file
     # itself is — this is the case for /mnt/system/base/.platform-oauth.env
     # which is bind-mounted as a single file rw, with parent dir read-only.
-    tmp = path.with_suffix(path.suffix + '.vault-tmp')
+    tmp = None
     try:
-        tmp.write_text(new_text)
-        tmp.replace(path)
+        with tempfile.NamedTemporaryFile(mode='w', dir=path.parent,
+                                         prefix=f'.{path.name}.', delete=False) as stream:
+            tmp = Path(stream.name)
+            stream.write(new_text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
     except (PermissionError, OSError) as exc:
-        # Parent dir not writable — try direct write to the existing file
+        if exc.errno not in (errno.EACCES, errno.EPERM, errno.EROFS, errno.EBUSY):
+            logger.error('Cannot replace credential env file (%s)', type(exc).__name__)
+            return False
+        fd = None
         try:
-            tmp.unlink()
-        except Exception:
-            pass
-        try:
-            with open(path, 'w') as f:
+            flags = os.O_WRONLY | getattr(os, 'O_NONBLOCK', 0)
+            if not hasattr(os, 'O_NOFOLLOW'):
+                raise OSError(errno.ENOTSUP, 'Safe direct write is unavailable')
+            fd = os.open(path, flags | os.O_NOFOLLOW)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise OSError(errno.EINVAL, 'Not a private regular file')
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, 'w') as f:
+                fd = None
+                f.truncate(0)
                 f.write(new_text)
                 f.flush()
                 os.fsync(f.fileno())
-            logger.info(f"Wrote env file {path} via direct write (parent dir not writable: {exc})")
+            logger.info('Updated credential env file using direct write')
         except (PermissionError, OSError) as exc2:
-            logger.error(f"Cannot write env file {path}: {exc2}")
+            logger.error('Cannot write credential env file (%s)', type(exc2).__name__)
             return False
+        finally:
+            if fd is not None:
+                os.close(fd)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
     return True
 
 
