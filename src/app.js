@@ -646,8 +646,8 @@ connectAiradio();
                 'bruh': { file: 'bruh.mp3', triggers: ['bruh', 'bruhhh'] },
                 'sad_trombone': { file: 'sad_trombone.mp3', triggers: ['sad trombone', 'womp womp', 'fail', 'wah wah'] }
             },
-            audioCache: {},
-            lastPlayTime: {},
+            audioCache: Object.create(null),
+            lastPlayTime: Object.create(null),
 
             init() {
                 // Preload common sounds
@@ -658,14 +658,14 @@ connectAiradio();
             },
 
             preload(soundName) {
-                if (!this.sounds[soundName]) return;
+                if (!Object.hasOwn(this.sounds, soundName)) return;
                 const audio = new Audio(`${CONFIG.serverUrl}/sounds/${this.sounds[soundName].file}`);
                 audio.preload = 'auto';
                 this.audioCache[soundName] = audio;
             },
 
             play(soundName) {
-                if (!this.sounds[soundName]) {
+                if (!Object.hasOwn(this.sounds, soundName)) {
                     console.warn('Unknown sound:', soundName);
                     return;
                 }
@@ -8667,7 +8667,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                 catKeys.splice(targetIdx, 0, draggedCatId);
 
                 // Rebuild categories object in new order
-                const newCategories = {};
+                const newCategories = Object.create(null);
                 catKeys.forEach(key => {
                     newCategories[key] = this.manifest.categories[key];
                 });
