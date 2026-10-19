@@ -43,6 +43,9 @@ jobs:
       - name: Run object key security regressions
         run: node --test tests/js/object-keys.test.cjs
 
+      - name: Run desktop shortcut security regressions
+        run: node --test tests/js/desktop-shortcut-security.test.cjs
+
       - name: Run upload UI security regressions
         run: node --test tests/js/upload-security.test.cjs
 
