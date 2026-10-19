@@ -559,8 +559,8 @@ def _encode_cover_data_url(cover_path: str) -> str | None:
     image. Used so an agent can attach artwork in the same call that uploads
     the audio."""
     try:
-        p = Path(cover_path)
-        if not p.is_file():
+        p = _resolve_cover_path(cover_path)
+        if p is None:
             return None
         raw = p.read_bytes()
         if not raw:

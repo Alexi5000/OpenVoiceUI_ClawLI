@@ -64,3 +64,19 @@ def test_vault_rejects_cross_client_paths(tmp_path, monkeypatch):
     with pytest.raises(UnsafePathError):
         vault._vault_oauth_path('alice', '../../bob/credentials')
     assert vault._vault_oauth_path('alice', 'github') == tmp_path / 'clients/alice/vault/oauth/github.json'
+
+
+def test_cover_encoder_rejects_files_outside_allowed_roots(tmp_path, monkeypatch):
+    from routes import airadio_bridge
+    uploads = tmp_path / 'uploads'
+    uploads.mkdir()
+    monkeypatch.setattr(airadio_bridge, 'UPLOADS_DIR', uploads)
+    monkeypatch.setattr(airadio_bridge, '_IMAGE_WHITELIST_DIRS', [uploads])
+    outside = tmp_path / 'secret.png'
+    outside.write_bytes(b'private')
+    (uploads / 'escape.png').symlink_to(outside)
+    assert airadio_bridge._encode_cover_data_url(str(outside)) is None
+    assert airadio_bridge._encode_cover_data_url(str(uploads / 'escape.png')) is None
+    good = uploads / 'cover.png'
+    good.write_bytes(b'cover')
+    assert airadio_bridge._encode_cover_data_url(str(good)) == 'data:image/png;base64,Y292ZXI='
