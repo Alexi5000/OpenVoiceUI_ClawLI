@@ -145,7 +145,7 @@ function render() {
   empty.style.display = 'none';
   grid.innerHTML = allIcons.map((icon, i) => `
     <div class="card" onclick="openModal(${i})">
-      <div class="thumb"><img src="${icon.url}" loading="lazy" alt="${esc(icon.name)}"></div>
+      <div class="thumb"><img src="${esc(icon.url)}" loading="lazy" alt="${esc(icon.name)}"></div>
       <div class="name">${esc(icon.name.replace(/-icon$/, '').replace(/-/g, ' '))}</div>
       <div class="tenant">${esc(icon.tenant)}</div>
     </div>
@@ -163,15 +163,16 @@ function openModal(i) {
   if (!icon) return;
   const body = document.getElementById('modal-body');
   body.innerHTML = `
-    <div class="thumb"><img src="${icon.url}" alt="${esc(icon.name)}"></div>
+    <div class="thumb"><img src="${esc(icon.url)}" alt="${esc(icon.name)}"></div>
     <div class="name">${esc(icon.name)}</div>
     <div class="prompt">${esc(icon.prompt || 'No prompt recorded.')} <span class="tenant" style="margin-left:6px">${esc(icon.tenant)}</span></div>
     <div class="url-row">
       <input readonly value="${esc(icon.url)}" onclick="this.select()">
-      <button onclick="copyUrl('${icon.url.replace(/'/g,"\\'")}')">Copy</button>
+      <button id="modal-copy">Copy</button>
     </div>
     <button class="modal-close" onclick="closeModal()">Close</button>
   `;
+  document.getElementById('modal-copy').addEventListener('click', () => copyUrl(icon.url));
   document.getElementById('modal-overlay').classList.add('show');
 }
 function closeModal() { document.getElementById('modal-overlay').classList.remove('show'); }

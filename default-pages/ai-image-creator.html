@@ -806,22 +806,39 @@ function _galleryCard(entry) {
     const el = document.createElement('div');
     el.className = 'gcard';
     el.dataset.url = entry.url;
-    const sUrl  = (entry.url||'').replace(/'/g,"\\'");
-    const sName = (entry.name||'AI Image').replace(/'/g,"\\'");
-    el.innerHTML = `
-        <div class="gcard-img">
-            <img src="${entry.url}" alt="${entry.name||'AI Image'}" loading="lazy" onclick="openLightbox('${sUrl}','${sName}')">
-        </div>
-        <div class="gcard-body">
-            <div class="gcard-name" title="${entry.name||''}">${entry.name||'AI Image'}</div>
-            <div class="gcard-actions">
-                <button onclick="useLightboxUrlAsRef('${sUrl}','${sName}')">🔧 Use</button>
-                <button onclick="copyUrl('${sUrl}')">📋 Copy</button>
-                <button onclick="downloadFromUrl('${sUrl}','${sName}.png')">⬇️</button>
-                <button class="del" onclick="removeFromGallery('${sUrl}',this.closest('.gcard'))">✕</button>
-            </div>
-        </div>
-    `;
+    const url = entry.url || '';
+    const name = entry.name || 'AI Image';
+    const imageBox = document.createElement('div');
+    imageBox.className = 'gcard-img';
+    const image = document.createElement('img');
+    image.src = url;
+    image.alt = name;
+    image.loading = 'lazy';
+    image.addEventListener('click', () => openLightbox(url, name));
+    imageBox.append(image);
+    const body = document.createElement('div');
+    body.className = 'gcard-body';
+    const label = document.createElement('div');
+    label.className = 'gcard-name';
+    label.title = entry.name || '';
+    label.textContent = name;
+    const actions = document.createElement('div');
+    actions.className = 'gcard-actions';
+    const buttons = [
+        ['🔧 Use', () => useLightboxUrlAsRef(url, name)],
+        ['📋 Copy', () => copyUrl(url)],
+        ['⬇️', () => downloadFromUrl(url, name + '.png')],
+        ['✕', () => removeFromGallery(url, el)],
+    ];
+    buttons.forEach(([text, action], index) => {
+        const button = document.createElement('button');
+        button.textContent = text;
+        if (index === 3) button.className = 'del';
+        button.addEventListener('click', action);
+        actions.append(button);
+    });
+    body.append(label, actions);
+    el.append(imageBox, body);
     return el;
 }
 
