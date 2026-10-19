@@ -34,5 +34,8 @@ jobs:
       - name: Run device staging security regressions
         run: node --test tests/js/device-staging.test.cjs
 
+      - name: Run gallery security regressions
+        run: node --test tests/js/gallery-security.test.cjs
+
       - name: Run tests
         run: python -m pytest tests/ --tb=short -q
