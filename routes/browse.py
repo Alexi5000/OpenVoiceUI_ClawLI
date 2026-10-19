@@ -21,11 +21,13 @@ never exposed to the browser.
 """
 import logging
 import os
+import tempfile
 
 import requests
 from flask import Blueprint, Response, jsonify, request
 
 from services.paths import DEFAULT_PAGES_DIR, UPLOADS_DIR
+from services.safe_paths import UnsafePathError, safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -225,15 +227,26 @@ def browse_download():
         if "filename=" in cd:
             fname = cd.split("filename=", 1)[1].strip().strip('"') or fname
         fname = os.path.basename(fname)
+        if not fname or fname in {".", ".."} or "\\" in fname:
+            return jsonify({"error": "invalid download filename"}), 400
         UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-        dest = UPLOADS_DIR / fname
-        with open(dest, "wb") as fh:
-            for chunk in r.iter_content(65536):
-                fh.write(chunk)
         try:
-            os.chmod(dest, 0o664)
-        except OSError:
-            pass
+            safe_join(UPLOADS_DIR, fname, allow_base=False)
+            dest = UPLOADS_DIR.resolve() / fname
+        except UnsafePathError:
+            return jsonify({"error": "invalid download filename"}), 400
+        fd, staged = tempfile.mkstemp(prefix=".browse-download-", dir=str(UPLOADS_DIR))
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                for chunk in r.iter_content(65536):
+                    fh.write(chunk)
+                fh.flush()
+                os.fsync(fh.fileno())
+                os.fchmod(fh.fileno(), 0o664)
+            os.replace(staged, dest)
+        finally:
+            if os.path.exists(staged):
+                os.unlink(staged)
         return jsonify({"saved": fname, "url": f"/uploads/{fname}"})
     except requests.RequestException as e:
         logger.error("browse download failed: %s", e)
