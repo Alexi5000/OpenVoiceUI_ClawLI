@@ -2156,19 +2156,39 @@ async function createShortcut() {
     !recycleBin.includes(id)
   );
   if (!available.length) { showConfirmModal('No canvas pages available.', ()=>{}); return; }
-  let html = '<div style="padding:12px;font-size:12px;display:flex;flex-direction:column;height:100%">';
-  html += '<div style="font-weight:bold;margin-bottom:8px">Select a page to add to desktop:</div>';
-  html += '<div style="flex:1;overflow-y:auto;border:1px solid #bbb;border-radius:2px">';
+  const content = document.createElement('div');
+  content.style.cssText = 'padding:12px;font-size:12px;display:flex;flex-direction:column;height:100%';
+  const heading = document.createElement('div');
+  heading.style.cssText = 'font-weight:bold;margin-bottom:8px';
+  heading.textContent = 'Select a page to add to desktop:';
+  const list = document.createElement('div');
+  list.style.cssText = 'flex:1;overflow-y:auto;border:1px solid #bbb;border-radius:2px';
   available.sort((a,b)=>a[1].name.localeCompare(b[1].name)).forEach(([id, p]) => {
     const onDesktop = desktopPages.includes(id);
-    html += `<div style="padding:5px 8px;cursor:pointer;display:flex;align-items:center;gap:8px;border-bottom:1px solid #eee${onDesktop?' opacity:.5':''}" onclick="if(!${onDesktop})addShortcutToDesktop('${id}',this)">
-      <span style="font-size:16px">${getIcon(getPageIconType(p.cat,id,p.name)).replace(/<[^>]+>/g,'') ? '📄' : '📄'}</span>
-      <span style="flex:1">${p.name}</span>
-      ${onDesktop ? '<span style="color:#999;font-size:10px">on desktop</span>' : ''}
-    </div>`;
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:5px 8px;cursor:pointer;display:flex;align-items:center;gap:8px;border-bottom:1px solid #eee';
+    if (onDesktop) row.style.opacity = '.5';
+    row.addEventListener('click', () => {
+      if (!desktopPages.includes(id)) addShortcutToDesktop(id, row);
+    });
+    const icon = document.createElement('span');
+    icon.style.fontSize = '16px';
+    icon.textContent = '📄';
+    const name = document.createElement('span');
+    name.style.flex = '1';
+    name.textContent = p.name;
+    row.append(icon, name);
+    if (onDesktop) {
+      const status = document.createElement('span');
+      status.style.cssText = 'color:#999;font-size:10px';
+      status.textContent = 'on desktop';
+      row.append(status);
+    }
+    list.append(row);
   });
-  html += '</div></div>';
-  createWindow({title:'Add Shortcut to Desktop', content:html, width:340, height:380});
+  content.append(heading, list);
+  const windowId = createWindow({title:'Add Shortcut to Desktop', width:340, height:380});
+  windows.get(windowId).el.querySelector('.win-body').append(content);
 }
 
 function addShortcutToDesktop(pageId, el) {
