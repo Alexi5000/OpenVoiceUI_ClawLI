@@ -35,6 +35,7 @@ from flask import Blueprint, jsonify, request, send_file
 from PIL import Image, ImageOps
 
 from services.paths import RUNTIME_DIR
+from services.safe_paths import UnsafePathError, safe_join
 
 logger = logging.getLogger(__name__)
 capture_bp = Blueprint('capture', __name__)
@@ -66,6 +67,25 @@ DEFAULT_GEOFENCE_M = 120
 # Vision model keys -- haiku tier (cheap, fast)
 GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
+
+
+# ---------------------------------------------------------------------------
+# Path containment helpers
+# ---------------------------------------------------------------------------
+
+def _album_file(album_id, *parts) -> Path:
+    """Resolve a path inside one album directory (raises UnsafePathError)."""
+    return safe_join(ALBUMS_SUBDIR, str(album_id), *parts, allow_base=False)
+
+
+def _receipt_file(client_uuid) -> Path:
+    """Resolve a queue-receipt path inside RECEIPTS_DIR (raises UnsafePathError)."""
+    return safe_join(RECEIPTS_DIR, f"{client_uuid}.json", allow_base=False)
+
+
+@capture_bp.errorhandler(UnsafePathError)
+def _unsafe_path(_exc):
+    return jsonify({'error': 'Invalid path'}), 400
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +293,7 @@ def create_album():
         'updated_at': now,
     }
 
-    album_dir = ALBUMS_SUBDIR / album_id
+    album_dir = _album_file(album_id)
     album_dir.mkdir(parents=True, exist_ok=True)
     (album_dir / 'media').mkdir(exist_ok=True)
     (album_dir / 'thumbs').mkdir(exist_ok=True)
@@ -288,7 +308,7 @@ def create_album():
 @capture_bp.route('/albums/<album_id>', methods=['GET'])
 def get_album(album_id):
     """Full album record + photos."""
-    album_path = ALBUMS_SUBDIR / album_id / 'album.json'
+    album_path = _album_file(album_id, 'album.json')
     if not album_path.exists():
         return jsonify({'error': 'Album not found'}), 404
     album_data = _read_json_safe(album_path)
@@ -298,7 +318,7 @@ def get_album(album_id):
 @capture_bp.route('/albums/<album_id>', methods=['PATCH'])
 def update_album(album_id):
     """Update album fields (merge semantics -- never blank existing values)."""
-    album_path = ALBUMS_SUBDIR / album_id / 'album.json'
+    album_path = _album_file(album_id, 'album.json')
     if not album_path.exists():
         return jsonify({'error': 'Album not found'}), 404
 
@@ -320,7 +340,7 @@ def update_album(album_id):
 @capture_bp.route('/albums/<album_id>/archive', methods=['POST'])
 def archive_album(album_id):
     """Soft-archive an album (set status='archived')."""
-    album_path = ALBUMS_SUBDIR / album_id / 'album.json'
+    album_path = _album_file(album_id, 'album.json')
     if not album_path.exists():
         return jsonify({'error': 'Album not found'}), 404
 
@@ -354,7 +374,10 @@ def albums_nearby():
         # Falling back to album.json means no migration pass is needed and a
         # stale index degrades to "slower", never to "silently no matches".
         if a_lat is None or a_lng is None or fence_m is None:
-            album_path = ALBUMS_SUBDIR / str(entry.get('id', '')) / 'album.json'
+            try:
+                album_path = _album_file(entry.get('id', ''), 'album.json')
+            except UnsafePathError:
+                continue
             if album_path.exists():
                 full = _read_json_safe(album_path, default={}) or {}
                 if a_lat is None:
@@ -392,7 +415,7 @@ def albums_nearby():
 @capture_bp.route('/albums/<album_id>/folders', methods=['POST'])
 def add_folder(album_id):
     """Add a sub-folder to an album."""
-    album_path = ALBUMS_SUBDIR / album_id / 'album.json'
+    album_path = _album_file(album_id, 'album.json')
     if not album_path.exists():
         return jsonify({'error': 'Album not found'}), 404
 
@@ -422,14 +445,14 @@ def upload_photo(album_id):
     Idempotent on client_uuid -- if a receipt exists for that uuid,
     returns the existing photo record (200, not 201).
     """
-    album_path = ALBUMS_SUBDIR / album_id / 'album.json'
+    album_path = _album_file(album_id, 'album.json')
     if not album_path.exists():
         return jsonify({'error': 'Album not found'}), 404
 
     # --- Idempotency check on client_uuid ---
     client_uuid = request.form.get('client_uuid', '').strip()
     if client_uuid:
-        receipt_path = RECEIPTS_DIR / f"{client_uuid}.json"
+        receipt_path = _receipt_file(client_uuid)
         existing = _read_json_safe(receipt_path)
         if existing:
             logger.info("Idempotent upload -- client_uuid=%s already ingested as %s",
@@ -471,7 +494,7 @@ def upload_photo(album_id):
         'deleted': False,
     }
 
-    album_dir = ALBUMS_SUBDIR / album_id
+    album_dir = _album_file(album_id)
     media_path = album_dir / 'media' / f"{photo_id}{ext}"
 
     # Save the uploaded file
@@ -507,7 +530,7 @@ def upload_photo(album_id):
             'photo_id': photo_id,
             'created_at': now,
         }
-        _write_json_safe(RECEIPTS_DIR / f"{client_uuid}.json", receipt)
+        _write_json_safe(_receipt_file(client_uuid), receipt)
 
     # Update index.json
     updated_album = _read_json_safe(album_path)
@@ -519,7 +542,7 @@ def upload_photo(album_id):
 @capture_bp.route('/albums/<album_id>/media/<photo_id>', methods=['GET'])
 def serve_media(album_id, photo_id):
     """Serve a photo or video file. Includes Accept-Ranges for video seeking."""
-    album_dir = ALBUMS_SUBDIR / album_id
+    album_dir = _album_file(album_id)
     if not album_dir.exists():
         return jsonify({'error': 'Album not found'}), 404
 
@@ -554,7 +577,7 @@ def serve_media(album_id, photo_id):
 @capture_bp.route('/albums/<album_id>/thumb/<photo_id>', methods=['GET'])
 def serve_thumb(album_id, photo_id):
     """Serve a 400px thumbnail."""
-    thumb_path = ALBUMS_SUBDIR / album_id / 'thumbs' / f"{photo_id}.jpg"
+    thumb_path = _album_file(album_id, 'thumbs', f"{photo_id}.jpg")
     if not thumb_path.exists():
         return jsonify({'error': 'Thumbnail not found'}), 404
 
@@ -566,7 +589,7 @@ def serve_thumb(album_id, photo_id):
 @capture_bp.route('/albums/<album_id>/photos/<photo_id>', methods=['PATCH'])
 def update_photo(album_id, photo_id):
     """Update photo metadata (note, tags, folder, hidden_from_share, pair_before_id)."""
-    album_path = ALBUMS_SUBDIR / album_id / 'album.json'
+    album_path = _album_file(album_id, 'album.json')
     if not album_path.exists():
         return jsonify({'error': 'Album not found'}), 404
 
@@ -594,7 +617,7 @@ def update_photo(album_id, photo_id):
 @capture_bp.route('/albums/<album_id>/photos/<photo_id>/annotate', methods=['POST'])
 def annotate_photo(album_id, photo_id):
     """Receive an annotation overlay image, save as .annotated.jpg."""
-    album_path = ALBUMS_SUBDIR / album_id / 'album.json'
+    album_path = _album_file(album_id, 'album.json')
     if not album_path.exists():
         return jsonify({'error': 'Album not found'}), 404
 
@@ -614,9 +637,9 @@ def annotate_photo(album_id, photo_id):
         return jsonify({'error': 'Photo not found'}), 404
 
     # Save the annotation overlay, convert to JPG
-    album_dir = ALBUMS_SUBDIR / album_id
-    annotated_path = album_dir / 'media' / f"{photo_id}.annotated.jpg"
-    save_path = album_dir / 'media' / f"_annotation_tmp_{photo_id}.png"
+    album_dir = _album_file(album_id)
+    annotated_path = _album_file(album_id, 'media', f"{photo_id}.annotated.jpg")
+    save_path = _album_file(album_id, 'media', f"_annotation_tmp_{photo_id}.png")
     file.save(str(save_path))
 
     try:
@@ -649,7 +672,7 @@ def annotate_photo(album_id, photo_id):
 @capture_bp.route('/albums/<album_id>/photos/<photo_id>/move', methods=['POST'])
 def move_photo(album_id, photo_id):
     """Move a photo to a different folder."""
-    album_path = ALBUMS_SUBDIR / album_id / 'album.json'
+    album_path = _album_file(album_id, 'album.json')
     if not album_path.exists():
         return jsonify({'error': 'Album not found'}), 404
 
@@ -677,7 +700,7 @@ def move_photo(album_id, photo_id):
 @capture_bp.route('/albums/<album_id>/photos/<photo_id>', methods=['DELETE'])
 def delete_photo(album_id, photo_id):
     """SOFT DELETE ONLY -- sets deleted:true, file stays on disk."""
-    album_path = ALBUMS_SUBDIR / album_id / 'album.json'
+    album_path = _album_file(album_id, 'album.json')
     if not album_path.exists():
         return jsonify({'error': 'Album not found'}), 404
 
@@ -794,12 +817,12 @@ def _describe_with_vision(image_path: Path) -> dict:
 @capture_bp.route('/albums/<album_id>/photos/<photo_id>/describe', methods=['POST'])
 def describe_photo(album_id, photo_id):
     """Server-side vision description of a single photo."""
-    album_path = ALBUMS_SUBDIR / album_id / 'album.json'
+    album_path = _album_file(album_id, 'album.json')
     if not album_path.exists():
         return jsonify({'error': 'Album not found'}), 404
 
     # Find the media file
-    album_dir = ALBUMS_SUBDIR / album_id
+    album_dir = _album_file(album_id)
     media_dir = album_dir / 'media'
     media_file = None
     if media_dir.exists():
@@ -839,7 +862,7 @@ def batch_describe(album_id):
 
     Processes up to 5 synchronously; returns a job-style response for larger batches.
     """
-    album_path = ALBUMS_SUBDIR / album_id / 'album.json'
+    album_path = _album_file(album_id, 'album.json')
     if not album_path.exists():
         return jsonify({'error': 'Album not found'}), 404
 
@@ -851,7 +874,7 @@ def batch_describe(album_id):
 
     # Collect photos that need describing (photos without ai_caption)
     to_describe = []
-    album_dir = ALBUMS_SUBDIR / album_id
+    album_dir = _album_file(album_id)
     media_dir = album_dir / 'media'
     for p in photos:
         if not p.get('ai_caption') and p.get('type') != 'video':
@@ -935,7 +958,10 @@ def search_photos():
     index = _read_json_safe(INDEX_PATH, default=[])
     for summary in index:
         album_id = summary.get('id', '')
-        album_path = ALBUMS_SUBDIR / album_id / 'album.json'
+        try:
+            album_path = _album_file(album_id, 'album.json')
+        except UnsafePathError:
+            continue
         if not album_path.exists():
             continue
         album_data = _read_json_safe(album_path)

@@ -37,6 +37,7 @@ from flask import Blueprint, jsonify, request
 # ---------------------------------------------------------------------------
 
 from services.paths import GENERATED_MUSIC_DIR
+from services.safe_paths import UnsafePathError, safe_join
 from services.public_download import download_public, write_media_file
 
 GENERATED_MUSIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -1606,6 +1607,11 @@ def _stems_dir() -> Path:
     return CANVAS_PAGES_DIR / '_data' / 'stems'
 
 
+def _stem_file(filename: str) -> Path:
+    """Contained path for a stem artefact; raises UnsafePathError on escape."""
+    return safe_join(_stems_dir(), filename, allow_base=False)
+
+
 def _stem_name_for(src_name: str, task_id: str) -> str:
     name_stem = Path(src_name).stem if src_name else task_id[:12]
     return ''.join(ch for ch in name_stem if ch.isalnum() or ch in '-_')[:60] or task_id[:12]
@@ -1615,20 +1621,23 @@ def _stem_disk_urls(name_stem: str) -> dict:
     """URLs for stems already persisted to disk ({} if the vocal is missing)."""
     found = {}
     for kind_key in ('vocal', 'instrumental'):
-        p = _stems_dir() / f'{name_stem}-{kind_key}.mp3'
+        try:
+            p = _stem_file(f'{name_stem}-{kind_key}.mp3')
+        except UnsafePathError:
+            return {}
         if p.exists() and p.stat().st_size > 0:
             found[kind_key] = f'/canvas-data/stems/{p.name}'
     return found if found.get('vocal') else {}
 
 
 def _stem_pending_path(name_stem: str) -> Path:
-    return _stems_dir() / f'{name_stem}.pending.json'
+    return _stem_file(f'{name_stem}.pending.json')
 
 
 def _stem_read_pending(name_stem: str) -> dict:
     """Fresh pending marker for this track, or {} (stale/missing/unreadable)."""
-    p = _stem_pending_path(name_stem)
     try:
+        p = _stem_pending_path(name_stem)
         info = json.loads(p.read_text())
         if info.get('task_id') and (time.time() - float(info.get('ts', 0))) < _STEM_PENDING_TTL:
             return info
@@ -1641,14 +1650,14 @@ def _stem_write_pending(name_stem: str, task_id: str, sep_type: str):
     try:
         _stem_pending_path(name_stem).write_text(json.dumps(
             {'task_id': task_id, 'ts': time.time(), 'type': sep_type}))
-    except OSError as exc:
+    except (OSError, UnsafePathError) as exc:
         logger.warning(f'stem pending marker write failed ({name_stem}): {exc}')
 
 
 def _stem_clear_pending(name_stem: str):
     try:
         _stem_pending_path(name_stem).unlink(missing_ok=True)
-    except OSError:
+    except (OSError, UnsafePathError):
         pass
 
 
@@ -1696,7 +1705,7 @@ def _persist_stem_urls(urls: dict, name_stem: str) -> dict:
             continue
         if not _is_safe_download_url(url) or not url.lower().startswith('https://'):
             continue
-        p = stems_dir / f'{name_stem}-{kind_key}.mp3'
+        p = _stem_file(f'{name_stem}-{kind_key}.mp3')
         if not p.exists():
             try:
                 content = download_public(url, max_bytes=SUNO_MAX_DOWNLOAD_BYTES, timeout=120, require_https=True)
@@ -2620,7 +2629,10 @@ def delete_song(filename):
     if not re.match(r'^[\w\-. ]+\.(mp3|wav|ogg|m4a)$', filename):
         return jsonify({'error': 'Invalid filename'}), 400
 
-    target = GENERATED_MUSIC_DIR / filename
+    try:
+        target = safe_join(GENERATED_MUSIC_DIR, filename, allow_base=False)
+    except UnsafePathError:
+        return jsonify({'error': 'Invalid filename'}), 400
     if not target.exists():
         return jsonify({'error': 'File not found'}), 404
 

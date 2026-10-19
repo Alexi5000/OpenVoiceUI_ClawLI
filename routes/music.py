@@ -34,6 +34,7 @@ from routes.static_files import _safe_path
 # ---------------------------------------------------------------------------
 
 from services.paths import MUSIC_DIR, GENERATED_MUSIC_DIR
+from services.safe_paths import UnsafePathError, safe_join
 from services.public_download import download_public
 
 MUSIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -806,7 +807,10 @@ def upload_music():
     safe_name = "".join(c for c in Path(file.filename).stem if c.isalnum() or c in " _-")
     safe_name = safe_name[:50] + ext
 
-    save_path = MUSIC_DIR / safe_name
+    try:
+        save_path = safe_join(MUSIC_DIR, safe_name, allow_base=False)
+    except UnsafePathError:
+        return jsonify({"error": "Invalid filename"}), 400
     file.save(save_path)
 
     return jsonify({
@@ -860,7 +864,10 @@ def delete_track(playlist, filename):
         return jsonify({"error": f"Unknown playlist '{playlist}'"}), 400
 
     safe_filename = "".join(c for c in filename if c.isalnum() or c in "._- ")
-    track_path = music_dir / safe_filename
+    try:
+        track_path = safe_join(music_dir, safe_filename, allow_base=False)
+    except UnsafePathError:
+        return jsonify({"error": "Track not found"}), 404
 
     if not track_path.exists():
         return jsonify({"error": "Track not found"}), 404
@@ -934,7 +941,10 @@ def update_track_metadata(playlist, filename):
         return jsonify({"error": f"Unknown playlist '{playlist}'"}), 400
 
     safe_filename = "".join(c for c in filename if c.isalnum() or c in "._- ")
-    track_path = music_dir / safe_filename
+    try:
+        track_path = safe_join(music_dir, safe_filename, allow_base=False)
+    except UnsafePathError:
+        return jsonify({"error": "Track not found"}), 404
     if not track_path.exists():
         return jsonify({"error": "Track not found"}), 404
 

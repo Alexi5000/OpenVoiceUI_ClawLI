@@ -20,6 +20,7 @@ import requests as http_requests
 from flask import Blueprint, jsonify, request
 
 from services.paths import RUNTIME_DIR
+from services.safe_paths import UnsafePathError, safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -84,14 +85,15 @@ def submit_issue():
         date_str = now.strftime('%Y-%m-%d')
         time_str = now.strftime('%H-%M-%S')
         filename = f'{date_str}_{time_str}_{issue_type}.json'
-        filepath = REPORTS_DIR / filename
+        filepath = safe_join(REPORTS_DIR, filename, allow_base=False)
 
         if filepath.exists():
             filename = f'{date_str}_{time_str}_{issue_type}_2.json'
-            filepath = REPORTS_DIR / filename
+            filepath = safe_join(REPORTS_DIR, filename, allow_base=False)
 
         filepath.write_text(json.dumps(report, indent=2))
-    except OSError as e:
+    except (OSError, UnsafePathError) as e:
+        filename = None
         save_error = str(e)
         logger.error('Failed to save issue report locally: %s', e)
 
@@ -107,7 +109,7 @@ def submit_issue():
         return jsonify({'ok': True, 'saved': filename})
     # Local save failed but we still accepted the report (forwarded if public).
     # Report it as accepted so the user isn't blocked, with a soft warning.
-    return jsonify({'ok': True, 'saved': None, 'warning': 'stored remotely only', 'detail': save_error})
+    return jsonify({'ok': True, 'saved': None, 'warning': 'stored remotely only'})
 
 
 @report_issue_bp.route('/api/report-issues', methods=['GET'])

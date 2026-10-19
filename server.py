@@ -338,6 +338,7 @@ except Exception as _e:
 # ---------------------------------------------------------------------------
 
 from services.paths import VOICE_SESSION_FILE as _VSF_PATH, DB_PATH, UPLOADS_DIR
+from services.safe_paths import UnsafePathError, safe_join
 VOICE_SESSION_FILE = Path(_VSF_PATH)
 _consecutive_empty_responses = 0
 
@@ -1588,14 +1589,17 @@ def upload_file():
 
     safe_name = re.sub(r"[^\w\-.]", "_", file.filename)[:80]
     save_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_name}"
-    save_path = UPLOADS_DIR / save_name
+    try:
+        save_path = safe_join(UPLOADS_DIR, save_name, allow_base=False)
+    except UnsafePathError:
+        return jsonify({"error": "Invalid filename"}), 400
     file.save(save_path)
 
     is_image = ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"}
     result = {
         "filename": save_name,
         "original_name": file.filename,
-        "path": str(save_path),
+        "path": str(UPLOADS_DIR / save_name),
         "type": "image" if is_image else "text",
         "size": save_path.stat().st_size,
         "url": f"/uploads/{save_name}",

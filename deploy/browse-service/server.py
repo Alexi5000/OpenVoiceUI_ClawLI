@@ -765,6 +765,25 @@ async def h_tabs(request):
     return web.json_response(await svc.tabs_info(sess))
 
 
+def _contained_file(base, name):
+    """Return realpath(base/name) if it stays strictly inside realpath(base).
+
+    Standalone equivalent of services.safe_paths.safe_join (this service is
+    deployed as a single file): rejects NUL, absolute paths, '..' segments and
+    symlinks that resolve outside the base. Returns None when unsafe.
+    """
+    name = os.fspath(name)
+    if not name or "\x00" in name or os.path.isabs(name) or name.startswith("\\"):
+        return None
+    if any(seg == ".." for seg in name.replace("\\", "/").split("/")):
+        return None
+    base_real = os.path.realpath(os.fspath(base))
+    candidate = os.path.realpath(os.path.join(base_real, name))
+    if not candidate.startswith(base_real.rstrip(os.sep) + os.sep):
+        return None
+    return _pathlib.Path(candidate)
+
+
 async def h_download(request):
     """Stream a captured download so OVU can save it into the tenant's uploads
     (#154 P5). Serves the session's most recent download by default; a `name`
@@ -772,12 +791,12 @@ async def h_download(request):
     _require_auth(request)
     tenant = request.query.get("tenant", "").strip()
     sess = _get_session(tenant)
-    ddir = _downloads_dir(tenant).resolve()
+    ddir = _downloads_dir(tenant)
     name = request.query.get("name") or sess.last_download
     if not name:
         raise web.HTTPNotFound(reason="no download captured")
-    target = (ddir / os.path.basename(name)).resolve()
-    if ddir not in target.parents or not target.is_file():
+    target = _contained_file(ddir, os.path.basename(name))
+    if target is None or not target.is_file():
         raise web.HTTPNotFound(reason="download not found")
     return web.FileResponse(target, headers={
         "Content-Disposition": f'attachment; filename="{target.name}"'})

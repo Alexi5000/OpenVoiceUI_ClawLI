@@ -24,6 +24,7 @@ chatgpt_import_bp = Blueprint('chatgpt_import', __name__)
 # ---------------------------------------------------------------------------
 
 from services.paths import UPLOADS_DIR, WORKSPACE_DIR
+from services.safe_paths import UnsafePathError, safe_join
 
 # Imported conversations go to workspace/memory/chatgpt-import/
 # This makes them accessible to the OpenClaw agent for reference
@@ -118,7 +119,10 @@ def get_imported_conversation(filename):
     """Get the markdown content of a single imported conversation."""
     # Prevent path traversal
     safe_name = Path(filename).name
-    file_path = IMPORT_DIR / safe_name
+    try:
+        file_path = safe_join(IMPORT_DIR, safe_name, allow_base=False)
+    except UnsafePathError:
+        return jsonify({'error': 'Conversation not found'}), 404
 
     if not file_path.exists() or not file_path.suffix == '.md':
         return jsonify({'error': 'Conversation not found'}), 404
