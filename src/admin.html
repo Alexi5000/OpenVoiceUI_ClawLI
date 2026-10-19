@@ -2869,6 +2869,7 @@ const Connections={
   },
   _oauthCredId:null,
   _onOAuthMessage(e){
+    if(e.origin!==window.location.origin)return;
     if(e.data&&e.data.type==='oauth_callback'){
       if(e.data.status==='success'){
         toast('Connected: '+e.data.message,'green');

@@ -618,6 +618,7 @@ connectAiradio();
 
         // Listen for postMessage from canvas iframes (e.g. BigHead builder creating a character)
         window.addEventListener('message', (e) => {
+                    if (e.origin !== window.location.origin || e.source !== document.getElementById('canvas-iframe')?.contentWindow) return;
             if (e.data?.type === 'profile-created' || e.data?.type === 'profile-updated') {
                 console.log('[QuickSettings] canvas iframe created/updated profile:', e.data.profileId);
                 window.QuickSettings?.refresh().then(() => {
@@ -7821,6 +7822,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                 // Actions: speak (send text to AI), navigate (open canvas page),
                 //          open-url (load URL in iframe), menu (open canvas menu), close (close canvas)
                 window.addEventListener('message', (event) => {
+                    if (event.origin !== window.location.origin || event.source !== document.getElementById('canvas-iframe')?.contentWindow) return;
                     if (!event.data || event.data.type !== 'canvas-action') return;
                     const { action, text, page, url } = event.data;
                     console.log('[Canvas] postMessage action:', action, event.data);
@@ -7911,6 +7913,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                 // Canvas error bridge: catch JS errors from sandboxed canvas pages
                 window._canvasErrorBuffer = [];
                 window.addEventListener('message', (event) => {
+                    if (event.origin !== window.location.origin || event.source !== document.getElementById('canvas-iframe')?.contentWindow) return;
                     if (!event.data || event.data.type !== 'canvas-error') return;
                     const { error, source, line, col } = event.data;
                     console.error(`[Canvas JS Error] ${error} at ${source}:${line}:${col}`);
@@ -10743,6 +10746,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
             }
 
             window.addEventListener('message', function (e) {
+                    if (e.origin !== window.location.origin || e.source !== document.getElementById('canvas-iframe')?.contentWindow) return;
                 if (!e.data || e.data.type !== 'camera-arbitration') return;
                 const action = e.data.action;
                 const reply  = (ok, msg) => {
