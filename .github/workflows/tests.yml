@@ -34,6 +34,9 @@ jobs:
       - name: Run device staging security regressions
         run: node --test tests/js/device-staging.test.cjs
 
+      - name: Run device approval argument regressions
+        run: node --test tests/js/device-approve-argv.test.cjs
+
       - name: Run gallery security regressions
         run: node --test tests/js/gallery-security.test.cjs
 
