@@ -5,6 +5,9 @@ on:
     types: [published]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -35,7 +38,12 @@ jobs:
           fi
 
       - name: Publish
-        if: env.NODE_AUTH_TOKEN != ''
-        run: npm publish --access public
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::NPM_TOKEN is required for npm publication."
+            exit 1
+          fi
+          npm pkg set publishConfig.registry=https://registry.npmjs.org
+          npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
