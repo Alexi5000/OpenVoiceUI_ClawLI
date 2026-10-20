@@ -395,8 +395,8 @@ def generate_icon_image(prompt, name=None, style=None, allow_reuse=True):
         # ~35x during the auto-icon 429-storm (0 successes / 874 attempts, 2026-07-29).
         from services.metered_spend import log_spend
         log_spend('icons/generate', GEMINI_MODEL)
-    except requests.RequestException as e:
-        raise IconGenerationError(f'Gemini API error: {str(e)}', status=502)
+    except requests.RequestException:
+        raise IconGenerationError('Gemini icon generation failed; retry shortly', status=502) from None
 
     # Extract image from response
     image_data = None
