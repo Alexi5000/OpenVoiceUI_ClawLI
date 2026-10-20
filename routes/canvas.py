@@ -1087,10 +1087,24 @@ def canvas_images_proxy(path):
 # Dev server proxy for website preview in canvas
 WEBSITE_DEV_PORT = int(os.getenv('WEBSITE_DEV_PORT', '15050'))
 
-@canvas_bp.route('/website-dev', methods=['GET', 'POST', 'PUT', 'DELETE'], strict_slashes=False)
-@canvas_bp.route('/website-dev/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
+def _isolate_dev_response(response):
+    for name in ('Set-Cookie', 'Location', 'Access-Control-Allow-Credentials',
+                 'Content-Security-Policy', 'Refresh'):
+        response.headers.pop(name, None)
+    response.headers['Content-Security-Policy'] = 'sandbox allow-scripts'
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, HEAD, POST, PUT, DELETE, OPTIONS'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
+
+
+@canvas_bp.route('/website-dev', methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], strict_slashes=False)
+@canvas_bp.route('/website-dev/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 def website_dev_proxy(path=''):
     """Proxy requests to the local website dev server (for HTTPS canvas compatibility)."""
+    if request.method == 'OPTIONS':
+        return _isolate_dev_response(Response(status=204))
     try:
         path = _encoded_proxy_path(path)
     except ValueError:
@@ -1116,7 +1130,7 @@ def website_dev_proxy(path=''):
             content = resp.content.decode('utf-8', errors='replace')
             # Rewrite absolute URLs: src="/..." -> src="/website-dev/..."
             content = re_module.sub(r'(src|href|action)=("|\')/(?!website-dev)', r'\1=\2/website-dev/', content)
-            return Response(content.encode('utf-8'), status=resp.status_code, content_type=content_type)
+            return _isolate_dev_response(Response(content.encode('utf-8'), status=resp.status_code, content_type=content_type))
 
         def generate():
             for chunk in resp.iter_content(chunk_size=8192):
@@ -1127,7 +1141,7 @@ def website_dev_proxy(path=''):
         excluded_headers = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
         headers = [(k, v) for k, v in resp.headers.items() if k.lower() not in excluded_headers]
 
-        return Response(generate(), status=resp.status_code, headers=headers)
+        return _isolate_dev_response(Response(generate(), status=resp.status_code, headers=headers))
     except Exception as exc:
         logger.error(f'Website dev proxy error: {exc}')
         return 'Dev server unavailable', 503

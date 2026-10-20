@@ -81,6 +81,13 @@ def create_app(config_override: dict = None):
         *_extra_origins,
     ], supports_credentials=True)
 
+    @app.before_request
+    def reject_opaque_origin_writes():
+        preview = request.path == '/website-dev' or request.path.startswith('/website-dev/')
+        if (request.headers.get('Origin') == 'null' and not preview
+                and request.method in ('POST', 'PUT', 'PATCH', 'DELETE')):
+            return jsonify({'error': 'Cross-origin request blocked', 'code': 'csrf_blocked'}), 403
+
     # ── Rate limiting ─────────────────────────────────────────────────────────
     # Per-IP limits protect expensive endpoints from abuse.
     # Override default via RATELIMIT_DEFAULT env var (e.g. "100 per minute").

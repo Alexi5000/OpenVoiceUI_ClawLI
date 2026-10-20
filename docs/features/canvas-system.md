@@ -314,3 +314,19 @@ HTML canvas pages are served with `Cache-Control: no-cache, no-store, must-reval
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/canvas/build-log/<project>` | Parsed z-code JSONL session activity as human-readable lines |
+
+### Development preview isolation
+
+`/website-dev` serves active development content in an opaque browser origin using
+`Content-Security-Policy: sandbox allow-scripts`. Inline scripts, external scripts,
+ES modules and preview API fetches remain available. This preview cannot access the
+parent DOM, cookies, storage or Clerk token, open popups, submit forms, download
+files or navigate the top window. Programmatic writes to the parent application
+from an opaque origin are rejected. Credential refresh messages target the parent
+origin explicitly and are not delivered to the opaque preview.
+
+Preview responses strip upstream cookies, redirects and refresh headers. Only the
+preview resources permit noncredentialed wildcard CORS for module loading and
+preview requests. The existing unauthenticated network accessibility of this dev
+proxy is unchanged; this is browser isolation, not authentication for the local dev
+server. The proxy still has no WebSocket/HMR upgrade transport.
