@@ -7,9 +7,9 @@
 // connect to OpenClaw until the user opens the browser — which happens AFTER
 // Pinokio shows the "Open" button. We need to wait for that.
 
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 
-const COMPOSE = "docker compose -f docker-compose.yml -f docker-compose.local.yml";
+const COMPOSE_ARGS = ["compose", "-f", "docker-compose.yml", "-f", "docker-compose.local.yml"];
 const MAX_ATTEMPTS = 24;  // 24 × 5s = 2 minutes
 const DELAY_MS = 5000;
 
@@ -67,8 +67,8 @@ async function run() {
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const result = execSync(
-        `${COMPOSE} exec -T openclaw node -e "${script.replace(/"/g, '\\"')}"`,
+      const result = execFileSync(
+        "docker", [...COMPOSE_ARGS, "exec", "-T", "openclaw", "node", "-e", script],
         { encoding: "utf8", timeout: 15000, env: EXEC_ENV }
       ).trim();
 
