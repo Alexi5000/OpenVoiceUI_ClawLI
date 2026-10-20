@@ -113,7 +113,7 @@ def _write_atomic(path: Path, data: Dict[str, Any]) -> None:
             json.dump(data, fh, indent=2, ensure_ascii=False)
             fh.flush()
             os.fsync(fh.fileno())
-        os.chmod(tmp, 0o666)  # see docstring — mkstemp's 0600 locks out the worker
+            os.fchmod(fh.fileno(), 0o666)
         os.replace(tmp, path)
     except Exception:
         try:
