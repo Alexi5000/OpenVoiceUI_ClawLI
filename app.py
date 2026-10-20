@@ -84,7 +84,8 @@ def create_app(config_override: dict = None):
     @app.before_request
     def reject_opaque_origin_writes():
         if (request.headers.get('Origin') == 'null'
-                and request.method in ('POST', 'PUT', 'PATCH', 'DELETE')):
+                and (request.method in ('POST', 'PUT', 'PATCH', 'DELETE')
+                     or request.headers.get('Upgrade', '').lower() == 'websocket')):
             return jsonify({'error': 'Cross-origin request blocked', 'code': 'csrf_blocked'}), 403
 
     # ── Rate limiting ─────────────────────────────────────────────────────────

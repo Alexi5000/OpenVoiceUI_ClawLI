@@ -74,3 +74,9 @@ def test_preview_mutations_require_configured_session(method, monkeypatch):
         send.assert_not_called()
         assert client.open('/website-dev/api', method=method, headers={'Authorization': 'Bearer synthetic-approved'}).status_code == 200
         send.assert_called_once()
+
+
+def test_opaque_websocket_upgrade_is_rejected():
+    app, _ = create_app({'TESTING': True})
+    result = app.test_client().get('/ws/clawdbot', headers={'Origin': 'null', 'Upgrade': 'websocket'})
+    assert result.status_code == 403

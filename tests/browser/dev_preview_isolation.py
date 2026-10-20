@@ -31,6 +31,9 @@ for (const [name, action] of Object.entries({
  top: () => {top.location = '/escaped'},
 })) {try {results[name] = action()} catch(e) {results[name] = 'blocked'}}
 results.popup = window.open('/escaped') === null ? 'blocked' : 'opened';
+const ws = new WebSocket('ws://' + location.host + '/private-ws');
+ws.onerror = () => {results.websocket = 'blocked'};
+ws.onmessage = e => {results.websocket = e.data};
 fetch('/private-write', {method:'POST', credentials:'include', mode:'no-cors', body:'attack'});
 </script><script type="module" src="/module.js"></script>'''
 
@@ -56,9 +59,13 @@ def upstream(url, **kwargs):
     return response
 
 
-app, _ = create_app({'TESTING': True})
+app, sock = create_app({'TESTING': True})
 app.register_blueprint(canvas.canvas_bp)
 writes = []
+@sock.route('/private-ws')
+def private_ws(ws):
+    writes.append('websocket')
+    ws.send('synthetic-private-session')
 @app.route('/private-write', methods=['POST'])
 def private_write():
     writes.append(True)
@@ -82,11 +89,11 @@ try:
         page.goto(f'http://127.0.0.1:{server.server_port}/')
         page.evaluate("localStorage.setItem('private', 'synthetic-storage'); window.Clerk={session:{getToken: async()=> 'synthetic-jwt'}}")
         frame = page.frames[1]
-        frame.wait_for_function('window.results.module && window.results.fetch')
+        frame.wait_for_function('window.results.module && window.results.fetch && window.results.websocket')
         page.evaluate('async () => {const auth={' + push + ',' + sync + '}; await auth._pushAuthTokenToCanvas(); await auth._syncSessionCookie(); clearInterval(auth._sessionCookieInterval);}')
         page.wait_for_timeout(200)
         result = frame.evaluate('window.results')
-        assert result == {'tokens': [], 'parent': 'blocked', 'cookie': 'blocked', 'storage': 'blocked', 'top': 'blocked', 'popup': 'blocked', 'module': True, 'fetch': True}, result
+        assert result == {'tokens': [], 'parent': 'blocked', 'cookie': 'blocked', 'storage': 'blocked', 'top': 'blocked', 'popup': 'blocked', 'module': True, 'fetch': True, 'websocket': 'blocked'}, result
         assert writes == [], writes
         assert page.url.endswith('/') and '/escaped' not in page.url
         assert not any(c['name'] == 'injected' for c in page.context.cookies())
