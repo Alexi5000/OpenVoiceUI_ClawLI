@@ -19,17 +19,22 @@
 
 ---
 
-## Why This Exists
+## Why this fork exists
 
-Building a voice-first UI from scratch in enterprise AI is a notorious six-month engineering sinkhole.
+**What it does.** `OpenVoiceUI_ClawLI` is a Flask plus vanilla ES module web shell that turns an OpenClaw gateway agent into a voice conversation: browser speech-to-text in, streamed sentence-chunked text-to-speech out, with a fullscreen canvas iframe that the agent can draw into over SSE. Providers for STT, TTS, and LLM are hot-swappable through configuration (see [Providers](#providers)).
 
-Engineering teams spend months drowning in audio pipelines, Web Speech vs. streaming Deepgram buffers, sentence boundary heuristics, audio queue flushes, WebSocket reconnect budgets, and barge-in handling before their models write a single line of business logic.
+**Who it serves.** Operators who already run an OpenClaw or ClawLI agent gateway and want a self-hosted voice and visual front end for it, without building audio plumbing (streaming buffers, sentence boundaries, barge-in, WebSocket reconnects) from scratch.
 
-**TechTide AI** operates on a direct rule: **Stop waiting on the 12-month deck. Run the six-week LEAP sprint.**
+**Why Alex forked it.** The fork was created on 2026-02-28 (GitHub `created_at`) and tracked upstream until commit `32f0feb` (upstream #489, 2026-09-10). The first fork-only commit, `4264d84` (2026-09-14, "feat(techtide): integrate hero story, TECHTIDE.md backstory, Windows signal fix, and Voice Council prompts"), added [TECHTIDE.md](TECHTIDE.md), which records the motivation: OpenVoiceUI provides the audio and canvas shell "out of the box", so TechTide AI adopted and hardened it as the voice interface layer for the ClawLI multi-agent framework instead of writing one. PRs #1 to #6 (2026-09-14) added the Voice Council prompts and architecture specifications; PRs #7 to #47 (2026-10-18 to 2026-10-20) are security hardening (path containment, download symlink protection, descriptor-based permissions, canvas prototype isolation, honest release failure). Author: Alex Cinovoj, Founder & CTO of TechTide AI.
 
-**`OpenVoiceUI_ClawLI`** is our production voice and canvas interface layer for the **ClawLI** multi-agent framework. By pairing a zero-build vanilla ES module shell with deep agent orchestration, we bypass the audio plumbing trap and ship talking, visual agent councils in weeks instead of quarters.
+> Read the narrative version: [The Six-Week Voice Council: How TechTide AI Cracked the Audio-Plumbing Trap](docs/story/alex-hero-story.md)
 
-> 📖 **Read the complete case narrative:** [The Six-Week Voice Council: How TechTide AI Cracked the Audio-Plumbing Trap](docs/story/alex-hero-story.md)
+**Real-world use case (2025 to 2026 evidence).** **Proposed use case.** An operator exposes an internal ClawLI agent to staff through a browser voice console: a question is transcribed, routed through the gateway, and spoken back as the first sentence is ready while the agent renders a report into the canvas. The engineering problem this shell addresses is the end-to-end latency budget of a cascaded voice pipeline (capture, STT, LLM, TTS, playback), which ElevenLabs documents at roughly 680 ms median and 1560 ms P95 time-to-first-audio and recommends attacking by overlapping stages and streaming TTS at sentence boundaries[^1], the same pattern this shell uses. Industry analysts treat that latency as an adoption gate for enterprise voice agents[^2]. The provider-neutral design matters because the vendor landscape keeps moving: OpenAI made its speech-to-speech Realtime API generally available in August 2025[^3], and ElevenLabs shipped a new turn-taking system for its agents in February 2026[^4]. This repository contains tests and deployment configuration but no evidence that this scenario has been run against a live gateway, so it is proposed, not verified.
+
+[^1]: ElevenLabs, "Voice agent latency optimization: Techniques and methods", published 2026-06-23. https://elevenlabs.io/blog/voice-agent-latency-optimization
+[^2]: The Futurum Group, "Voice Agent Latency: Why Milliseconds Matter for Enterprise AI Adoption", published 2026-06-24. https://futurumgroup.com/insights/voice-agent-latency-why-milliseconds-matter-for-enterprise-ai-adoption
+[^3]: OpenAI, "Introducing gpt-realtime and Realtime API updates for production voice agents", published 2025-08-28. https://openai.com/index/introducing-gpt-realtime/
+[^4]: ElevenLabs, "Introducing Expressive Mode for ElevenAgents", published 2026-02-10. https://elevenlabs.io/blog/introducing-expressive-mode
 
 ---
 
@@ -197,21 +202,33 @@ python server.py
 
 ---
 
-## Upstream Contributions
+## Upstream
 
-TechTide actively hardens and contributes foundational improvements back to the upstream [`MCERQUA/OpenVoiceUI-public`](https://github.com/MCERQUA/OpenVoiceUI-public) repository:
+* **Upstream project:** [MCERQUA/OpenVoiceUI](https://github.com/MCERQUA/OpenVoiceUI) by Mike Cerqua. The public mirror is [MCERQUA/OpenVoiceUI-public](https://github.com/MCERQUA/OpenVoiceUI-public).
+* **Upstream license:** MIT, preserved unchanged in [LICENSE](LICENSE). This fork does not relicense anything.
+* **Fork date:** 2026-02-28.
+* **Sync status (2026-10-20):** the fork last incorporated upstream at `32f0feb` (upstream #489, 2026-09-10). Upstream has pushed 57 further commits since then that are not in this fork. GitHub reports no common ancestor between the two `main` branches because upstream history was rewritten, so an exact ahead/behind count is not available from the compare API.
+
+**What changed in this fork** (`git log 32f0feb..main`: 62 commits, 141 files):
+
+* Security hardening, PRs #7 to #47: shared `safe_join` path containment for media, plugin, vault, canvas proxy and download routes; symlink-safe atomic download publishing; descriptor-based permission writes for credential files; canvas and sound category keys isolated from object prototypes; XSS fixes in registry, gallery, upload, desktop shortcut and Voice Studio markup; OAuth and canvas message origin checks; terminal sessions authorized before shell allocation; Docker device approval invoked without a shell; secrets kept out of logs and error responses; honest npm and GitHub Packages release failures.
+* Regression tests under `tests/` and `tests/js/` for each of the fixes above, wired into `.github/workflows/tests.yml`.
+* Documentation website (`website/`) with a vendored, integrity-checked `braces` backport (see Validation and Security).
+* TechTide ClawLI material: [TECHTIDE.md](TECHTIDE.md), Voice Council prompts under `prompts/`, architecture specifications under `docs/architecture/`, and the hero story under `docs/story/`.
+
+### Contributions back to upstream
 
 | PR | Title | Description | Status |
 |:---|:---|:---|:---|
-| **[#320](https://github.com/MCERQUA/OpenVoiceUI/pull/320)** | **ARIA Accessibility** | Comprehensive ARIA attributes and screen-reader accessibility across AppShell modals and controls | **Merged** |
-| **[#321](https://github.com/MCERQUA/OpenVoiceUI/pull/321)** | **Config Extraction** | Extracted hardcoded template variables into clean constant modules (`src/core/constants.js`) | **Merged** |
-| **[#322](https://github.com/MCERQUA/OpenVoiceUI/pull/322)** | **IDE Module Resolution** | Root `jsconfig.json` path mappings for instant VS Code and Cursor IDE code intelligence | **Merged** |
+| **[#320](https://github.com/MCERQUA/OpenVoiceUI/pull/320)** | **ARIA Accessibility** | Comprehensive ARIA attributes and screen-reader accessibility across AppShell modals and controls | **Merged** 2026-05-30 |
+| **[#321](https://github.com/MCERQUA/OpenVoiceUI/pull/321)** | **Config Extraction** | Extracted hardcoded template variables into clean constant modules (`src/core/constants.js`) | **Merged** 2026-05-30 |
+| **[#322](https://github.com/MCERQUA/OpenVoiceUI/pull/322)** | **IDE Module Resolution** | Root `jsconfig.json` path mappings for instant VS Code and Cursor IDE code intelligence | **Merged** 2026-05-30 |
 
 ---
 
 ## Core Contributors
 
-* **Alex Cinovoj** ([@Alexi5000](https://github.com/Alexi5000)): Lead Architect, TechTide AI Founder (Voice Council design, ClawLI integration, [Architecture Specification](docs/architecture/techtide-clawli-architecture.md)).
+* **Alex Cinovoj** ([@Alexi5000](https://github.com/Alexi5000)): Founder & CTO of TechTide AI, lead architect of this fork (Voice Council design, ClawLI integration, [Architecture Specification](docs/architecture/techtide-clawli-architecture.md)).
 * **Mike Cerqua** ([@MCERQUA](https://github.com/MCERQUA)): Original Creator and Core Maintainer of OpenVoiceUI ([Foundation Architecture](docs/architecture/openvoice-upstream-foundation.md)).
 * **Claude Nexus** ([@claude](https://github.com/claude)): AI Systems Architect, Mentropic / Anthropic ([Cognitive Specification](docs/architecture/claude-nexus-orchestration.md)).
 * **Gemini** ([@gemini-code-assist](https://github.com/gemini-code-assist)): AI Systems Architect, Google DeepMind / Antigravity ([Runtime Specification](docs/architecture/gemini-deepmind-runtime.md)).
@@ -240,6 +257,12 @@ npm run build
 
 Browse the [published documentation](https://alexi5000.github.io/OpenVoiceUI_ClawLI/), [architecture](ARCHITECTURE.md), and [contribution guide](CONTRIBUTING.md). See [SECURITY.md](SECURITY.md) for reporting and known limitations. Passing repository tests does not validate live gateway, microphone, provider, or shared-volume deployment behavior.
 
+### Security status (2026-10-20)
+
+* **Known upstream advisory with no fixed release as of 2026-10-20:** `braces` <= 3.0.3, [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) (stack exhaustion through deeply nested patterns), reported by Dependabot against `website/package-lock.json`. Existing mitigation in this repository: the documentation site installs `braces` only from the vendored backport `website/vendor/braces-3.0.3.tgz`, which adds a depth limit, and `website/scripts/verify-braces.cjs` checks the lockfile source, file hashes and the nesting regressions before every `npm run build` (PR #8). The alert stays open until the maintainers publish a fixed release; it is not dismissed.
+* **Open CodeQL findings:** 289 open alerts at the time of this pass. One high, `py/overly-permissive-file` at `routes/grid_gen.py` (an intentional world-writable orders directory shared across container uids, documented in the code comment; a fix needs deployment verification). The rest are medium: `py/log-injection` (151), `py/stack-trace-exposure` (104), `js/log-injection` (21), `py/overly-large-range` (5), `js/prototype-pollution-utility` (2), and one each of `js/cross-window-information-leak` and `js/client-side-unvalidated-url-redirection`. The three GitHub Actions findings (missing workflow permissions on `tests.yml` and `security.yml`, unpinned `trivy-action` tag) are fixed in this pass: both workflows now declare `permissions: contents: read` and `trivy-action` is pinned to the commit for `v0.36.0`. The log-injection and stack-trace findings are left for a dedicated pass and are not suppressed.
+* Workflows: `tests.yml` runs the Python suite and the JavaScript security regressions on push and pull request; `security.yml` runs Bandit, pip-audit and Trivy in report-only mode.
+
 ## License
 
-MIT License &bull; Copyright (c) 2026 TechTide AI and OpenVoiceUI Contributors.
+MIT License, inherited unchanged from upstream OpenVoiceUI. See [LICENSE](LICENSE) for the full text and copyright notice.
