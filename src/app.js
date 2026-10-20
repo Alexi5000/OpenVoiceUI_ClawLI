@@ -8599,11 +8599,13 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
 
             async movePageToCategory(pageId, newCategory) {
                 if (typeof pageId !== 'string' || !pageId || pageId === '.' || pageId === '..') return;
-                console.log(`Moving page ${pageId} to category ${newCategory}`);
+                if (typeof newCategory !== 'string' || !newCategory) return;
+                if (!Object.hasOwn(this.manifest.pages, pageId)) return;
 
                 // Update local manifest
                 const page = this.manifest.pages[pageId];
                 if (!page) return;
+                this.manifest.categories = Object.assign(Object.create(null), this.manifest.categories);
 
                 const oldCategory = page.category;
 

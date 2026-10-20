@@ -36,3 +36,32 @@ test('category reorder preserves prototype-named categories as own data keys',as
     assert.equal(context.menu.manifest.categories.__proto__.name,'Custom');
     assert.equal(rendered,1);
 });
+
+
+test('category moves treat prototype names as data and reject inherited pages', async () => {
+    const start = source.indexOf('async movePageToCategory(');
+    const end = source.indexOf('async reorderCategory(', start);
+    const requests = [];
+    const context = vm.createContext({CONFIG: {serverUrl: 'https://voice.test'}, console,
+        fetch: async (...args) => { requests.push(args); return {}; }});
+    vm.runInContext('globalThis.menu = {' + source.slice(start, end) + '};', context);
+    const menu = context.menu;
+    menu.render = () => {};
+    menu.setupDragDrop = () => {};
+    for (const category of ['__proto__', 'constructor', 'toString', 'normal']) {
+        menu.manifest = {pages: {page: {category: 'old'}}, categories: {old: {pages: ['page']}}};
+        await menu.movePageToCategory('page', category);
+        assert.equal(Object.getPrototypeOf(menu.manifest.categories), null);
+        assert.equal(Object.hasOwn(menu.manifest.categories, category), true);
+        assert.deepEqual(Array.from(menu.manifest.categories[category].pages), ['page']);
+        assert.deepEqual(menu.manifest.categories.old.pages, []);
+        assert.equal(menu.manifest.pages.page.category, category);
+        assert.equal(JSON.parse(requests.at(-1)[1].body).category, category);
+    }
+    const before = requests.length;
+    await menu.movePageToCategory('__proto__', 'normal');
+    await menu.movePageToCategory('constructor', 'normal');
+    await menu.movePageToCategory('page', {});
+    assert.equal(requests.length, before);
+    assert.equal(Object.prototype.category, undefined);
+});
