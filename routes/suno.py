@@ -852,8 +852,7 @@ def _action_jingle(_q, body: dict):
     if SUNO_CALLBACK_URL:
         request_body['callBackUrl'] = SUNO_CALLBACK_URL
 
-    logger.info('Suno jingle: gender=%s instrumental=%s repeat=%d',
-                vocal_gender, instrumental, repeat)
+    logger.info('Suno jingle: submitting generation')
 
     try:
         resp = http_requests.post(
