@@ -61,7 +61,7 @@ The system prompt and user input are currently concatenated in the same message 
 ## For Contributors
 
 Before submitting security-related PRs, please review:
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Understand the full system
-- [docs/PR-REVIEW-CHECKLIST.md](docs/PR-REVIEW-CHECKLIST.md) — Security checks for every PR
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Understand the full system
+- [docs/contributing/pr-checklist.md](docs/contributing/pr-checklist.md) — Security checks for every PR
 
 **Important:** Security fixes must not break existing functionality. If a fix requires changing how a system works (e.g., the tag system, display pipeline), the PR must also include fixes for all affected systems. See the PR Review Checklist for the list of systems that must stay in sync.

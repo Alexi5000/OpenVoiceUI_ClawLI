@@ -126,15 +126,15 @@ See [`plugins/README.md`](plugins/README.md) for the full event protocol and `ga
 6. Keep PRs focused — one feature or fix per PR
 
 **Before submitting security-related PRs**, read:
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Understand how systems connect
-- [docs/PR-REVIEW-CHECKLIST.md](docs/PR-REVIEW-CHECKLIST.md) — What reviewers check
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Understand how systems connect
+- [docs/contributing/pr-checklist.md](docs/contributing/pr-checklist.md) — What reviewers check
 - [SECURITY.md](SECURITY.md) — Vulnerability reporting policy
 
 ---
 
 ## How PRs Are Reviewed
 
-Every PR is reviewed against the [PR Review Checklist](docs/PR-REVIEW-CHECKLIST.md). The maintainer will:
+Every PR is reviewed against the [PR Review Checklist](docs/contributing/pr-checklist.md). The maintainer will:
 
 1. **Code review** — Check the PR against the review checklist (security, tag system, display pipeline, tests)
 2. **Test locally** — Create a `devtest/pr-<number>` branch, apply changes, run full test suite + manual voice test

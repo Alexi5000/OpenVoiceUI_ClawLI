@@ -34,7 +34,7 @@ const config: Config = {
           path: '../docs',
           sidebarPath: './sidebars.ts',
           routeBasePath: '/',
-          editUrl: 'https://github.com/Alexi5000/OpenVoiceUI_ClawLI/edit/main/',
+          editUrl: ({docPath}) => `https://github.com/Alexi5000/OpenVoiceUI_ClawLI/edit/main/docs/${docPath}`,
         },
         blog: false,
         theme: {
