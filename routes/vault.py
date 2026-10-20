@@ -10,6 +10,7 @@ import os
 import re
 
 from flask import Blueprint, jsonify, request
+from markupsafe import escape
 
 logger = logging.getLogger(__name__)
 
@@ -586,26 +587,24 @@ def _oauth_callback_html(success: bool, message: str) -> str:
 
     `message` can carry attacker-controlled text (the provider's `error` query
     param on this public, unauthenticated callback) — it MUST be escaped for the
-    HTML context and JSON-encoded for the inline-script context (reflected XSS).
+    HTML context. The popup payload is JSON stored in an escaped HTML attribute.
     """
-    import html as _html
     status = 'success' if success else 'error'
-    safe_html_message = _html.escape(str(message))
-    # json.dumps gives a quoted JS string literal; also neutralise "</script>"
-    # sequences which would otherwise terminate the inline script block.
-    safe_js_message = json.dumps(str(message)).replace('</', '<\\/')
+    safe_html_message = escape(str(message))
+    safe_payload = escape(json.dumps({'type': 'oauth_callback', 'status': status, 'message': str(message)}))
     return f"""<!DOCTYPE html>
-<html><head><title>OAuth {status}</title></head>
+<html><head><meta charset="utf-8"><title>OAuth {status}</title></head>
 <body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <div style="text-align:center">
 <h2>{'Connected' if success else 'Connection Failed'}</h2>
-<p>{safe_html_message}</p>
+<p id="oauth-message" data-payload="{safe_payload}">{safe_html_message}</p>
 <p style="color:#888">This window will close automatically...</p>
 </div>
 <script>
 if (window.opener) {{
-    window.opener.postMessage({{type:'oauth_callback',status:'{status}',message:{safe_js_message}}}, '*');
+    const message = document.getElementById('oauth-message');
+    window.opener.postMessage(JSON.parse(message.dataset.payload), '*');
 }}
 setTimeout(function(){{ window.close(); }}, 2000);
 </script>
-</body></html>""", 200, {'Content-Type': 'text/html'}
+</body></html>""", 200, {'Content-Type': 'text/html; charset=utf-8'}
