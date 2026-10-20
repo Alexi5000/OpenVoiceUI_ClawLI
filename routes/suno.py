@@ -583,7 +583,7 @@ def _action_generate(_q, body: dict):
             json=request_body,
             timeout=30,
         )
-        logger.info(f'Suno API response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno API response: {resp.status_code}')
 
         if resp.status_code == 200:
             data = resp.json()
@@ -686,7 +686,7 @@ def _action_sfx(_q, body: dict):
             json=request_body,
             timeout=30,
         )
-        logger.info(f'Suno sfx response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno sfx response: {resp.status_code}')
 
         if resp.status_code == 200:
             data = resp.json()
@@ -852,9 +852,7 @@ def _action_jingle(_q, body: dict):
     if SUNO_CALLBACK_URL:
         request_body['callBackUrl'] = SUNO_CALLBACK_URL
 
-    logger.info(f'Suno jingle: brand={brand!r} style_key={style_key!r} '
-                f'gender={vocal_gender} instrumental={instrumental} repeat={repeat} '
-                f'prompt={jingle_prompt[:120]!r}')
+    logger.info('Suno jingle: submitting generation')
 
     try:
         resp = http_requests.post(
@@ -863,7 +861,7 @@ def _action_jingle(_q, body: dict):
             json=request_body,
             timeout=30,
         )
-        logger.info(f'Suno jingle API response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno jingle API response: {resp.status_code}')
 
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
@@ -988,7 +986,7 @@ def _action_status(job_id: str):
             params={'taskId': task_id},
             timeout=15,
         )
-        logger.debug(f'Suno status check: {check.status_code} {check.text[:300]}')
+        logger.debug(f'Suno status check: {check.status_code}')
 
         if check.status_code == 200:
             cdata = check.json()
@@ -1265,7 +1263,7 @@ def _submit_suno_job(endpoint: str, request_body: dict, kind: str,
     if SUNO_CALLBACK_URL:
         request_body.setdefault('callBackUrl', SUNO_CALLBACK_URL)
 
-    logger.info(f'Suno {kind}: POST {endpoint} body={json.dumps(request_body)[:300]}')
+    logger.info('Suno %s: POST %s (%d fields)', kind, endpoint, len(request_body))
     try:
         resp = http_requests.post(
             f'{SUNO_API_BASE}{endpoint}',
@@ -1273,7 +1271,7 @@ def _submit_suno_job(endpoint: str, request_body: dict, kind: str,
             json=request_body,
             timeout=30,
         )
-        logger.info(f'Suno {kind} response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno {kind} response: {resp.status_code}')
 
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
@@ -1511,7 +1509,7 @@ def _action_generate_lyrics(_q, body: dict):
             json=request_body,
             timeout=30,
         )
-        logger.info(f'Suno generate_lyrics response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno generate_lyrics response: {resp.status_code}')
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
         data = resp.json()
@@ -1547,7 +1545,7 @@ def _action_timestamped_lyrics(_q, body: dict):
             json=request_body,
             timeout=30,
         )
-        logger.info(f'Suno timestamped_lyrics response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno timestamped_lyrics response: {resp.status_code}')
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
         data = resp.json()
@@ -1940,7 +1938,7 @@ def _action_style_boost(_q, body: dict):
             json=request_body,
             timeout=30,
         )
-        logger.info(f'Suno style_boost response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno style_boost response: {resp.status_code}')
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
         data = resp.json()
@@ -2019,7 +2017,7 @@ def _submit_process_job(endpoint: str, request_body: dict, kind: str,
     can show it in the queue; results are delivered via callback / song_details.
     on_task_id(task_id) fires after a successful submit (stem pending markers).
     """
-    logger.info(f'Suno {kind}: POST {endpoint} body={json.dumps(request_body)[:300]}')
+    logger.info('Suno %s: POST %s (%d fields)', kind, endpoint, len(request_body))
     try:
         resp = http_requests.post(
             f'{SUNO_API_BASE}{endpoint}',
@@ -2027,7 +2025,7 @@ def _submit_process_job(endpoint: str, request_body: dict, kind: str,
             json=request_body,
             timeout=30,
         )
-        logger.info(f'Suno {kind} response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno {kind} response: {resp.status_code}')
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
         data = resp.json()
@@ -2127,7 +2125,7 @@ def _action_generate_persona(_q, body: dict):
             json=request_body,
             timeout=30,
         )
-        logger.info(f'Suno generate_persona response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno generate_persona response: {resp.status_code}')
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
         data = resp.json()
@@ -2176,7 +2174,7 @@ def _action_voice_validate(_q, body: dict):
             json=request_body,
             timeout=30,
         )
-        logger.info(f'Suno voice_validate response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno voice_validate response: {resp.status_code}')
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
         data = resp.json()
@@ -2205,7 +2203,7 @@ def _action_voice_validate_info(_q, body: dict):
             params={'taskId': task_id},
             timeout=15,
         )
-        logger.info(f'Suno voice_validate_info response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno voice_validate_info response: {resp.status_code}')
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
         data = resp.json()
@@ -2255,7 +2253,7 @@ def _action_voice_generate(_q, body: dict):
             json=request_body,
             timeout=30,
         )
-        logger.info(f'Suno voice_generate response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno voice_generate response: {resp.status_code}')
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
         data = resp.json()
@@ -2284,7 +2282,7 @@ def _action_voice_info(_q, body: dict):
             params={'taskId': task_id},
             timeout=15,
         )
-        logger.info(f'Suno voice_info response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno voice_info response: {resp.status_code}')
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
         data = resp.json()
@@ -2315,7 +2313,7 @@ def _action_voice_check(_q, body: dict):
             json=request_body,
             timeout=15,
         )
-        logger.info(f'Suno voice_check response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno voice_check response: {resp.status_code}')
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
         data = resp.json()
@@ -2353,7 +2351,7 @@ def _action_file_upload(_q, body: dict):
             json=request_body,
             timeout=30,
         )
-        logger.info(f'Suno file_upload response: {resp.status_code} {resp.text[:300]}')
+        logger.info(f'Suno file_upload response: {resp.status_code}')
         if resp.status_code != 200:
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
         data = resp.json()
