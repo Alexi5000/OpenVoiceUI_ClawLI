@@ -11,11 +11,11 @@ const config: Config = {
     v4: true,
   },
 
-  url: 'https://mcerqua.github.io',
-  baseUrl: '/OpenVoiceUI/',
+  url: 'https://alexi5000.github.io',
+  baseUrl: '/OpenVoiceUI_ClawLI/',
 
-  organizationName: 'MCERQUA',
-  projectName: 'OpenVoiceUI',
+  organizationName: 'Alexi5000',
+  projectName: 'OpenVoiceUI_ClawLI',
   trailingSlash: false,
 
   onBrokenLinks: 'throw',
@@ -34,7 +34,7 @@ const config: Config = {
           path: '../docs',
           sidebarPath: './sidebars.ts',
           routeBasePath: '/',
-          editUrl: 'https://github.com/MCERQUA/OpenVoiceUI/edit/main/',
+          editUrl: ({docPath}) => `https://github.com/Alexi5000/OpenVoiceUI_ClawLI/edit/main/docs/${docPath}`,
         },
         blog: false,
         theme: {
@@ -74,7 +74,7 @@ const config: Config = {
           position: 'left',
         },
         {
-          href: 'https://github.com/MCERQUA/OpenVoiceUI',
+          href: 'https://github.com/Alexi5000/OpenVoiceUI_ClawLI',
           label: 'GitHub',
           position: 'right',
         },
@@ -100,9 +100,9 @@ const config: Config = {
         {
           title: 'Community',
           items: [
-            {label: 'GitHub Discussions', href: 'https://github.com/MCERQUA/OpenVoiceUI/discussions'},
+            {label: 'Upstream Discussions', href: 'https://github.com/MCERQUA/OpenVoiceUI/discussions'},
             {label: 'Plugins Repository', href: 'https://github.com/MCERQUA/openvoiceui-plugins'},
-            {label: 'Report an Issue', href: 'https://github.com/MCERQUA/OpenVoiceUI/issues'},
+            {label: 'Report an Issue', href: 'https://github.com/Alexi5000/OpenVoiceUI_ClawLI/issues'},
           ],
         },
         {

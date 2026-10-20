@@ -220,6 +220,26 @@ See [CONTRIBUTORS.md](CONTRIBUTORS.md) for detailed attribution and technical hi
 
 ---
 
+## Validation and Security
+
+After installing `requirements.txt` in a Python virtual environment, install `pytest` and run the backend suite from the repository root:
+
+```bash
+python -m pip install pytest
+python -m pytest tests/ --tb=short -q
+node --test tests/js/*.test.mjs tests/js/*.test.cjs
+```
+
+The documentation website has a separate Node build:
+
+```bash
+cd website
+npm ci
+npm run build
+```
+
+Browse the [published documentation](https://alexi5000.github.io/OpenVoiceUI_ClawLI/), [architecture](ARCHITECTURE.md), and [contribution guide](CONTRIBUTING.md). See [SECURITY.md](SECURITY.md) for reporting and known limitations. Passing repository tests does not validate live gateway, microphone, provider, or shared-volume deployment behavior.
+
 ## License
 
 MIT License &bull; Copyright (c) 2026 TechTide AI and OpenVoiceUI Contributors.
