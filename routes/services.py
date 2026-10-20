@@ -29,6 +29,7 @@ status is has_value booleans + masked hints only). Health probes are cheap
 
 import logging
 import os
+import re
 
 from flask import Blueprint, jsonify
 
@@ -103,8 +104,9 @@ _STT_STATIC = {
 
 def _current_username() -> str:
     domain = os.getenv('DOMAIN', '')
-    if domain and '.jam-bot.com' in domain:
-        return domain.split('.')[0]
+    match = re.fullmatch(r'([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)\.jam-bot\.com', domain, re.IGNORECASE)
+    if match:
+        return match.group(1)
     return os.getenv('VAULT_USERNAME', 'default')
 
 

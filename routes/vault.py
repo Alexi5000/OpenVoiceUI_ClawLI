@@ -7,6 +7,7 @@ plugin-aware credential system.
 import json
 import logging
 import os
+import re
 
 from flask import Blueprint, jsonify, request
 
@@ -22,8 +23,9 @@ def _get_username() -> str:
     In single-user mode, defaults to 'default'.
     """
     domain = os.getenv('DOMAIN', '')
-    if domain and '.jam-bot.com' in domain:
-        return domain.split('.')[0]
+    match = re.fullmatch(r'([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)\.jam-bot\.com', domain, re.IGNORECASE)
+    if match:
+        return match.group(1)
     return os.getenv('VAULT_USERNAME', 'default')
 
 
