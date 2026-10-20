@@ -91,3 +91,27 @@ def test_creates_missing_uploads_dir(tmp_path):
     nested = tmp_path / 'uploads'
     assert ui_state.write_ui_state(nested, '[static]', []) is True
     assert (nested / ui_state.UI_STATE_FILENAME).is_file()
+
+
+def test_shared_mode_is_set_before_publication(tmp_path):
+    assert ui_state.write_ui_state(tmp_path, '[static]', []) is True
+    assert (tmp_path / ui_state.UI_STATE_FILENAME).stat().st_mode & 0o777 == 0o664
+
+
+def test_target_swap_cannot_widen_unrelated_file(tmp_path, monkeypatch):
+    uploads = tmp_path / 'uploads'
+    uploads.mkdir()
+    private = tmp_path / 'private'
+    private.write_text('private')
+    private.chmod(0o600)
+    real_replace = os.replace
+
+    def replace_then_swap(source, target):
+        real_replace(source, target)
+        target.unlink()
+        target.symlink_to(private)
+
+    monkeypatch.setattr(ui_state.os, 'replace', replace_then_swap)
+    assert ui_state.write_ui_state(uploads, '[static]', []) is True
+    assert private.read_text() == 'private'
+    assert private.stat().st_mode & 0o777 == 0o600
