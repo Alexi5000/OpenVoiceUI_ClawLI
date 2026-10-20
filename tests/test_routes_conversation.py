@@ -257,3 +257,62 @@ class TestConversationResetEndpoint:
         )
         # History should be cleared
         assert conversation_histories.get("test-clear", []) == []
+
+
+@pytest.mark.parametrize("failure", ["http", "request", "timeout", None])
+def test_uploaded_gemini_vision_redacts_errors_and_preserves_fallback(
+    failure, tmp_path, monkeypatch, caplog,
+):
+    import logging
+    import requests
+    from types import SimpleNamespace
+    from app import create_app
+    from routes import conversation as conv
+
+    secret = "synthetic-vision-secret-not-for-logs"
+    image = tmp_path / "photo.png"
+    image.write_bytes(b"synthetic-image")
+    monkeypatch.setenv("GEMINI_API_KEY", secret)
+    monkeypatch.setenv("JAMBOT_TENANT", "synthetic-tenant")
+    monkeypatch.setattr(conv, "_UPLOADS_DIR", tmp_path)
+    monkeypatch.setattr(conv, "_WORKSPACE_DIR", tmp_path)
+    monkeypatch.setattr(conv, "_load_voice_system_prompt", lambda: "test system")
+    monkeypatch.setattr(conv, "get_voice_session_key", lambda: "test-session")
+    for name in ("log_conversation", "log_metrics", "save_conversation_turn"):
+        monkeypatch.setattr(conv, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(conv, "_tts_generate_b64", lambda *args, **kwargs: None)
+    seen = []
+    def stream(queue, message, *args, **kwargs):
+        seen.append(message)
+        queue.put({"type": "text_done", "response": "Test answer"})
+    monkeypatch.setattr(conv.gateway_manager, "is_configured", lambda: True)
+    monkeypatch.setattr(conv.gateway_manager, "get", lambda *args: None)
+    monkeypatch.setattr(conv.gateway_manager, "stream_to_queue", stream)
+    response = requests.Response()
+    response.status_code = 500 if failure == "http" else 200
+    response.url = "https://example.invalid/vision?key=" + secret
+    response._content = b'{"candidates":[{"content":{"parts":[{"text":"A blue square"}]}}]}'
+    error = {"request": requests.RequestException, "timeout": requests.Timeout}.get(failure)
+    app, _ = create_app({"TESTING": True})
+    app.register_blueprint(conv.conversation_bp)
+    with caplog.at_level(logging.WARNING, logger=conv.__name__), \
+            patch("requests.post", return_value=response, side_effect=error(response.url) if error else None) as post, \
+            patch("subprocess.run", return_value=SimpleNamespace(returncode=0, stderr=b"")) as mesh:
+        result = app.test_client().post("/api/conversation", json={
+            "message": "Describe attached picture", "image_path": str(image),
+            "gateway_id": "test", "session_id": "vision-log-test",
+        })
+    assert result.status_code == 200
+    assert result.get_json()["response"] == "Test answer"
+    assert secret in post.call_args.args[0]
+    assert secret not in caplog.text
+    assert "example.invalid/vision" not in caplog.text
+    if failure:
+        mesh.assert_called_once()
+        assert "Sync Gemini vision failed" in caplog.text
+        assert "background vision agent" in seen[0]
+        assert not (tmp_path / ".image-intel/photo.png.json").exists()
+    else:
+        mesh.assert_not_called()
+        assert "A blue square" in seen[0]
+        assert (tmp_path / ".image-intel/photo.png.json").is_file()
