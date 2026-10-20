@@ -133,3 +133,36 @@ def test_github_fallback_rejects_invalid_configuration(monkeypatch, configured):
     with a, b, patch.object(registry.requests, 'get') as get:
         assert registry._get_git_sha('https://github.com/' + configured) == ''
         get.assert_not_called()
+
+
+@pytest.mark.parametrize('url', [
+    'javascript:alert(1)', 'data:text/html,<script>alert(1)</script>',
+    '//example.test/return', 'https://', 'https://example.test:bad/path',
+    'https://example.test/\nreturn', 'https://[invalid/path',
+])
+def test_checkin_discards_unsafe_return_urls(client, url):
+    response = client.get('/registry/checkin', query_string={'return': url})
+    assert response.status_code == 200
+    assert '"returnUrl": ""' in response.text
+
+
+@pytest.mark.parametrize('url', [
+    'http://localhost:5001/complete?key=value&other=1',
+    'https://beta.pinokio.co/checkin#complete',
+    'https://external.example/return',
+])
+def test_checkin_preserves_http_return_destinations(client, url):
+    import json
+    response = client.get('/registry/checkin', query_string={'return': url})
+    assert response.status_code == 200
+    assert '"returnUrl": ' + json.dumps(url) in response.text
+
+
+def test_checkin_health_status_is_plain_text(client):
+    from types import SimpleNamespace
+    message = '<svg/onload=window.__xss=1>'
+    with patch('services.health.health_checker.readiness', return_value=SimpleNamespace(healthy=True, message=message)):
+        response = client.get('/registry/checkin')
+    assert response.status_code == 200
+    assert '&lt;svg/onload=window.__xss=1&gt;' in response.text
+    assert message not in response.text

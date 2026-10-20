@@ -52,5 +52,8 @@ jobs:
       - name: Run voice studio security regressions
         run: node --test tests/js/voice-studio-security.test.cjs
 
+      - name: Run registry DOM security regressions
+        run: node --test tests/js/registry-dom-security.test.cjs
+
       - name: Run tests
         run: python -m pytest tests/ --tb=short -q
