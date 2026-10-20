@@ -23,7 +23,7 @@ def _get_username() -> str:
     In single-user mode, defaults to 'default'.
     """
     domain = os.getenv('DOMAIN', '')
-    match = re.fullmatch(r'([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)\.jam-bot\.com', domain, re.IGNORECASE)
+    match = re.fullmatch(r'([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)\.jam-bot\.com', domain, re.IGNORECASE | re.ASCII)
     if match:
         return match.group(1)
     return os.getenv('VAULT_USERNAME', 'default')

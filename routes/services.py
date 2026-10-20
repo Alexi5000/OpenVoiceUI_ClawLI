@@ -104,7 +104,7 @@ _STT_STATIC = {
 
 def _current_username() -> str:
     domain = os.getenv('DOMAIN', '')
-    match = re.fullmatch(r'([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)\.jam-bot\.com', domain, re.IGNORECASE)
+    match = re.fullmatch(r'([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)\.jam-bot\.com', domain, re.IGNORECASE | re.ASCII)
     if match:
         return match.group(1)
     return os.getenv('VAULT_USERNAME', 'default')
