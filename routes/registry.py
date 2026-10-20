@@ -42,8 +42,17 @@ def registry_checkin():
     if request.args.get('registry', registry).rstrip('/') != registry:
         return jsonify({'ok': False, 'error': 'untrusted_registry'}), 400
 
-    # Sanitize return_url — only allow http/https redirects
-    if return_url and not return_url.startswith(('http://', 'https://')):
+    try:
+        parsed_return = urlsplit(return_url)
+        valid_return = (
+            parsed_return.scheme in {'http', 'https'}
+            and parsed_return.hostname
+            and not any(ord(char) < 33 for char in return_url)
+        )
+        parsed_return.port
+    except ValueError:
+        valid_return = False
+    if not valid_return:
         return_url = ''
 
     # Quick health check
@@ -66,6 +75,7 @@ def registry_checkin():
     # (SEC-4 reflected XSS: `repo` was interpolated raw into the HTML below).
     import markupsafe
     repo_safe = markupsafe.escape(repo)
+    status_msg = markupsafe.escape(status_msg)
 
     # Pass values to JS safely via JSON encoding. Escape '<' so a `repo`
     # containing '</script>' can't break out of the inline script tag.
@@ -182,7 +192,10 @@ def registry_checkin():
         var msgEl = document.getElementById('status-msg');
 
         function showError(msg) {{
-            msgEl.innerHTML = '<span class="error">' + msg + '</span>';
+            var errorEl = document.createElement('span');
+            errorEl.className = 'error';
+            errorEl.textContent = msg;
+            msgEl.replaceChildren(errorEl);
             if (cfg.returnUrl) {{
                 var sep = cfg.returnUrl.includes('?') ? '&' : '?';
                 setTimeout(function() {{
@@ -193,8 +206,14 @@ def registry_checkin():
 
         function showManualBtn() {{
             if (cfg.returnUrl) {{
-                msgEl.innerHTML = '<a href="' + cfg.returnUrl + '" class="checkin-btn">Complete Check-in on Pinokio</a>' +
-                    '<p class="hint">Click to confirm your install on the Pinokio community page.</p>';
+                var link = document.createElement('a');
+                link.href = cfg.returnUrl;
+                link.className = 'checkin-btn';
+                link.textContent = 'Complete Check-in on Pinokio';
+                var hint = document.createElement('p');
+                hint.className = 'hint';
+                hint.textContent = 'Click to confirm your install on the Pinokio community page.';
+                msgEl.replaceChildren(link, hint);
             }} else {{
                 msgEl.innerHTML = '<p class="hint">Check-in confirmed locally (no return URL).</p>';
             }}
@@ -223,7 +242,7 @@ def registry_checkin():
                 var detail = (res.data && res.data.detail) || '';
                 var msg = 'Check-in failed: ' + err;
                 if (detail) msg += ' — ' + (typeof detail === 'object' ? JSON.stringify(detail) : detail);
-                showError(msg + '. Redirecting&hellip;');
+                showError(msg + '. Redirecting…');
                 if (cfg.returnUrl) {{
                     var sep = cfg.returnUrl.includes('?') ? '&' : '?';
                     setTimeout(function() {{
