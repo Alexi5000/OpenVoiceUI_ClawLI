@@ -343,7 +343,6 @@ class BrowseService:
             ddir = _downloads_dir(sess.tenant)
             ddir.mkdir(parents=True, exist_ok=True)
             name = os.path.basename(download.suggested_filename or "download.bin")
-            # namespace by tenant + time so shared uploads don't collide
             dest = ddir / f"browse-{uuid.uuid4().hex}-{name}"
             with tempfile.TemporaryDirectory(prefix="browse-download-") as staging:
                 source = os.path.join(staging, "download")
@@ -354,7 +353,6 @@ class BrowseService:
                         shutil.copyfileobj(incoming, output)
                         output.flush()
                         os.fsync(output.fileno())
-                        os.fchmod(output.fileno(), 0o664)
                 except BaseException:
                     dest.unlink(missing_ok=True)
                     raise

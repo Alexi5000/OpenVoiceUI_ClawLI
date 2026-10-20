@@ -30,12 +30,12 @@ def capture(tmp_path):
     return namespace, session, download
 
 
-def test_complete_download_and_shared_mode(capture, tmp_path):
+def test_complete_download_remains_private(capture, tmp_path):
     namespace, session, download = capture
     asyncio.run(namespace["_save_download"](None, session, download))
     result = tmp_path / session.last_download
     assert result.read_bytes() == b"complete download"
-    assert result.stat().st_mode & 0o777 == 0o664
+    assert result.stat().st_mode & 0o777 == 0o600
 
 
 def test_old_predictable_symlink_cannot_overwrite(capture, tmp_path):
@@ -78,3 +78,35 @@ def test_failed_transfer_publishes_nothing(capture, tmp_path):
     asyncio.run(namespace["_save_download"](None, session, download))
     assert list(tmp_path.iterdir()) == []
     assert session.last_download is None
+
+
+def test_copy_failure_removes_partial_file(capture, tmp_path):
+    namespace, session, download = capture
+
+    def fail(incoming, output):
+        output.write(b"partial")
+        raise OSError("disk full")
+
+    namespace["shutil"] = SimpleNamespace(copyfileobj=fail)
+    asyncio.run(namespace["_save_download"](None, session, download))
+    assert list(tmp_path.iterdir()) == []
+    assert session.last_download is None
+
+
+def test_destination_swap_cannot_write_or_chmod_target(capture, tmp_path):
+    namespace, session, download = capture
+    outside = tmp_path.parent / "swap-target"
+    outside.write_text("keep private")
+    outside.chmod(0o600)
+    namespace["uuid"] = SimpleNamespace(uuid4=lambda: SimpleNamespace(hex="fixed"))
+    dest = tmp_path / "browse-fixed-report.txt"
+
+    def swap(incoming, output):
+        dest.unlink()
+        dest.symlink_to(outside)
+        shutil.copyfileobj(incoming, output)
+
+    namespace["shutil"] = SimpleNamespace(copyfileobj=swap)
+    asyncio.run(namespace["_save_download"](None, session, download))
+    assert outside.read_text() == "keep private"
+    assert outside.stat().st_mode & 0o777 == 0o600
