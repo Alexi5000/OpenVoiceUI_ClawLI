@@ -2372,8 +2372,8 @@ def browse_stream_websocket(ws):
 # Terminal — PTY over WebSocket (backs the terminal canvas block)
 # ---------------------------------------------------------------------------
 # Spawns a login shell inside THIS container, cwd'd to the dedicated code
-# sandbox (CODE_WORKSPACE_DIR). Gated by the Clerk __session cookie (same as
-# /ws/clawdbot) OR the internal X-Agent-Key. Pure-Python pty — no node-pty.
+# workspace (CODE_WORKSPACE_DIR). Requires a Clerk admin session or the
+# privileged internal X-Agent-Key. The working directory is not a sandbox.
 
 @sock.route("/ws/terminal")
 def terminal_websocket(ws):
@@ -2381,13 +2381,37 @@ def terminal_websocket(ws):
     from services.auth import verify_clerk_token, get_token_from_request
     from services.paths import CODE_WORKSPACE_DIR
 
-    # --- auth: valid Clerk session OR internal agent key ---
+    from hmac import compare_digest
+    from urllib.parse import urlsplit
+    from services.auth import is_admin_user
+
+    origin = request.headers.get("Origin")
+    origin_allowed = not origin
+    if origin:
+        try:
+            parsed = urlsplit(origin)
+            expected = urlsplit(request.host_url)
+            origin_allowed = (
+                parsed.scheme in ("http", "https")
+                and parsed.scheme == expected.scheme
+                and parsed.netloc == expected.netloc
+                and not parsed.username
+                and not parsed.password
+                and not parsed.path
+                and not parsed.query
+                and not parsed.fragment
+            )
+        except ValueError:
+            origin_allowed = False
     token = get_token_from_request()
     user_id = verify_clerk_token(token) if token else None
     agent_key = os.getenv("AGENT_API_KEY", "").strip()
-    has_agent_key = bool(agent_key) and request.headers.get("X-Agent-Key") == agent_key
-    if not user_id and not has_agent_key:
-        logger.warning("Terminal WS rejected — no valid Clerk token / agent key")
+    supplied_key = request.headers.get("X-Agent-Key", "")
+    has_agent_key = bool(agent_key) and compare_digest(
+        supplied_key.encode("utf-8"), agent_key.encode("utf-8")
+    )
+    if not origin_allowed or not (is_admin_user(user_id) or has_agent_key):
+        logger.warning("Terminal WS rejected — administrator authorization required")
         try:
             ws.send(json.dumps({"type": "error", "message": "Unauthorized"}))
             ws.close()

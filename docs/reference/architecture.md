@@ -384,6 +384,10 @@ Profiles control every aspect of behavior:
 
 ## Security Model
 
+### Terminal authorization
+
+`/ws/terminal` requires a verified Clerk administrator in `ADMIN_USER_IDS`, or the privileged server-side `AGENT_API_KEY`. An allowlisted voice account alone cannot start a shell. Browser WebSocket origins must exactly match the request origin; non-browser clients may omit Origin but still require credentials. Reverse proxies must preserve the external host and scheme. The terminal starts a server-process shell: `CODE_WORKSPACE_DIR` is a working directory, not an isolation boundary. Never distribute the internal agent key to untrusted clients.
+
 ### XSS Protection
 
 - **escapeHtml()** applied before ALL innerHTML assignments
