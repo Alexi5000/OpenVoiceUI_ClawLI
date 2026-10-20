@@ -3343,7 +3343,7 @@ connectAiradio();
                     const token = await Clerk.session?.getToken();
                     const iframe = document.getElementById('canvas-iframe');
                     if (token && iframe?.contentWindow) {
-                        iframe.contentWindow.postMessage({type: 'auth-token', token}, '*');
+                        iframe.contentWindow.postMessage({type: 'auth-token', token}, window.location.origin);
                     }
                 } catch (e) { /* session may be gone */ }
             },
@@ -3360,7 +3360,7 @@ connectAiradio();
                             // uploads/API calls never hit an expired cookie
                             const iframe = document.getElementById('canvas-iframe');
                             if (iframe?.contentWindow) {
-                                iframe.contentWindow.postMessage({type: 'auth-token', token}, '*');
+                                iframe.contentWindow.postMessage({type: 'auth-token', token}, window.location.origin);
                             }
                         }
                     } catch (e) { /* session may be gone */ }

@@ -81,6 +81,13 @@ def create_app(config_override: dict = None):
         *_extra_origins,
     ], supports_credentials=True)
 
+    @app.before_request
+    def reject_opaque_origin_writes():
+        if (request.headers.get('Origin') == 'null'
+                and (request.method in ('POST', 'PUT', 'PATCH', 'DELETE')
+                     or request.headers.get('Upgrade', '').lower() == 'websocket')):
+            return jsonify({'error': 'Cross-origin request blocked', 'code': 'csrf_blocked'}), 403
+
     # ── Rate limiting ─────────────────────────────────────────────────────────
     # Per-IP limits protect expensive endpoints from abuse.
     # Override default via RATELIMIT_DEFAULT env var (e.g. "100 per minute").
@@ -284,7 +291,9 @@ def create_app(config_override: dict = None):
                 return
             # Canvas pages and images have their own auth logic (public flag)
             # handled inside canvas_bp — let them through here
-            if path.startswith('/pages/') or path.startswith('/canvas-proxy') or path.startswith('/website-dev'):
+            if path.startswith('/pages/') or path.startswith('/canvas-proxy'):
+                return
+            if (path == '/website-dev' or path.startswith('/website-dev/')) and request.method in ('GET', 'HEAD', 'OPTIONS'):
                 return
 
             # Admin-only surfaces are NEVER reachable with the internal agent key.
