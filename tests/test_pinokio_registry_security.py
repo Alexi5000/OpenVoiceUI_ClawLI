@@ -1,3 +1,5 @@
+import json
+from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from unittest.mock import patch
@@ -5,6 +7,19 @@ from unittest.mock import patch
 import pytest
 from flask import Flask
 from routes import registry
+
+
+class CheckinParser(HTMLParser):
+    def __init__(self, html):
+        super().__init__()
+        self.elements = []
+        self.config = None
+        self.feed(html)
+
+    def handle_starttag(self, tag, attrs):
+        self.elements.append((tag, dict(attrs)))
+        if dict(attrs).get('id') == 'registry-config':
+            self.config = json.loads(dict(attrs)['data-config'])
 
 
 @pytest.fixture
@@ -143,7 +158,7 @@ def test_github_fallback_rejects_invalid_configuration(monkeypatch, configured):
 def test_checkin_discards_unsafe_return_urls(client, url):
     response = client.get('/registry/checkin', query_string={'return': url})
     assert response.status_code == 200
-    assert '"returnUrl": ""' in response.text
+    assert CheckinParser(response.text).config['returnUrl'] == ''
 
 
 @pytest.mark.parametrize('url', [
@@ -152,10 +167,9 @@ def test_checkin_discards_unsafe_return_urls(client, url):
     'https://external.example/return',
 ])
 def test_checkin_preserves_http_return_destinations(client, url):
-    import json
     response = client.get('/registry/checkin', query_string={'return': url})
     assert response.status_code == 200
-    assert '"returnUrl": ' + json.dumps(url) in response.text
+    assert CheckinParser(response.text).config['returnUrl'] == url
 
 
 def test_checkin_health_status_is_plain_text(client):
@@ -166,3 +180,19 @@ def test_checkin_health_status_is_plain_text(client):
     assert response.status_code == 200
     assert '&lt;svg/onload=window.__xss=1&gt;' in response.text
     assert message not in response.text
+
+
+@pytest.mark.parametrize('payload', [
+    '</script><script>window.__xss=1</script>',
+    '\"><svg/onload=window.__xss=1>',
+    "'&quot;&amp;<>& café \u2028 \u2029",
+])
+def test_checkin_configuration_roundtrips_as_inert_data(client, payload):
+    response = client.get('/registry/checkin', query_string={'repo': payload, 'app': payload})
+    assert response.status_code == 200
+    parsed = CheckinParser(response.text)
+    assert parsed.config['repo'] == payload
+    assert parsed.config['appSlug'] == payload
+    assert sum(tag == 'script' for tag, _ in parsed.elements) == 1
+    assert not any(tag == 'svg' for tag, _ in parsed.elements)
+    assert not any(key.startswith('on') for _, attrs in parsed.elements for key in attrs)
