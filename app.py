@@ -83,8 +83,7 @@ def create_app(config_override: dict = None):
 
     @app.before_request
     def reject_opaque_origin_writes():
-        preview = request.path == '/website-dev' or request.path.startswith('/website-dev/')
-        if (request.headers.get('Origin') == 'null' and not preview
+        if (request.headers.get('Origin') == 'null'
                 and request.method in ('POST', 'PUT', 'PATCH', 'DELETE')):
             return jsonify({'error': 'Cross-origin request blocked', 'code': 'csrf_blocked'}), 403
 
@@ -291,7 +290,9 @@ def create_app(config_override: dict = None):
                 return
             # Canvas pages and images have their own auth logic (public flag)
             # handled inside canvas_bp — let them through here
-            if path.startswith('/pages/') or path.startswith('/canvas-proxy') or path.startswith('/website-dev'):
+            if path.startswith('/pages/') or path.startswith('/canvas-proxy'):
+                return
+            if (path == '/website-dev' or path.startswith('/website-dev/')) and request.method in ('GET', 'HEAD', 'OPTIONS'):
                 return
 
             # Admin-only surfaces are NEVER reachable with the internal agent key.

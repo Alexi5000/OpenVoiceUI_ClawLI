@@ -1094,7 +1094,7 @@ def _isolate_dev_response(response):
     response.headers['Content-Security-Policy'] = 'sandbox allow-scripts'
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, HEAD, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, HEAD, OPTIONS'
     response.headers['Referrer-Policy'] = 'no-referrer'
     return response
 

@@ -52,3 +52,25 @@ def test_preview_module_preflight_is_noncredentialed():
     assert result.headers['Access-Control-Allow-Origin'] == '*'
     assert result.headers['Access-Control-Allow-Headers'] == 'Content-Type'
     assert 'Access-Control-Allow-Credentials' not in result.headers
+
+
+@pytest.mark.parametrize('method', ['POST', 'PUT', 'DELETE'])
+def test_preview_mutations_require_configured_session(method, monkeypatch):
+    monkeypatch.setenv('CLERK_PUBLISHABLE_KEY', 'pk_test_synthetic')
+    from services import auth
+    monkeypatch.setattr(auth, 'verify_clerk_token', lambda token: 'test-user' if token == 'synthetic-approved' else None)
+    app, _ = create_app({'TESTING': True})
+    app.register_blueprint(canvas.canvas_bp)
+    response = requests.Response()
+    response.status_code = 200
+    response._content = b'ok'
+    response.headers = {'content-type': 'text/plain'}
+    response.iter_content = Mock(return_value=[b'ok'])
+    with patch.object(canvas.http_requests, method.lower(), return_value=response) as send:
+        client = app.test_client()
+        assert client.open('/website-dev/api', method=method).status_code in (302, 401)
+        send.assert_not_called()
+        assert client.open('/website-dev/api', method=method, headers={'Origin': 'null', 'Authorization': 'Bearer synthetic-approved'}).status_code == 403
+        send.assert_not_called()
+        assert client.open('/website-dev/api', method=method, headers={'Authorization': 'Bearer synthetic-approved'}).status_code == 200
+        send.assert_called_once()
