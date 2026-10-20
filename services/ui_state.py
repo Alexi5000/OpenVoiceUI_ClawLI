@@ -130,6 +130,7 @@ def write_ui_state(uploads_dir: Path, static_blob: str,
         try:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write(doc)
+                os.fchmod(f.fileno(), 0o664)
             os.replace(tmp_path, target)
         except Exception:
             # Best-effort tmp cleanup — never leave droppings in uploads/.
@@ -138,10 +139,6 @@ def write_ui_state(uploads_dir: Path, static_blob: str,
             except OSError:
                 pass
             raise
-        try:
-            os.chmod(target, 0o664)
-        except OSError:
-            pass
         with _last_hash_lock:
             _last_hash = digest
         return True
