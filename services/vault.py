@@ -107,7 +107,7 @@ def _load_platform_oauth_env():
             if k:
                 os.environ.setdefault(k, v)
     except (PermissionError, OSError) as exc:
-        logger.warning(f"[vault] Cannot read {path}: {exc}")
+        logger.warning("Cannot read platform OAuth environment file")
 
 
 _load_platform_oauth_env()
@@ -243,9 +243,18 @@ def _read_json(path: Path) -> dict:
 
 def _write_json(path: Path, data: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix('.tmp')
-    tmp.write_text(json.dumps(data, indent=2))
-    tmp.replace(path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent,
+                                         prefix='.vault-', delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(data, stream, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _write_json_inplace(path: Path, data: dict):
@@ -867,13 +876,13 @@ def _update_env_file(path: Path, updates: dict) -> bool:
     if not updates:
         return False
     if not path.parent.exists():
-        logger.warning(f"Parent dir missing for env file {path}")
+        logger.warning("Credential environment directory is missing")
         return False
 
     try:
         existing_text = path.read_text() if path.is_file() else ''
     except (PermissionError, OSError) as exc:
-        logger.error(f"Cannot read env file {path}: {exc}")
+        logger.error("Cannot read credential environment file")
         return False
 
     lines = existing_text.splitlines()
