@@ -77,14 +77,12 @@ def registry_checkin():
     repo_safe = markupsafe.escape(repo)
     status_msg = markupsafe.escape(status_msg)
 
-    # Pass values to JS safely via JSON encoding. Escape '<' so a `repo`
-    # containing '</script>' can't break out of the inline script tag.
-    js_config = json.dumps({
+    js_config = markupsafe.escape(json.dumps({
         'returnUrl': return_url,
         'registry':  registry,
         'appSlug':   app_slug,
         'repo':      repo,
-    }).replace('<', '\\u003c')
+    }))
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -178,9 +176,10 @@ def registry_checkin():
         <div id="status-msg">Completing check-in&hellip;</div>
     </div>
 
+    <div id="registry-config" data-config="{js_config}" hidden></div>
     <script>
     (function() {{
-        var cfg = {js_config};
+        var cfg = JSON.parse(document.getElementById('registry-config').dataset.config);
 
         // Read token from URL hash (#token=...) — never sent to server
         var hash = window.location.hash.slice(1);
