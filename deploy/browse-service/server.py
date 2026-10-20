@@ -44,7 +44,9 @@ import ipaddress
 import json
 import logging
 import os
+import shutil
 import socket
+import tempfile
 import time
 import uuid
 from urllib.parse import urlparse, urlsplit
@@ -341,13 +343,19 @@ class BrowseService:
             ddir = _downloads_dir(sess.tenant)
             ddir.mkdir(parents=True, exist_ok=True)
             name = os.path.basename(download.suggested_filename or "download.bin")
-            # namespace by tenant + time so shared uploads don't collide
-            dest = ddir / f"browse-{int(time.time())}-{name}"
-            await download.save_as(str(dest))
-            try:
-                os.chmod(dest, 0o664)
-            except OSError:
-                pass
+            dest = ddir / f"browse-{uuid.uuid4().hex}-{name}"
+            with tempfile.TemporaryDirectory(prefix="browse-download-") as staging:
+                source = os.path.join(staging, "download")
+                await download.save_as(source)
+                fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                try:
+                    with os.fdopen(fd, "wb") as output, open(source, "rb") as incoming:
+                        shutil.copyfileobj(incoming, output)
+                        output.flush()
+                        os.fsync(output.fileno())
+                except BaseException:
+                    dest.unlink(missing_ok=True)
+                    raise
             sess.last_download = dest.name
             logger.info("download captured tenant=%s → %s", sess.tenant, dest.name)
         except Exception as e:
