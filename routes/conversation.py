@@ -1592,7 +1592,7 @@ def _conversation_inner():
                                     logger.debug('Could not write gemini-sync sidecar: %s', _we)
                         except Exception as _ge:
                             logger.warning('Sync Gemini vision failed (%s) — falling back to '
-                                           'vision@mesh queue for %s', _ge, _img_file.name)
+                                           'vision@mesh queue for %s', type(_ge).__name__, _img_file.name)
                 if _upload_desc is None:
                     # No cache yet — route to vision@mesh via openclaw container (has mesh-send + mesh mount)
                     # Non-blocking: mesh task, vision agent writes .image-intel sidecar async
