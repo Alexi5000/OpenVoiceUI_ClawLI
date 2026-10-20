@@ -1179,25 +1179,43 @@ body {
     $('step3-num').classList.add('done');
     $('step3-num').textContent = '\u2713';
 
-    var html = '';
+    var body = $('resultsBody');
+    body.replaceChildren();
     cloneResults.forEach(function(r) {
-      html += '<tr>';
-      html += '<td>' + escHtml(platformLabel(r.provider)) + '</td>';
-      html += '<td class="voice-id-cell" title="' + escHtml(r.voice_id) + '">' + escHtml(r.voice_id || '--') + '</td>';
-      html += '<td>' + (r.clone_time_ms ? (r.clone_time_ms / 1000).toFixed(1) + 's' : '--') + '</td>';
-      html += '<td><span class="status-badge ' + r.status + '">' + r.status + '</span></td>';
-
+      var row = document.createElement('tr');
+      var provider = document.createElement('td');
+      provider.textContent = platformLabel(r.provider);
+      var voice = document.createElement('td');
+      voice.className = 'voice-id-cell';
+      voice.title = r.voice_id || '';
+      voice.textContent = r.voice_id || '--';
+      var duration = document.createElement('td');
+      duration.textContent = r.clone_time_ms ? (r.clone_time_ms / 1000).toFixed(1) + 's' : '--';
+      var status = document.createElement('td');
+      var badge = document.createElement('span');
+      badge.className = 'status-badge';
+      if (['ready', 'pending', 'failed'].indexOf(r.status) !== -1) badge.classList.add(r.status);
+      badge.textContent = r.status || '';
+      status.appendChild(badge);
+      var action = document.createElement('td');
       if (r.status === 'ready' && r.voice_id) {
-        html += '<td>';
-        html += '<button class="btn btn-secondary btn-sm" onclick="quickTest(\'' + escHtml(r.provider) + '\',\'' + escHtml(r.voice_id) + '\', this)">Test</button>';
-        html += '<audio class="test-inline-audio" id="audio-result-' + escHtml(r.provider) + '" controls></audio>';
-        html += '</td>';
+        var button = document.createElement('button');
+        button.className = 'btn btn-secondary btn-sm';
+        button.textContent = 'Test';
+        button.addEventListener('click', function() { window.quickTest(r.provider, r.voice_id, button); });
+        var audio = document.createElement('audio');
+        audio.className = 'test-inline-audio';
+        audio.id = 'audio-result-' + r.provider;
+        audio.controls = true;
+        action.append(button, audio);
       } else {
-        html += '<td style="color:var(--text-dim);font-size:12px;">--</td>';
+        action.style.color = 'var(--text-dim)';
+        action.style.fontSize = '12px';
+        action.textContent = '--';
       }
-      html += '</tr>';
+      row.append(provider, voice, duration, status, action);
+      body.appendChild(row);
     });
-    $('resultsBody').innerHTML = html;
   }
 
   // ── Quick test from results ────────────────────────────────────────
@@ -1355,18 +1373,33 @@ body {
       return;
     }
 
-    var html = '<div class="voices-grid">';
+    var grid = document.createElement('div');
+    grid.className = 'voices-grid';
     allVoices.forEach(function(v) {
-      html += '<div class="voice-card">';
-      html += '<div class="voice-card-name">' + escHtml(v.name) + '</div>';
-      html += '<div class="voice-card-provider">' + escHtml(platformLabel(v.provider)) + '</div>';
-      html += '<div class="voice-card-id" title="' + escHtml(v.voice_id) + '">' + escHtml(v.voice_id) + '</div>';
-      html += '<button class="btn btn-secondary btn-sm" onclick="libTest(\'' + escHtml(v.provider) + '\',\'' + escHtml(v.voice_id) + '\',this)">Test</button>';
-      html += '<audio class="voice-card-audio" id="lib-audio-' + escHtml(v.voice_id).replace(/[^a-zA-Z0-9_-]/g, '') + '" controls></audio>';
-      html += '</div>';
+      var card = document.createElement('div');
+      card.className = 'voice-card';
+      var name = document.createElement('div');
+      name.className = 'voice-card-name';
+      name.textContent = v.name;
+      var provider = document.createElement('div');
+      provider.className = 'voice-card-provider';
+      provider.textContent = platformLabel(v.provider);
+      var voice = document.createElement('div');
+      voice.className = 'voice-card-id';
+      voice.title = v.voice_id;
+      voice.textContent = v.voice_id;
+      var button = document.createElement('button');
+      button.className = 'btn btn-secondary btn-sm';
+      button.textContent = 'Test';
+      button.addEventListener('click', function() { window.libTest(v.provider, v.voice_id, button); });
+      var audio = document.createElement('audio');
+      audio.className = 'voice-card-audio';
+      audio.id = 'lib-audio-' + v.voice_id.replace(/[^a-zA-Z0-9_-]/g, '');
+      audio.controls = true;
+      card.append(name, provider, voice, button, audio);
+      grid.appendChild(card);
     });
-    html += '</div>';
-    $('voiceLibrary').innerHTML = html;
+    $('voiceLibrary').replaceChildren(grid);
   }
 
   window.libTest = function(provider, voiceId, btn) {
