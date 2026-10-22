@@ -192,7 +192,7 @@ def _proxy(method: str, path: str, *, params=None, json_body=None):
         return jsonify({"ok": False, "error": "Cal.diy request timed out."}), 504
     except Exception as e:  # noqa: BLE001 — surface any client error cleanly
         logger.error("booking proxy error %s %s: %s", method, path, e)
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": 'Request failed.'}), 500
 
     # Pass Cal.diy's JSON body and status straight through.
     try:
@@ -498,7 +498,7 @@ def save_config():
         _save_config(cfg)
     except OSError as e:
         logger.error("booking: cannot save config: %s", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": 'Request failed.'}), 500
 
     return jsonify({"ok": True, "configured": bool(_api_key())})
 

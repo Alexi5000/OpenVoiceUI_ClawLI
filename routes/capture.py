@@ -841,7 +841,7 @@ def describe_photo(album_id, photo_id):
         result = _describe_with_vision(media_file)
     except Exception as exc:
         logger.error("Vision describe failed for %s: %s", photo_id, exc)
-        return jsonify({'error': f'Vision API error: {exc}'}), 502
+        return jsonify({'error': 'Vision API error'}), 502
 
     # Update photo record under flock
     with _locked_json(album_path) as (album_data, _):

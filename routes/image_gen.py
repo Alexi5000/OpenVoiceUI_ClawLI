@@ -429,10 +429,10 @@ def generate_image():
     except http.HTTPError as e:
         body = e.response.text[:400] if e.response else str(e)
         logger.error('image-gen HTTP error: %s', body)
-        return jsonify({'error': body}), e.response.status_code if e.response else 502
+        return jsonify({'error': 'Image provider request failed'}), e.response.status_code if e.response else 502
     except Exception as e:
         logger.exception('image-gen error')
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 @image_gen_bp.route('/api/image-gen/enhance', methods=['POST'])
@@ -459,10 +459,10 @@ def enhance_prompt_route():
     except http.HTTPError as e:
         body = e.response.text[:400] if e.response else str(e)
         logger.error('enhance_prompt HTTP error: %s', body)
-        return jsonify({'error': body}), e.response.status_code if e.response else 502
+        return jsonify({'error': 'Image provider request failed'}), e.response.status_code if e.response else 502
     except Exception as e:
         logger.exception('enhance_prompt error')
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 @image_gen_bp.route('/api/image-gen/saved', methods=['GET'])

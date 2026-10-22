@@ -4007,7 +4007,7 @@ def tts_providers_list():
         return jsonify({'providers': providers, 'default_provider': default_provider})
     except Exception as e:
         logger.error(f'Failed to list TTS providers: {e}')
-        return jsonify({'error': f'Failed to list providers: {e}'}), 500
+        return jsonify({'error': 'Failed to list providers'}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -4061,7 +4061,7 @@ def tts_set_default_provider():
             with open(config_path, 'r') as f:
                 config = json.load(f)
         except Exception as e:
-            return jsonify({'ok': False, 'error': f'failed to read config: {e}'}), 500
+            return jsonify({'ok': False, 'error': 'failed to read config'}), 500
 
         old_default = config.get('default_provider')
         config['default_provider'] = provider_id
@@ -4075,7 +4075,7 @@ def tts_set_default_provider():
                 json.dump(config, f, indent=2)
             os.replace(tmp_path, config_path)
         except Exception as e:
-            return jsonify({'ok': False, 'error': f'failed to write config: {e}'}), 500
+            return jsonify({'ok': False, 'error': 'failed to write config'}), 500
 
         # Drop the cached config + provider singletons so the next generate
         # picks up the new default without a restart.
@@ -4091,7 +4091,7 @@ def tts_set_default_provider():
         })
     except Exception as e:
         logger.error(f'tts_set_default_provider failed: {e}')
-        return jsonify({'ok': False, 'error': str(e)}), 500
+        return jsonify({'ok': False, 'error': 'Request failed.'}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -4121,7 +4121,7 @@ def tts_set_default_voice():
             with open(config_path, 'r') as f:
                 config = json.load(f)
         except Exception as e:
-            return jsonify({'ok': False, 'error': f'failed to read config: {e}'}), 500
+            return jsonify({'ok': False, 'error': 'failed to read config'}), 500
 
         provider_id = (data.get('provider') or config.get('default_provider') or '').strip()
         if not provider_id:
@@ -4148,7 +4148,7 @@ def tts_set_default_voice():
                 json.dump(config, f, indent=2)
             os.replace(tmp_path, config_path)
         except Exception as e:
-            return jsonify({'ok': False, 'error': f'failed to write config: {e}'}), 500
+            return jsonify({'ok': False, 'error': 'failed to write config'}), 500
 
         # Drop the cached config so the next read reflects the new voice order.
         _tts_invalidate()
@@ -4162,7 +4162,7 @@ def tts_set_default_voice():
         })
     except Exception as e:
         logger.error(f'tts_set_default_voice failed: {e}')
-        return jsonify({'ok': False, 'error': str(e)}), 500
+        return jsonify({'ok': False, 'error': 'Request failed.'}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -4240,10 +4240,10 @@ def tts_generate():
         try:
             audio_bytes = provider.generate_speech(**gen_params)
         except ValueError as e:
-            return jsonify({'error': f'Invalid parameter: {e}'}), 400
+            return jsonify({'error': 'Invalid parameter'}), 400
         except Exception as e:
             logger.error(f'Speech generation failed for {provider_id}: {e}')
-            return jsonify({'error': f'Speech generation failed: {e}'}), 500
+            return jsonify({'error': 'Speech generation failed'}), 500
 
         provider_format = provider.get_info().get('audio_format', 'wav')
         mime_type = 'audio/mpeg' if provider_format == 'mp3' else 'audio/wav'
@@ -4257,7 +4257,7 @@ def tts_generate():
         return response
 
     except ValueError as e:
-        return jsonify({'error': f'Invalid input: {e}'}), 400
+        return jsonify({'error': 'Invalid input'}), 400
     except Exception as e:
         import traceback
         logger.error(f'TTS generate endpoint error: {e}')
@@ -4407,7 +4407,7 @@ def tts_clone_voice():
 
     except RuntimeError as e:
         logger.error(f"Voice clone failed: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
     except Exception as e:
         import traceback
         logger.error(f"Voice clone error: {e}")
@@ -4439,7 +4439,7 @@ def tts_voices_list():
         return jsonify({'voices': all_voices})
     except Exception as e:
         logger.error(f"Failed to list voices: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -4474,7 +4474,7 @@ def tts_delete_voice(voice_id):
         return jsonify({'status': 'ok', 'voice_id': voice_id, 'action': 'retired'})
     except Exception as e:
         logger.error(f"Failed to retire voice {voice_id}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -4523,7 +4523,7 @@ def supertonic_tts_endpoint():
             tts_instance = get_supertonic_for_voice(voice_style)
         except Exception as e:
             logger.error(f'Failed to initialize TTS with voice {voice_style}: {e}')
-            return jsonify({'error': f'Failed to load voice style: {e}'}), 500
+            return jsonify({'error': 'Failed to load voice style'}), 500
 
         try:
             audio_bytes = tts_instance.generate_speech(
@@ -4531,7 +4531,7 @@ def supertonic_tts_endpoint():
             )
         except Exception as e:
             logger.error(f'Speech synthesis failed: {e}')
-            return jsonify({'error': f'Speech synthesis failed: {e}'}), 500
+            return jsonify({'error': 'Speech synthesis failed'}), 500
 
         response = make_response(audio_bytes)
         response.headers['Content-Type'] = 'audio/wav'
@@ -4540,7 +4540,7 @@ def supertonic_tts_endpoint():
         return response
 
     except ValueError as e:
-        return jsonify({'error': f'Invalid input: {e}'}), 400
+        return jsonify({'error': 'Invalid input'}), 400
     except Exception as e:
         import traceback
         logger.error(f'TTS endpoint error: {e}')

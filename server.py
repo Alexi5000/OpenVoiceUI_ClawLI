@@ -1311,7 +1311,7 @@ def external_stt():
         })
     except Exception as e:
         logger.error(f"External STT error: {e}")
-        return jsonify({"error": f"External STT failed: {e}"}), 500
+        return jsonify({"error": 'External STT failed'}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -2550,7 +2550,7 @@ def games_api():
         r = _req.get(f"{_GAME_SERVER_URL}/api/games", params=dict(request.args), timeout=10)
         return Response(r.content, status=r.status_code, mimetype="application/json")
     except Exception as e:
-        return jsonify({"error": f"Game server unreachable: {e}"}), 502
+        return jsonify({"error": 'Game server unreachable'}), 502
 
 @app.route("/api/games/stats", methods=["GET"])
 def games_stats_api():
@@ -2575,7 +2575,7 @@ def games_stats_api():
         r = _req.get(f"{_GAME_SERVER_URL}/api/stats", timeout=10)
         return Response(r.content, status=r.status_code, mimetype="application/json")
     except Exception as e:
-        return jsonify({"error": f"Game server unreachable: {e}"}), 502
+        return jsonify({"error": 'Game server unreachable'}), 502
 
 @app.route("/api/games/systems", methods=["GET"])
 def games_systems_api():
@@ -2588,7 +2588,7 @@ def games_systems_api():
         r = _req.get(f"{_GAME_SERVER_URL}/api/systems", timeout=10)
         return Response(r.content, status=r.status_code, mimetype="application/json")
     except Exception as e:
-        return jsonify({"error": f"Game server unreachable: {e}"}), 502
+        return jsonify({"error": 'Game server unreachable'}), 502
 
 
 # ---------------------------------------------------------------------------

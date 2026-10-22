@@ -960,7 +960,7 @@ def update_ai_config():
                 result = gw.configure(data)
             except Exception as exc:
                 logger.error("framework configure(%s) failed: %s", active_gid, exc)
-                return jsonify({'ok': False, 'error': f'{active_gid} configure failed: {exc}'}), 502
+                return jsonify({'ok': False, 'error': 'configure failed'}), 502
             status = result.get('status')
             if status in ('applied', 'needs_restart'):
                 return jsonify({'ok': True, 'gateway': active_gid, 'status': status,

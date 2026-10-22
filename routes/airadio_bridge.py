@@ -1667,7 +1667,7 @@ def set_user_key():
     except http_requests.RequestException as exc:
         return jsonify({
             "ok": False,
-            "error": {"code": "BRIDGE_UNREACHABLE", "message": str(exc)},
+            "error": {"code": "BRIDGE_UNREACHABLE", "message": 'Request failed.'},
         }), 502
 
     if probe.status_code in (401, 403):
@@ -1699,7 +1699,7 @@ def set_user_key():
     except OSError as exc:
         return jsonify({
             "ok": False,
-            "error": {"code": "WORKSPACE_KEY_WRITE_FAILED", "message": str(exc)},
+            "error": {"code": "WORKSPACE_KEY_WRITE_FAILED", "message": 'Request failed.'},
         }), 500
 
     print(f"📻 set-user-key: persisted AIRADIO_USER_KEY → {_USER_KEY_PERSIST_PATH}")
