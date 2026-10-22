@@ -11,7 +11,7 @@ mesh queue (OVU has no mesh mount) — the voice agent is the bridge, per the co
 in docs/jambot/grid-creator-spec.md.
 
 Order/status files live UNDER the uploads/ dir — the one runtime subdir that is bind-mounted
-to the host (`/mnt/clients/<t>/openvoiceui/uploads/`) AND is world-writable (drwxrwxrwx), so
+to the host (`/mnt/clients/<t>/openvoiceui/uploads/`) and uses a shared group, so
 BOTH this route (container uid 1001) and the Mac creative node (host uid 1000) can write to it.
 A top-level runtime/grid-orders/ would live only inside the container fs — the Mac's host-side
 marker would be invisible to the page. Do NOT move this out from under uploads/ without adding a
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import time
 from pathlib import Path
 
@@ -34,7 +35,7 @@ from services.safe_paths import UnsafePathError, safe_join
 
 grid_gen_bp = Blueprint('grid_gen', __name__)
 
-# Under uploads/ (bind-mounted + world-writable) so the Mac's host-side markers are visible here.
+# Under uploads/ so the Mac's host-side markers are visible here.
 ORDERS_DIR = RUNTIME_DIR / 'uploads' / 'grid-orders'
 _VALID_TYPES = {'post', 'logo', 'character', 'mascot'}
 _IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tiff', '.tif', '.avif', '.heic', '.heif'}
@@ -66,13 +67,18 @@ def _sanitize_refs(raw) -> list:
 
 
 def _orders_dir() -> Path:
-    ORDERS_DIR.mkdir(parents=True, exist_ok=True)
-    # This route usually creates the dir first (order placed before the Mac ever sees it); make
-    # it world-writable so the Mac (different uid) can drop status markers into the same dir.
+    ORDERS_DIR.mkdir(mode=0o770, parents=True, exist_ok=True)
+    before = ORDERS_DIR.lstat()
+    if not stat.S_ISDIR(before.st_mode):
+        raise OSError('order storage must be a directory')
+    fd = os.open(ORDERS_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        os.chmod(ORDERS_DIR, 0o777)
-    except OSError:
-        pass
+        opened = os.fstat(fd)
+        if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+            raise OSError('order storage changed during access')
+        os.fchmod(fd, 0o2770)
+    finally:
+        os.close(fd)
     return ORDERS_DIR
 
 
