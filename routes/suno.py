@@ -66,6 +66,31 @@ SUNO_CALLBACK_URL = (
     or (f'https://{_domain}/api/suno/callback' if _domain else '')
 )
 
+
+def _callback_token() -> str:
+    """Shared callback token derived from SUNO_WEBHOOK_SECRET (never the raw secret).
+
+    sunoapi.org calls back whatever callBackUrl we hand it, so the token rides in
+    the URL query string and is checked by suno_callback(). Deriving it with HMAC
+    keeps the configured secret itself out of provider logs.
+    """
+    return hmac.new(SUNO_WEBHOOK_SECRET.encode(), b'suno-callback-v1', hashlib.sha256).hexdigest()
+
+
+def _callback_url() -> str:
+    """SUNO_CALLBACK_URL with the shared callback token appended when a secret is set."""
+    if not SUNO_CALLBACK_URL or not SUNO_WEBHOOK_SECRET:
+        return SUNO_CALLBACK_URL
+    sep = '&' if '?' in SUNO_CALLBACK_URL else '?'
+    return f'{SUNO_CALLBACK_URL}{sep}token={_callback_token()}'
+
+
+def _callback_auth_required() -> bool:
+    """True when unsigned callbacks must be refused (Clerk / hosted mode)."""
+    from services.auth import clerk_auth_enabled
+    return (clerk_auth_enabled()
+            or os.environ.get('CANVAS_REQUIRE_AUTH', '').strip().lower() == 'true')
+
 # ---------------------------------------------------------------------------
 # In-memory job tracking (single-worker deployment)
 # ---------------------------------------------------------------------------
@@ -572,7 +597,7 @@ def _action_generate(_q, body: dict):
         logger.info(str(f'Suno generate: persona {request_body["personaModel"]} id={persona_id[:12]}…').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     if SUNO_CALLBACK_URL:
-        request_body['callBackUrl'] = SUNO_CALLBACK_URL
+        request_body['callBackUrl'] = _callback_url()
 
     logger.info(str(f'Suno generate: mode={"custom" if has_lyrics else "auto"} prompt={song_prompt[:80]}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
@@ -850,7 +875,7 @@ def _action_jingle(_q, body: dict):
         }
 
     if SUNO_CALLBACK_URL:
-        request_body['callBackUrl'] = SUNO_CALLBACK_URL
+        request_body['callBackUrl'] = _callback_url()
 
     logger.info('Suno jingle: submitting generation')
 
@@ -1261,7 +1286,7 @@ def _submit_suno_job(endpoint: str, request_body: dict, kind: str,
     which return a taskId in the /generate shape the action=status poller reads.
     """
     if SUNO_CALLBACK_URL:
-        request_body.setdefault('callBackUrl', SUNO_CALLBACK_URL)
+        request_body.setdefault('callBackUrl', _callback_url())
 
     logger.info('Suno %s: POST %s (%d fields)', kind, endpoint, len(request_body))
     try:
@@ -1500,7 +1525,7 @@ def _action_generate_lyrics(_q, body: dict):
 
     request_body = {'prompt': prompt[:200]}
     if SUNO_CALLBACK_URL:
-        request_body['callBackUrl'] = SUNO_CALLBACK_URL
+        request_body['callBackUrl'] = _callback_url()
 
     try:
         resp = http_requests.post(
@@ -1571,7 +1596,7 @@ def _action_wav_convert(_q, body: dict):
 
     request_body = {'taskId': task_id, 'audioId': audio_id}
     if SUNO_CALLBACK_URL:
-        request_body['callBackUrl'] = SUNO_CALLBACK_URL
+        request_body['callBackUrl'] = _callback_url()
     return _submit_process_job(
         '/api/v1/wav/generate', request_body, 'wav_convert',
         op='wav_convert', est_seconds=20,
@@ -1852,7 +1877,7 @@ def _action_stem_separate(_q, body: dict):
 
     request_body = {'taskId': task_id, 'audioId': audio_id, 'type': sep_type, 'stemName': stem_name}
     if SUNO_CALLBACK_URL:
-        request_body['callBackUrl'] = SUNO_CALLBACK_URL
+        request_body['callBackUrl'] = _callback_url()
 
     def _on_task_id(new_task_id):
         _stem_write_pending(name_stem, new_task_id, sep_type)
@@ -1972,7 +1997,7 @@ def _action_music_video(_q, body: dict):
     if domain_name:
         request_body['domainName'] = domain_name[:50]
     if SUNO_CALLBACK_URL:
-        request_body['callBackUrl'] = SUNO_CALLBACK_URL
+        request_body['callBackUrl'] = _callback_url()
     return _submit_process_job(
         '/api/v1/mp4/generate', request_body, 'music_video',
         op='music_video', est_seconds=90,
@@ -2163,7 +2188,7 @@ def _action_voice_validate(_q, body: dict):
     if language:
         request_body['language'] = language
     if SUNO_CALLBACK_URL:
-        request_body['callBackUrl'] = SUNO_CALLBACK_URL
+        request_body['callBackUrl'] = _callback_url()
 
     logger.info(str(f'Suno voice_validate: seg={start_s}-{end_s} url={voice_url[:80]}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     try:
@@ -2242,7 +2267,7 @@ def _action_voice_generate(_q, body: dict):
              or _q('singer_skill_level') or body.get('singer_skill_level', '')).strip() or 'beginner'
     request_body['singerSkillLevel'] = skill
     if SUNO_CALLBACK_URL:
-        request_body['callBackUrl'] = SUNO_CALLBACK_URL
+        request_body['callBackUrl'] = _callback_url()
 
     logger.info(str(f'Suno voice_generate: task_id={task_id} skill={skill} name={voice_name!r}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     try:
@@ -2375,27 +2400,34 @@ def _action_file_upload(_q, body: dict):
 def suno_callback():
     """Webhook from sunoapi.org — downloads song and queues frontend notification."""
     try:
-        # Verify HMAC signature when a webhook secret is configured.
-        # NOTE: SUNO_WEBHOOK_SECRET is NOT provisioned in the fleet .env template
-        # yet (verified 2026-07-11), so we cannot fail-closed without breaking
-        # every tenant's song delivery. Until the secret is provisioned
-        # fleet-wide, an unsigned callback is accepted but constrained: the
-        # download is SSRF-checked, restricted to https, and hard-capped at
-        # SUNO_MAX_DOWNLOAD_BYTES (50 MB). TODO: add SUNO_WEBHOOK_SECRET to
-        # templates/.env then flip this to a 503 fail-closed.
+        # Authenticate the provider callback. When SUNO_WEBHOOK_SECRET is set,
+        # accept either a valid X-Suno-Signature HMAC of the body or the shared
+        # token that _callback_url() appends to callBackUrl. Without a secret,
+        # unsigned callbacks are refused whenever Clerk auth (or hosted
+        # CANVAS_REQUIRE_AUTH) is on: the route is auth-exempt, so an unsigned
+        # event would let any caller write media / job state. Songs still arrive
+        # via the authenticated status-polling path. Only intentional local mode
+        # (no Clerk) keeps accepting unsigned callbacks, constrained to https
+        # downloads capped at SUNO_MAX_DOWNLOAD_BYTES.
         _require_https = not SUNO_WEBHOOK_SECRET
         if SUNO_WEBHOOK_SECRET:
             sig_header = request.headers.get('X-Suno-Signature', '')
             payload = request.get_data()
             expected = hmac.new(SUNO_WEBHOOK_SECRET.encode(), payload, hashlib.sha256).hexdigest()
-            if not hmac.compare_digest(sig_header, expected):
+            token = request.args.get('token', '')
+            sig_ok = bool(sig_header) and hmac.compare_digest(sig_header.encode(), expected.encode())
+            token_ok = bool(token) and hmac.compare_digest(token.encode(), _callback_token().encode())
+            if not (sig_ok or token_ok):
                 logger.warning('Suno callback rejected: invalid signature')
                 return jsonify({'status': 'forbidden'}), 403
+        elif _callback_auth_required():
+            logger.warning('Suno callback rejected: SUNO_WEBHOOK_SECRET is required when auth is enabled')
+            return jsonify({'status': 'webhook_secret_required'}), 503
         else:
             logger.warning(
-                'Suno callback accepted UNSIGNED — SUNO_WEBHOOK_SECRET not configured. '
-                'Download restricted to https + %d byte cap. Provision the secret '
-                'fleet-wide to fail closed.', SUNO_MAX_DOWNLOAD_BYTES
+                'Suno callback accepted UNSIGNED (local mode, no Clerk); '
+                'download restricted to https + %d byte cap. Set SUNO_WEBHOOK_SECRET '
+                'to authenticate callbacks.', SUNO_MAX_DOWNLOAD_BYTES
             )
 
         data = request.json or {}

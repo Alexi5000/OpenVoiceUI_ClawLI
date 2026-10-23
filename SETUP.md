@@ -285,7 +285,9 @@ All configuration is via `.env`. Key variables:
 | `HUME_SECRET_KEY` | No | — | Hume EVI TTS secret |
 | `GEMINI_API_KEY` | No | — | Vision / screenshot analysis |
 | `SUNO_API_KEY` | No | — | AI music generation |
-| `CLERK_PUBLISHABLE_KEY` | No | — | Auth (leave unset for open access) |
+| `SUNO_WEBHOOK_SECRET` | With Clerk + Suno callbacks | none | Authenticates `/api/suno/callback`. Required for callbacks when Clerk auth is on (unsigned callbacks get 503; songs still arrive via status polling) |
+| `CLERK_PUBLISHABLE_KEY` | No | — | Auth (leave unset for open access). `VITE_CLERK_PUBLISHABLE_KEY` is an accepted alias |
+| `WS_ALLOWED_ORIGINS` | No | none | Extra browser origins (comma-separated, exact `scheme://host[:port]`) allowed to open WebSockets. The app's own origin and `CORS_ORIGINS` entries are always allowed |
 
 ---
 

@@ -69,6 +69,59 @@ _raw_admins = os.getenv('ADMIN_USER_IDS', '')
 _ADMIN_USER_IDS: set[str] = {uid.strip() for uid in _raw_admins.split(',') if uid.strip()} or {_PLATFORM_ADMIN_ID}
 
 
+def clerk_auth_enabled() -> bool:
+    """Single source of truth for "is Clerk auth configured?".
+
+    Both the canonical CLERK_PUBLISHABLE_KEY and the VITE_CLERK_PUBLISHABLE_KEY
+    alias activate the app-wide auth gate (app.create_app). Every handler that
+    self-authenticates (auth-exempt WebSockets, webhook callbacks) must use this
+    same predicate so an alias-only configuration cannot skip verification.
+    Read at call time so it reflects the effective env after .env loading.
+    """
+    return bool((os.getenv('CLERK_PUBLISHABLE_KEY') or os.getenv('VITE_CLERK_PUBLISHABLE_KEY', '')).strip())
+
+
+def _normalize_origin(value: str) -> Optional[str]:
+    """Return 'scheme://host[:port]' for a bare http(s) origin, else None."""
+    from urllib.parse import urlsplit
+    try:
+        parsed = urlsplit(value.strip())
+        if (parsed.scheme not in ('http', 'https') or not parsed.netloc
+                or parsed.username or parsed.password
+                or parsed.path not in ('', '/') or parsed.query or parsed.fragment):
+            return None
+        return f'{parsed.scheme}://{parsed.netloc.lower()}'
+    except ValueError:
+        return None
+
+
+def websocket_origin_allowed() -> bool:
+    """Origin binding for cookie-authenticated WebSocket upgrades.
+
+    Browsers always send Origin on a WebSocket handshake and attach the ambient
+    __session cookie even for cross-site pages, so a cookie-authenticated socket
+    must reject foreign origins (cross-site WebSocket hijacking). Allowed:
+      * no Origin header (non-browser clients: agents, internal tooling),
+      * the app's own origin (scheme + host of request.host_url, ProxyFix-aware),
+      * exact entries in WS_ALLOWED_ORIGINS or CORS_ORIGINS (comma-separated).
+    Rejected: 'null', malformed origins, and every other origin.
+    """
+    from flask import request
+
+    origin = request.headers.get('Origin')
+    if origin is None:
+        return True
+    candidate = _normalize_origin(origin)
+    if not candidate:
+        return False
+    if candidate == _normalize_origin(request.host_url):
+        return True
+    extra = f"{os.getenv('WS_ALLOWED_ORIGINS', '')},{os.getenv('CORS_ORIGINS', '')}"
+    allowed = {_normalize_origin(o) for o in extra.split(',') if o.strip()}
+    allowed.discard(None)
+    return candidate in allowed
+
+
 def is_admin_user(user_id: Optional[str]) -> bool:
     """True if this Clerk user may use the admin dashboard + privileged APIs."""
     return bool(user_id) and user_id in _ADMIN_USER_IDS
