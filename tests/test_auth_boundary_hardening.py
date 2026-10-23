@@ -367,3 +367,14 @@ def test_theme_writes_open_in_local_mode(theme_client):
     theme_file, build = theme_client
     assert build().post('/api/theme', json={'primary': '#112233', 'accent': '#445566'}).status_code == 200
     assert json.loads(theme_file.read_text())['accent'] == '#445566'
+
+
+@pytest.mark.parametrize('name', ['clawdbot_websocket', 'openclaw_ui_websocket', 'xai_realtime_websocket'])
+def test_origin_rejection_log_excludes_request_values(caplog, name):
+    handler = _load_handler(name)
+    with caplog.at_level(logging.WARNING):
+        _call(handler, {'Origin': 'https://evil.example/INJECTED'}, path='/ws/x%0D%0AFORGED')
+    text = '\n'.join(r.getMessage() for r in caplog.records)
+    assert 'rejected: cross-origin upgrade' in text
+    for marker in ('FORGED', 'INJECTED', '\r', 'evil.example'):
+        assert marker not in text
