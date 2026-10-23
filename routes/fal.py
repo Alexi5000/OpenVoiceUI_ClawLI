@@ -123,7 +123,7 @@ def fal_image():
                          json=payload, timeout=120, allow_redirects=False)
     except Exception as e:  # noqa: BLE001
         logger.exception('fal: request failed')
-        return jsonify({'error': f'fal request failed: {e}'}), 502
+        return jsonify({'error': 'fal request failed'}), 502
 
     if resp.status_code != 200:
         logger.warning('fal: upstream %d — %s', resp.status_code, resp.text[:300])

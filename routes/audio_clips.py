@@ -106,7 +106,7 @@ def generate_clip():
     try:
         provider = get_provider(provider_id)
     except ValueError as e:
-        return jsonify({'error': f'invalid provider: {e}'}), 400
+        return jsonify({'error': 'invalid provider'}), 400
 
     gen_params = {'text': text}
     if voice:
@@ -116,7 +116,7 @@ def generate_clip():
         audio_bytes = provider.generate_speech(**gen_params)
     except Exception as e:
         logger.exception('TTS generation failed')
-        return jsonify({'error': f'TTS generation failed: {e}'}), 500
+        return jsonify({'error': 'TTS generation failed'}), 500
 
     clip_id = _make_id()
     raw_path = AUDIO_CLIPS_DIR / f"{clip_id}.raw"
@@ -216,7 +216,7 @@ def email_clip():
                 return jsonify({'error': 'no AgentMail inboxes available'}), 503
             inbox = inboxes[0]['inbox_id']
         except requests.RequestException as e:
-            return jsonify({'error': f'AgentMail inbox lookup failed: {e}'}), 503
+            return jsonify({'error': 'AgentMail inbox lookup failed'}), 503
 
     manifest = _load_manifest()
     clip = next((c for c in manifest['clips'] if c['id'] == clip_id), None)
@@ -260,7 +260,7 @@ def email_clip():
         if hasattr(e, 'response') and e.response is not None:
             body_text = e.response.text[:500]
         logger.error('AgentMail send failed: %s | %s', e, body_text)
-        return jsonify({'error': f'AgentMail send failed: {e}', 'detail': body_text}), 502
+        return jsonify({'error': 'AgentMail send failed', 'detail': 'Upstream provider request failed'}), 502
 
     clip.setdefault('emails_sent', []).append({
         'sent_at': datetime.now(timezone.utc).isoformat(),

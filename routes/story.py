@@ -228,7 +228,7 @@ def generate_scene():
         scene_data = generate_scene_json(choice_text, scene_history, genre, tone)
     except Exception as e:
         logger.error(f'[story] LLM error: {e}')
-        return jsonify({'error': f'Scene generation failed: {e}'}), 500
+        return jsonify({'error': 'Scene generation failed'}), 500
 
     scene_id = f'scene_{scene_index:03d}'
     story_dir.mkdir(parents=True, exist_ok=True)

@@ -127,9 +127,9 @@ def text_to_3d():
             detail = exc.response.json()
         except Exception:
             detail = exc.response.text
-        return jsonify(error=str(exc), detail=detail), exc.response.status_code
+        return jsonify(error='Request failed.', detail='Upstream provider request failed'), exc.response.status_code
     except Exception as exc:
-        return jsonify(error=str(exc)), 500
+        return jsonify(error='Request failed.'), 500
 
 
 @meshy_bp.route('/api/meshy/image-to-3d', methods=['POST'])
@@ -167,9 +167,9 @@ def image_to_3d():
             detail = exc.response.json()
         except Exception:
             detail = exc.response.text
-        return jsonify(error=str(exc), detail=detail), exc.response.status_code
+        return jsonify(error='Request failed.', detail='Upstream provider request failed'), exc.response.status_code
     except Exception as exc:
-        return jsonify(error=str(exc)), 500
+        return jsonify(error='Request failed.'), 500
 
 
 @meshy_bp.route('/api/meshy/task/<task_id>', methods=['GET'])
@@ -193,7 +193,7 @@ def poll_task(task_id):
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
-        return jsonify(error=str(exc)), 500
+        return jsonify(error='Request failed.'), 500
 
     status = data.get('status', 'UNKNOWN')
     progress = data.get('progress', 0)
@@ -243,7 +243,7 @@ def balance():
         resp.raise_for_status()
         return jsonify(resp.json())
     except Exception as exc:
-        return jsonify(error=str(exc)), 500
+        return jsonify(error='Request failed.'), 500
 
 
 @meshy_bp.route('/api/meshy/history', methods=['GET'])

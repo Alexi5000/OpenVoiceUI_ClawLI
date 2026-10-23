@@ -45,4 +45,4 @@ def chat_complete():
         return jsonify({'response': text})
     except Exception as exc:
         logger.exception('chat completion error')
-        return jsonify({'error': str(exc)}), 500
+        return jsonify({'error': 'Request failed.'}), 500

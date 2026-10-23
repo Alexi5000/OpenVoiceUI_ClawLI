@@ -1742,7 +1742,7 @@ def canvas_data_write(filename):
         return jsonify({'ok': True})
     except Exception as exc:
         logger.error(f'canvas_data write error: {exc}')
-        return jsonify({'error': str(exc)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -1785,7 +1785,7 @@ def workspace_tree():
                 continue
     except Exception as exc:
         logger.error(f'workspace_tree error: {exc}')
-        return jsonify({'error': str(exc)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
     return jsonify({'root': 'workspace', 'entries': entries})
 
 
@@ -1830,7 +1830,7 @@ def workspace_file_write():
         return jsonify({'ok': True, 'path': rel, 'bytes': len(content.encode('utf-8'))})
     except Exception as exc:
         logger.error(f'workspace_file_write error: {exc}')
-        return jsonify({'error': str(exc)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 @canvas_bp.route('/api/workspace/mkdir', methods=['POST'])
@@ -1848,7 +1848,7 @@ def workspace_mkdir():
         return jsonify({'ok': True, 'path': rel})
     except Exception as exc:
         logger.error(f'workspace_mkdir error: {exc}')
-        return jsonify({'error': str(exc)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 @canvas_bp.route('/api/canvas/mtime/<path:filename>', methods=['GET'])
@@ -2098,7 +2098,7 @@ def canvas_build_log(project):
         })
     except Exception as exc:
         logger.error(f'Build log read error for {project}: {exc}')
-        return jsonify({'lines': [], 'status': 'error', 'error': str(exc)}), 500
+        return jsonify({'lines': [], 'status': 'error', 'error': 'Request failed.'}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -2131,7 +2131,7 @@ def dataforseo_balance():
         return jsonify(resp.json()), resp.status_code
     except Exception as exc:
         logger.error(f'DataForSEO balance error: {exc}')
-        return jsonify({'error': str(exc)}), 502
+        return jsonify({'error': 'Request failed.'}), 502
 
 
 @canvas_bp.route('/api/dataforseo/proxy', methods=['POST'])
@@ -2158,4 +2158,4 @@ def dataforseo_proxy():
         return jsonify(resp.json()), resp.status_code
     except Exception as exc:
         logger.error(f'DataForSEO proxy error ({endpoint}): {exc}')
-        return jsonify({'error': str(exc)}), 502
+        return jsonify({'error': 'Request failed.'}), 502

@@ -182,7 +182,7 @@ def extract():
 
     except Exception as exc:
         logger.exception('Extraction failed for %s', filename)
-        return jsonify({'error': f'Extraction failed: {exc}'}), 500
+        return jsonify({'error': 'Extraction failed'}), 500
     finally:
         try:
             tmp_path.unlink()
@@ -246,7 +246,7 @@ def analyze_csv():
 
     except Exception as exc:
         logger.exception('CSV analysis failed for %s', filename)
-        return jsonify({'error': f'Analysis failed: {exc}'}), 500
+        return jsonify({'error': 'Analysis failed'}), 500
     finally:
         try:
             tmp_path.unlink()

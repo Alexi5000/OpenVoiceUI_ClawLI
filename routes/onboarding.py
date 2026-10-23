@@ -29,7 +29,7 @@ def get_state():
         return jsonify(None)
     except Exception as e:
         logger.error('onboarding get_state error: %s', e)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 @onboarding_bp.route('/api/onboarding/state', methods=['POST'])
@@ -40,4 +40,4 @@ def save_state():
         return jsonify({'ok': True})
     except Exception as e:
         logger.error('onboarding save_state error: %s', e)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500

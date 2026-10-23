@@ -885,7 +885,7 @@ def delete_track(playlist, filename):
         print(f"🎵 Archived track: {safe_filename} -> {renamed.name}")
     except Exception as e:
         print(f"Error archiving track {safe_filename}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": 'Request failed.'}), 500
 
     # Remove from metadata if present
     metadata = load_meta()
@@ -1078,7 +1078,7 @@ def soundcloud_resolve():
     except urllib.error.HTTPError as e:
         return jsonify({"ok": False, "error": f"oembed returned {e.code}"}), 502
     except (urllib.error.URLError, json.JSONDecodeError) as e:
-        return jsonify({"ok": False, "error": f"oembed failed: {e}"}), 502
+        return jsonify({"ok": False, "error": 'oembed failed'}), 502
 
     return jsonify({
         "ok": True,

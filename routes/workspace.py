@@ -216,7 +216,7 @@ def read_file():
             'content': content,
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 @workspace_bp.route('/api/workspace/raw')
@@ -247,7 +247,7 @@ def raw_file():
         resp.headers['Expires'] = '0'
         return resp
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 @workspace_bp.route('/api/workspace/mkdir', methods=['POST'])
@@ -279,7 +279,7 @@ def mkdir():
     except PermissionError:
         return jsonify({'error': 'Permission denied'}), 403
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 @workspace_bp.route('/api/workspace/file', methods=['PUT'])
@@ -305,7 +305,7 @@ def write_file():
     except PermissionError:
         return jsonify({'error': 'Permission denied'}), 403
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 @workspace_bp.route('/api/workspace/file', methods=['DELETE'])
@@ -330,7 +330,7 @@ def delete_file():
         target.rename(renamed)
         return jsonify({'ok': True, 'archived': renamed.name})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500
 
 
 @workspace_bp.route('/api/workspace/writable')

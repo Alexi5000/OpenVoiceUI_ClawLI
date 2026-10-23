@@ -443,7 +443,7 @@ def checkpoints_snapshot():
             allow_redirects=False,
         )
     except requests.RequestException as e:
-        return jsonify({'ok': False, 'error': 'publish_failed', 'detail': str(e)}), 502
+        return jsonify({'ok': False, 'error': 'publish_failed', 'detail': 'Request failed.'}), 502
 
     if not 200 <= resp.status_code < 300:
         try:

@@ -99,7 +99,7 @@ def maps_directions():
         data = resp.json()
     except Exception as exc:
         logger.error('maps: directions lookup failed: %s', exc)
-        return jsonify({'ok': False, 'error': f'directions lookup failed: {exc}'}), 502
+        return jsonify({'ok': False, 'error': 'directions lookup failed'}), 502
 
     # Google returns 200 with a status field even on logical failures
     # (NOT_FOUND, ZERO_RESULTS, REQUEST_DENIED...). Pass it through so the

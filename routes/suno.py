@@ -442,7 +442,7 @@ def handle_suno():
 
     except Exception as exc:
         logger.exception('Suno endpoint error')
-        return jsonify({'action': 'error', 'response': f'Suno error: {exc}'}), 500
+        return jsonify({'action': 'error', 'response': 'Suno error'}), 500
 
 
 # ---------------------------------------------------------------------------
@@ -614,7 +614,7 @@ def _action_generate(_q, body: dict):
             return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
 
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _action_sfx(_q, body: dict):
@@ -719,7 +719,7 @@ def _action_sfx(_q, body: dict):
             return jsonify({'action': 'error', 'response': f'Suno SFX HTTP {resp.status_code}: {resp.text[:200]}'})
 
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 # ── JINGLE LENGTH HONESTY (host@mesh 2026-09-06, Mike's request) ──────────────
@@ -901,7 +901,7 @@ def _action_jingle(_q, body: dict):
         })
 
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _action_list_jingles():
@@ -1172,7 +1172,7 @@ def _action_credits():
             return jsonify({'action': 'credits', 'credits': credits, 'response': f'Suno credits remaining: {credits}'})
         return jsonify({'action': 'error', 'response': f'Credits check failed: HTTP {resp.status_code}'})
     except Exception as exc:
-        return jsonify({'action': 'error', 'response': f'Credits check error: {exc}'})
+        return jsonify({'action': 'error', 'response': 'Credits check error'})
 
 
 # ---------------------------------------------------------------------------
@@ -1307,7 +1307,7 @@ def _submit_suno_job(endpoint: str, request_body: dict, kind: str,
             'estimated_seconds': est_seconds,
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _action_extend(_q, body: dict):
@@ -1525,7 +1525,7 @@ def _action_generate_lyrics(_q, body: dict):
             'estimated_seconds': 15,
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _action_timestamped_lyrics(_q, body: dict):
@@ -1558,7 +1558,7 @@ def _action_timestamped_lyrics(_q, body: dict):
             'response': 'Got timestamped lyrics.',
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _action_wav_convert(_q, body: dict):
@@ -1828,8 +1828,7 @@ def _action_stem_separate(_q, body: dict):
         _stems_dir().mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return jsonify({'action': 'error',
-                        'response': f'Stems folder is not writable on the server ({exc}). '
-                                    'Fix permissions on canvas-pages/_data/stems before separating (each attempt is billed).'})
+                        'response': 'Stems folder is not writable on the server (). Fix permissions on canvas-pages/_data/stems before separating (each attempt is billed).'})
 
     # Already separated → free, instant.
     disk = _stem_disk_urls(name_stem)
@@ -1892,7 +1891,7 @@ def _action_stem_result(_q, body: dict):
         _stems_dir().mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return jsonify({'action': 'error',
-                        'response': f'Stems folder is not writable on the server ({exc}).'})
+                        'response': 'Stems folder is not writable on the server ().'})
 
     if task_id == 'cached':
         disk = _stem_disk_urls(name_stem)
@@ -1905,7 +1904,7 @@ def _action_stem_result(_q, body: dict):
     try:
         res = _fetch_stems_once(task_id, name_stem)
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
     if res['status'] == 'complete':
         urls = res['urls']
@@ -1954,7 +1953,7 @@ def _action_style_boost(_q, body: dict):
             'response': 'Style enhanced.',
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _action_music_video(_q, body: dict):
@@ -2006,7 +2005,7 @@ def _action_song_details(_q, body: dict):
             'response': 'Fetched song details.',
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _submit_process_job(endpoint: str, request_body: dict, kind: str,
@@ -2059,7 +2058,7 @@ def _submit_process_job(endpoint: str, request_body: dict, kind: str,
             'estimated_seconds': est_seconds,
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 # ---------------------------------------------------------------------------
@@ -2138,7 +2137,7 @@ def _action_generate_persona(_q, body: dict):
             'response': 'Persona created.',
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _action_voice_validate(_q, body: dict):
@@ -2187,7 +2186,7 @@ def _action_voice_validate(_q, body: dict):
             'response': 'Voice validation started — poll action=voice_validate_info for the phrase.',
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _action_voice_validate_info(_q, body: dict):
@@ -2215,7 +2214,7 @@ def _action_voice_validate_info(_q, body: dict):
             'response': 'Fetched voice validation info.',
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _action_voice_generate(_q, body: dict):
@@ -2266,7 +2265,7 @@ def _action_voice_generate(_q, body: dict):
             'response': 'Voice generation started — poll action=voice_info for the voiceId.',
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _action_voice_info(_q, body: dict):
@@ -2294,7 +2293,7 @@ def _action_voice_info(_q, body: dict):
             'response': 'Fetched voice record info.',
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _action_voice_check(_q, body: dict):
@@ -2325,7 +2324,7 @@ def _action_voice_check(_q, body: dict):
             'response': 'Checked voice availability.',
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 def _action_file_upload(_q, body: dict):
@@ -2364,7 +2363,7 @@ def _action_file_upload(_q, body: dict):
             'response': 'File hosted.',
         })
     except http_requests.RequestException as exc:
-        return jsonify({'action': 'error', 'response': f"Couldn't reach Suno API: {exc}"})
+        return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
 # ---------------------------------------------------------------------------
@@ -2642,4 +2641,4 @@ def delete_song(filename):
         return jsonify({'ok': True, 'archived': renamed.name})
     except Exception as e:
         logger.error(f'[suno] Failed to archive {filename}: {e}')
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Request failed.'}), 500

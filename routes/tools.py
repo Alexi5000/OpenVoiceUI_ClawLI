@@ -266,7 +266,7 @@ def invoke():
         logger.exception("tool %s handler failed", tool.name)
         _log_invocation(tool.name, params, profile=profile_id,
                         user_id=user_id, outcome="handler_error")
-        return jsonify({"status": "error", "error": str(exc)}), 500
+        return jsonify({"status": "error", "error": 'Request failed.'}), 500
 
     _log_invocation(tool.name, params, profile=profile_id, user_id=user_id, outcome="ok")
     return jsonify({"status": "ok", "result": result})
