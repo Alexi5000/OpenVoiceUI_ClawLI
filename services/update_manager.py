@@ -626,7 +626,7 @@ class UpdateManager:
             return {
                 "status": "agent_error",
                 "method": f"agent ({agent_label})",
-                "reason": str(exc),
+                "reason": "Update operation failed",
                 "fallback": True,
             }
         finally:
@@ -858,7 +858,7 @@ class UpdateManager:
             return {
                 "status": "failed",
                 "method": "smart",
-                "reason": str(exc),
+                "reason": "Update operation failed",
             }
 
     # ── Verification ─────────────────────────────────────────────────────
@@ -877,9 +877,9 @@ class UpdateManager:
                 capture_output=True, text=True, timeout=30,
             )
             if result.returncode != 0 or "OK" not in result.stdout:
-                errors.append(f"Import check failed: {result.stderr[:200]}")
+                errors.append("Import check failed")
         except Exception as exc:
-            errors.append(f"Import check error: {exc}")
+            errors.append("Import check error")
 
         # 2. Check that key route files parse
         for route_file in (self.app_dir / "routes").glob("*.py"):
@@ -900,7 +900,7 @@ class UpdateManager:
                 capture_output=True, text=True, timeout=30,
             )
             if result.returncode != 0:
-                errors.append(f"Dependency issues: {result.stdout[:200]}")
+                errors.append("Dependency issues detected")
         except Exception:
             pass
 

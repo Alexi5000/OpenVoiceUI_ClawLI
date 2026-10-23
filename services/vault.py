@@ -1247,9 +1247,9 @@ def test_credential(username: str, cred_id: str) -> dict:
     except requests.Timeout:
         return {'ok': False, 'message': 'Connection timed out', 'latency_ms': 10000}
     except requests.ConnectionError as e:
-        return {'ok': False, 'message': f'Connection failed: {e}'}
+        return {'ok': False, 'message': 'Connection failed'}
     except Exception as e:
-        return {'ok': False, 'message': str(e)}
+        return {'ok': False, 'message': 'Credential test failed'}
 
 
 # ---------------------------------------------------------------------------
@@ -1455,11 +1455,11 @@ def exchange_oauth_code(cred_id: str, code: str, username: str) -> dict:
         }, timeout=15)
 
         if resp.status_code != 200:
-            return {'ok': False, 'error': f'Token exchange failed: {resp.status_code} {resp.text[:200]}'}
+            return {'ok': False, 'error': f'Token exchange failed: HTTP {resp.status_code}'}
 
         token_data = resp.json()
     except Exception as exc:
-        return {'ok': False, 'error': str(exc)}
+        return {'ok': False, 'error': 'Token exchange failed'}
 
     # Calculate expiry
     expires_in = token_data.get('expires_in', 3600)
@@ -1740,10 +1740,10 @@ def set_model_selection(username: str, primary: str = None, fallback: str = None
             f"Cannot read {config_path} to set model selection ({exc}); "
             f"skipping. Phase 2 will store model selection in the vault."
         )
-        return {'ok': False, 'error': f'Cannot read openclaw.json ({exc})'}
+        return {'ok': False, 'error': 'Cannot read openclaw.json'}
     except Exception as exc:
         logger.error(f"Failed to parse {config_path}: {exc}")
-        return {'ok': False, 'error': f'Failed to parse openclaw.json ({exc})'}
+        return {'ok': False, 'error': 'Failed to parse openclaw.json'}
 
     defaults = config.setdefault('agents', {}).setdefault('defaults', {})
     model_cfg = defaults.setdefault('model', {})
@@ -1770,5 +1770,5 @@ def set_model_selection(username: str, primary: str = None, fallback: str = None
             f"Cannot write {config_path} ({exc}); model selection update "
             f"failed. Use PUT /api/admin/ai-config (gateway config.patch) instead."
         )
-        return {'ok': False, 'error': f'Cannot write openclaw.json ({exc})'}
+        return {'ok': False, 'error': 'Cannot write openclaw.json'}
     return {'ok': True}

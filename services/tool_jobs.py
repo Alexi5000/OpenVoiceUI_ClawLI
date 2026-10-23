@@ -181,7 +181,7 @@ def get(job_id: str) -> Optional[Dict[str, Any]]:
         logger.error("tool_jobs: unreadable job %s: %s", job_id, exc)
         # An unreadable job is an ALERT, not a nothing — memory
         # `monitors-that-report-unreadable-as-fine`.
-        return {"id": job_id, "status": FAILED, "error": f"job file unreadable: {exc}"}
+        return {"id": job_id, "status": FAILED, "error": "job file unreadable"}
 
 
 def update(job_id: str, **fields: Any) -> Optional[Dict[str, Any]]:

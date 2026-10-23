@@ -294,7 +294,7 @@ def _run_lifecycle_hook(manifest: dict, hook_name: str, config: dict = None) -> 
             return {"ok": True, "warning": "Provisioning service not available. Create hermes container manually."}
         except Exception as e:
             logger.error(f"Provisioning error: {e}")
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": "Plugin operation failed"}
 
     elif hook_name == "pre_uninstall" and hook.get("deprovision"):
         plugin_type = hook["deprovision"]
@@ -499,14 +499,14 @@ def update_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
         dest.rename(sidecar)
     except Exception as e:
         logger.error(f"Plugin update: could not archive current {plugin_id}: {e}")
-        return {"_error": f"could not archive current version: {e}"}
+        return {"_error": "could not archive current version"}
 
     # Drop the runtime registry entry so install_plugin's dest.exists() gate opens.
     prev_manifest = _registry.pop(plugin_id, None)
     try:
         result = install_plugin(plugin_id, config=config)
     except Exception as e:
-        result = {"_error": str(e)}
+        result = {"_error": "Plugin update failed"}
 
     if not result or (isinstance(result, dict) and result.get("_error")):
         # Roll back — restore the archived version exactly as it was.
@@ -759,4 +759,4 @@ def update_plugin_config(plugin_id: str, config: dict) -> dict:
     except requests.ConnectionError:
         return {"ok": False, "error": "Provisioning service not reachable"}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Plugin operation failed"}
