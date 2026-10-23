@@ -489,3 +489,14 @@ usage.db                 — SQLite database
 - **Runner:** `venv/bin/python3 -m pytest tests/ -q`
 - **Current state:** 457 passed, 2 skipped, 0 failed
 - **Coverage:** Routes, services, TTS providers, profiles, speech normalization
+
+### Grid Creator shared storage permissions
+
+`runtime/uploads/grid-orders` remains on the existing uploads bind mount. The
+service enforces mode `2770`: only the owner and shared group can access it, and
+new entries inherit the directory group. Before deploying this change, assign
+this directory to a group shared by the container service and the creative-node
+writer, and give both processes that supplementary group. The service must own
+the directory to enforce its mode. Do not restore world-write permissions to
+work around group configuration. Symlink directories and permission failures
+are rejected; no other mount or route changes are required.
