@@ -3182,7 +3182,12 @@ connectAiradio();
                         // If redirected here from a canvas page (or other protected route), go back there
                         const redirectTo = new URLSearchParams(window.location.search).get('redirect');
                         if (redirectTo && redirectTo.startsWith('/')) {
-                            window.location.href = redirectTo;
+                            try {
+                                const target = new URL(redirectTo, window.location.origin);
+                                if (target.origin === window.location.origin) {
+                                    window.location.href = target.href;
+                                }
+                            } catch {}
                         }
                     };
 

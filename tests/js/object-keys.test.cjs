@@ -65,3 +65,32 @@ test('category moves treat prototype names as data and reject inherited pages', 
     assert.equal(requests.length, before);
     assert.equal(Object.prototype.category, undefined);
 });
+
+for (const page of ['website-setup.html', 'retired/website-creator.html']) {
+    test(`${page} nested writes cannot mutate prototypes`, () => {
+        const html = readFileSync(join(__dirname, '../../default-pages', page), 'utf8');
+        const code = html.slice(html.indexOf('function setNestedVal('), html.indexOf('function getNestedVal('));
+        const context = vm.createContext({});
+        vm.runInContext(code, context);
+        for (const path of ['__proto__.polluted', 'constructor.prototype.polluted', 'basics.__proto__.polluted', 'prototype.polluted']) {
+            context.path = path;
+            vm.runInContext('setNestedVal({}, path, true)', context);
+            assert.equal(vm.runInContext('Object.prototype.polluted', context), undefined);
+        }
+        vm.runInContext("globalThis.form = {basics: {keep: 1}}; setNestedVal(form, 'basics.title', 'hello'); setNestedVal(form, 'new.value', 'ok')", context);
+        assert.equal(context.form.basics.title, 'hello');
+        assert.equal(context.form.basics.keep, 1);
+        assert.equal(context.form.new.value, 'ok');
+    });
+}
+
+test('login redirect keeps local paths and rejects external URL forms', () => {
+    const start = source.indexOf('const redirectTo = new URLSearchParams');
+    const end = source.indexOf('\n                    };', start);
+    const code = source.slice(start, end);
+    for (const input of ['/canvas?page=1#top', '//evil.test', '/\\evil.test', '/\t/evil.test', 'https://evil.test', '//[invalid']) {
+        const location = {origin: 'https://voice.test', search: '?redirect=' + encodeURIComponent(input), href: 'unchanged'};
+        vm.runInNewContext(code, {window: {location}, URL, URLSearchParams});
+        assert.equal(location.href, input === '/canvas?page=1#top' ? 'https://voice.test/canvas?page=1#top' : 'unchanged');
+    }
+});
