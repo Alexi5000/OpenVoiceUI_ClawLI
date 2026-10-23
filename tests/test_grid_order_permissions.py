@@ -36,3 +36,15 @@ def test_order_directory_permission_failure_is_not_ignored(tmp_path, monkeypatch
     monkeypatch.setattr(os, 'fchmod', denied)
     with pytest.raises(PermissionError):
         grid_gen._orders_dir()
+
+
+def test_order_directory_rejects_silently_stripped_setgid(tmp_path, monkeypatch):
+    orders = tmp_path / 'grid-orders'
+    monkeypatch.setattr(grid_gen, 'ORDERS_DIR', orders)
+    real_fchmod = os.fchmod
+    def without_setgid(fd, mode):
+        real_fchmod(fd, mode & ~stat.S_ISGID)
+    monkeypatch.setattr(os, 'fchmod', without_setgid)
+    with pytest.raises(PermissionError, match='setgid'):
+        grid_gen._orders_dir()
+    assert stat.S_IMODE(orders.stat().st_mode) == 0o770

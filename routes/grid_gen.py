@@ -77,6 +77,8 @@ def _orders_dir() -> Path:
         if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
             raise OSError('order storage changed during access')
         os.fchmod(fd, 0o2770)
+        if stat.S_IMODE(os.fstat(fd).st_mode) != 0o2770:
+            raise PermissionError("order storage requires setgid shared-group permissions")
     finally:
         os.close(fd)
     return ORDERS_DIR
