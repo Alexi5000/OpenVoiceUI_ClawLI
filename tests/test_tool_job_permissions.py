@@ -106,3 +106,16 @@ p.write_text('{"status":"done"}')
         assert outsider.returncode != 0
         assert 'PermissionError' in outsider.stderr
         assert 'queued' in target.read_text()
+
+
+def test_job_directory_rejects_silently_stripped_setgid(tmp_path, monkeypatch):
+    spool = tmp_path / 'spool'
+    monkeypatch.setattr(tool_jobs, 'JOBS_DIR', spool)
+    real_fchmod = os.fchmod
+    def without_setgid(fd, mode):
+        real_fchmod(fd, mode & ~stat.S_ISGID)
+    monkeypatch.setattr(tool_jobs.os, 'fchmod', without_setgid)
+    with pytest.raises(PermissionError, match='setgid'):
+        tool_jobs._write_atomic(spool / 'job.json', {})
+    assert stat.S_IMODE(spool.stat().st_mode) == 0o770
+    assert not list(spool.iterdir())
