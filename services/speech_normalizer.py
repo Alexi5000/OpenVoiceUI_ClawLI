@@ -218,15 +218,8 @@ class SpeechNormalizer:
 
     def _strip_emoji(self, text: str) -> str:
         """Remove emoji characters from text."""
-        # Broad Unicode emoji range
         emoji_re = re.compile(
-            "["
-            "\U0001F300-\U0001F9FF"  # Misc symbols and pictographs
-            "\U00002600-\U000027BF"  # Misc symbols
-            "\U0001FA00-\U0001FAFF"  # Chess, medical etc.
-            "\U00002702-\U000027B0"
-            "\U000024C2-\U0001F251"
-            "]+",
+            "[\U0001F000-\U0001FAFF\u2600-\u27BF\u24C2\uFE0F]+",
             flags=re.UNICODE,
         )
         return emoji_re.sub("", text)

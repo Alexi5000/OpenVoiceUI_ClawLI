@@ -78,6 +78,13 @@ class TestUrlStripping:
 
 
 class TestEmojiStripping:
+    def test_preserves_non_latin_speech(self, normalizer):
+        text = "你好世界 日本語 한국어 café Привет"
+        assert normalizer.normalize(text) == text
+
+    def test_removes_symbols_without_consuming_neighboring_letters(self, normalizer):
+        assert normalizer._strip_emoji("你👋好☀界Ⓜ国🇺🇸文") == "你好界国文"
+
     def test_strips_emoji(self, normalizer):
         result = normalizer.normalize("Hello 👋 world 🌍!")
         assert "👋" not in result

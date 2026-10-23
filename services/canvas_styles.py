@@ -269,8 +269,7 @@ def render_active_files(style: dict) -> None:
 # ---------------------------------------------------------------------------
 
 _EMOJI_RE = re.compile(
-    '[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF'
-    '⬀-⯿✀-➿️]'
+    '[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F]'
 )
 _BANNED_HEX = (
     '#764ba2', '#667eea', '#8b5cf6', '#a855f7', '#9333ea', '#7c3aed',
