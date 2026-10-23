@@ -548,7 +548,9 @@ Unified Suno endpoint. Action is specified via query param or POST body.
 
 ### POST /api/suno/callback
 
-Webhook endpoint for sunoapi.org. Called when song generation completes. Verifies HMAC signature if `SUNO_WEBHOOK_SECRET` is configured.
+Webhook endpoint for sunoapi.org. Called when song generation completes. When `SUNO_WEBHOOK_SECRET` is configured, the request must carry either the derived `token` query parameter (appended automatically to `callBackUrl`) or a valid `X-Suno-Signature` HMAC-SHA256 of the body; otherwise it gets 403. When Clerk auth is enabled and no secret is configured, callbacks are rejected with 503 (status polling still delivers songs). Local mode without Clerk accepts unsigned callbacks.
+
+`GET /api/suno` is public without a session only for the read-only actions `list`, `list_jingles` and `jingle_styles`. Every other action (generation, status, credits, editing) requires a Clerk session or the agent key when Clerk auth is enabled.
 
 ### GET/POST /api/suno/completed
 

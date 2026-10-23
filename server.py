@@ -1879,7 +1879,12 @@ def clawdbot_websocket(ws):
     assistant response before forwarding to the client.
     """
     # --- Clerk auth check (uses same cookie/header as HTTP routes) ---
-    from services.auth import verify_clerk_token, get_token_from_request
+    from services.auth import verify_clerk_token, get_token_from_request, websocket_origin_allowed
+    if not websocket_origin_allowed():
+        logger.warning("%s rejected: cross-origin WebSocket", request.path)
+        ws.send(json.dumps({"type": "error", "message": "Unauthorized"}))
+        ws.close()
+        return
     token = get_token_from_request()
     user_id = verify_clerk_token(token) if token else None
     if not user_id:
@@ -2079,7 +2084,12 @@ def clawdbot_websocket(ws):
 @sock.route("/openclaw-ui")
 def openclaw_ui_websocket(ws):
     """WebSocket proxy for OpenClaw Control UI behind Clerk ADMIN auth."""
-    from services.auth import verify_clerk_token, get_token_from_request, is_admin_user
+    from services.auth import verify_clerk_token, get_token_from_request, is_admin_user, websocket_origin_allowed
+    if not websocket_origin_allowed():
+        logger.warning("%s rejected: cross-origin WebSocket", request.path)
+        ws.send(json.dumps({"type": "error", "message": "Unauthorized"}))
+        ws.close()
+        return
     token = get_token_from_request()
     user_id = verify_clerk_token(token) if token else None
     if not user_id:
@@ -2209,7 +2219,12 @@ def openclaw_ui_websocket(ws):
 @sock.route("/ws/xai-realtime")
 def xai_realtime_websocket(ws):
     """WebSocket proxy between browser and xAI Grok Realtime API."""
-    from services.auth import verify_clerk_token, get_token_from_request
+    from services.auth import verify_clerk_token, get_token_from_request, websocket_origin_allowed
+    if not websocket_origin_allowed():
+        logger.warning("%s rejected: cross-origin WebSocket", request.path)
+        ws.send(json.dumps({"type": "error", "message": "Unauthorized"}))
+        ws.close()
+        return
 
     token   = get_token_from_request()
     user_id = verify_clerk_token(token) if token else None
@@ -2302,15 +2317,31 @@ def xai_realtime_websocket(ws):
 # ever watch ITS OWN tenant's session.
 @sock.route("/ws/browse-stream")
 def browse_stream_websocket(ws):
-    from services.auth import verify_clerk_token, get_token_from_request
-    # Clerk gate unless auth disabled (single-user self-host), matching the app.
+    from hmac import compare_digest
+    from services.auth import (
+        clerk_auth_enabled, verify_clerk_token, get_token_from_request, websocket_origin_allowed,
+    )
+    # Origin binding first: the __session cookie is ambient, so a cross-site page
+    # must not be able to attach a viewer as the signed-in user.
+    if not websocket_origin_allowed():
+        try:
+            ws.send(json.dumps({"type": "error", "message": "Unauthorized"}))
+        finally:
+            ws.close()
+        return
+    # Clerk gate unless auth disabled (single-user self-host). Uses the SAME
+    # predicate as create_app (canonical key OR the VITE_ alias), so an
+    # alias-only config can no longer skip verification on this auth-exempt
+    # route. CLERK_SECRET_KEY / CANVAS_REQUIRE_AUTH=true also force the gate.
     # The real browser auto-sends the __session cookie (same origin). The internal
     # agent key is also accepted (via ?agent_key= or X-Agent-Key) for parity with
     # the /api/browse/* HTTP proxy, which lets internal tooling attach a viewer.
-    if os.getenv("CLERK_PUBLISHABLE_KEY") or os.getenv("CLERK_SECRET_KEY"):
+    if (clerk_auth_enabled() or os.getenv("CLERK_SECRET_KEY", "").strip()
+            or os.getenv("CANVAS_REQUIRE_AUTH", "").strip().lower() == "true"):
         _agent_key = os.getenv("AGENT_API_KEY", "").strip()
         _presented = request.args.get("agent_key", "") or request.headers.get("X-Agent-Key", "")
-        _agent_ok = bool(_agent_key) and _presented == _agent_key
+        _agent_ok = bool(_agent_key) and compare_digest(
+            _presented.encode("utf-8"), _agent_key.encode("utf-8"))
         token = get_token_from_request()
         if not _agent_ok and not (token and verify_clerk_token(token)):
             try:

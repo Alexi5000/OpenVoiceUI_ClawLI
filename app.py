@@ -87,6 +87,14 @@ def create_app(config_override: dict = None):
                 and (request.method in ('POST', 'PUT', 'PATCH', 'DELETE')
                      or request.headers.get('Upgrade', '').lower() == 'websocket')):
             return jsonify({'error': 'Cross-origin request blocked', 'code': 'csrf_blocked'}), 403
+        # Cookie-authenticated WebSockets (/ws/clawdbot, /openclaw-ui,
+        # /ws/xai-realtime, /ws/browse-stream, /ws/terminal) must be bound to our
+        # own origin: browsers attach __session to cross-site upgrades, and the
+        # CSRF Origin check in require_auth only covers mutating HTTP methods.
+        if request.headers.get('Upgrade', '').lower() == 'websocket':
+            from services.auth import websocket_origin_allowed
+            if not websocket_origin_allowed():
+                return jsonify({'error': 'Cross-origin WebSocket blocked', 'code': 'ws_origin_blocked'}), 403
 
     # ── Rate limiting ─────────────────────────────────────────────────────────
     # Per-IP limits protect expensive endpoints from abuse.
@@ -103,8 +111,8 @@ def create_app(config_override: dict = None):
     # ── Clerk auth gate ────────────────────────────────────────────────────────
     # Auth is only active when CLERK_PUBLISHABLE_KEY is set in .env.
     # Without it, the app runs fully open (single-user / local mode).
-    _clerk_key = (os.getenv('CLERK_PUBLISHABLE_KEY') or os.getenv('VITE_CLERK_PUBLISHABLE_KEY', '')).strip()
-    _auth_enabled = bool(_clerk_key)
+    from services.auth import clerk_auth_enabled
+    _auth_enabled = clerk_auth_enabled()
 
     # Privileged surfaces — require an admin user (services.auth.ADMIN_USER_IDS),
     # not just any allowlisted tenant user. ALLOWED_USER_IDS gates the voice app;
@@ -186,7 +194,6 @@ def create_app(config_override: dict = None):
                                     # are state-changing admin operations and require admin auth below.
             '/api/vault/oauth/callback/',  # OAuth callbacks — redirected from external providers
             '/plugins/',      # Plugin static assets — face scripts, CSS, previews
-            '/api/theme',     # theme config — loaded before Clerk init
             '/faces/custom/', # custom face HTML — loaded in iframe by face-box
             '/registry/',     # Pinokio registry check-in — accessed by Pinokio, not logged-in user
             '/checkpoints/',  # Pinokio snapshot endpoint — called from /registry/checkin page JS
@@ -209,7 +216,9 @@ def create_app(config_override: dict = None):
             '/api/faces',     # GET face list — enrollment writes gated
             '/api/custom-faces',  # GET manifest — HTML-face writes gated (SEC-3 stored XSS)
             '/api/icons/',    # GET icon library — generate/upload gated (SEC-9)
-            '/api/suno',      # GET status/song-list — generation POSTs gated (SEC-9)
+            '/api/suno',      # GET song-list reads only, see _PUBLIC_READ_ACTIONS (SEC-9)
+            '/api/theme',     # GET theme config (loaded before Clerk init); POST /api/theme
+                              # and /api/theme/reset persist shared state and stay gated
             '/api/profiles',  # GET profile config — activate/save writes gated (SEC-10)
             '/api/maps/config',  # GET Google-Maps JS API key — canvas iframe pages can't
                                  # authenticate (window.authFetch not injected there) and the
@@ -218,6 +227,13 @@ def create_app(config_override: dict = None):
                                  # the key in Google Cloud (must be *.jam-bot.com). /api/maps/
                                  # directions (POST, billable server-side calls) stays gated.
         )
+        # Endpoints that multiplex reads and provider-dispatching writes through a
+        # ?action= query parameter. Only the listed read-only actions are public on
+        # GET; anything else (e.g. GET /api/suno?action=generate, which spends the
+        # owner's Suno credits) falls through to the agent-key / Clerk gate.
+        _PUBLIC_READ_ACTIONS = {
+            '/api/suno': {'list', 'list_jingles', 'jingle_styles'},
+        }
         # NOTE: /api/stt/ is intentionally NOT public — the Deepgram token
         # endpoint returns a live secret (SEC-1). All /api/stt/* now requires a
         # Clerk session or the agent key.
@@ -244,7 +260,7 @@ def create_app(config_override: dict = None):
 
         # Detect whether Clerk auth is configured at startup.
         # Auth is opt-in: when no key is set, all routes are accessible (README § Authentication).
-        _clerk_key = (os.getenv('CLERK_PUBLISHABLE_KEY') or os.getenv('VITE_CLERK_PUBLISHABLE_KEY', '')).strip()
+        _clerk_key = _auth_enabled
 
         # Internal agent API key — allows openclaw agents to call Flask APIs
         # without a Clerk JWT. Set AGENT_API_KEY in the container .env.
@@ -287,6 +303,9 @@ def create_app(config_override: dict = None):
             # path below (agent key or Clerk session required).
             if request.method in ('GET', 'HEAD', 'OPTIONS') and any(
                 path.startswith(p) for p in _PUBLIC_READ_PREFIXES
+            ) and (
+                path not in _PUBLIC_READ_ACTIONS
+                or request.args.get('action', 'list') in _PUBLIC_READ_ACTIONS[path]
             ):
                 return
             # Canvas pages and images have their own auth logic (public flag)
