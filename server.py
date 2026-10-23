@@ -1881,7 +1881,7 @@ def clawdbot_websocket(ws):
     # --- Clerk auth check (uses same cookie/header as HTTP routes) ---
     from services.auth import verify_clerk_token, get_token_from_request, websocket_origin_allowed
     if not websocket_origin_allowed():
-        logger.warning("%s rejected: cross-origin WebSocket", request.path)
+        logger.warning("/ws/clawdbot WebSocket rejected: cross-origin upgrade")
         ws.send(json.dumps({"type": "error", "message": "Unauthorized"}))
         ws.close()
         return
@@ -2086,7 +2086,7 @@ def openclaw_ui_websocket(ws):
     """WebSocket proxy for OpenClaw Control UI behind Clerk ADMIN auth."""
     from services.auth import verify_clerk_token, get_token_from_request, is_admin_user, websocket_origin_allowed
     if not websocket_origin_allowed():
-        logger.warning("%s rejected: cross-origin WebSocket", request.path)
+        logger.warning("/openclaw-ui WebSocket rejected: cross-origin upgrade")
         ws.send(json.dumps({"type": "error", "message": "Unauthorized"}))
         ws.close()
         return
@@ -2221,7 +2221,7 @@ def xai_realtime_websocket(ws):
     """WebSocket proxy between browser and xAI Grok Realtime API."""
     from services.auth import verify_clerk_token, get_token_from_request, websocket_origin_allowed
     if not websocket_origin_allowed():
-        logger.warning("%s rejected: cross-origin WebSocket", request.path)
+        logger.warning("/ws/xai-realtime WebSocket rejected: cross-origin upgrade")
         ws.send(json.dumps({"type": "error", "message": "Unauthorized"}))
         ws.close()
         return
