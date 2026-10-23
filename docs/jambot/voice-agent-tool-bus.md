@@ -217,3 +217,33 @@ what's behind it. Detail: `future-dev-plans/17-MULTI-AGENT-FRAMEWORK.md` §6.
 - Marker parsing in `VoiceSession.js` / `app.js` is still hand-written; migrating it to
   generated output is Phase 2 and must be behaviour-identical (it is load-bearing for every
   OpenClaw tenant).
+
+
+## Shared tool-job spool deployment
+
+The tool-job spool remains beside `OVUI_DB_PATH` (or at `TOOL_JOBS_DIR`) on
+its existing bind mount. It now uses directory mode `2770` and job-file mode
+`0660`, with the directory group inherited by new jobs. Distinct container and
+host-worker UIDs remain supported; unrelated local users must have no access.
+The referenced host `scripts/tool-job-worker.sh` is deployment-owned and is not
+shipped in this repository, so its writes require deployment verification.
+
+Before deploying, pause the producer and worker and back up pending jobs. Map
+the actual container service UID and host-worker UID; create or select one
+shared numeric GID available to both sides of the bind mount. Make the service
+UID the spool directory owner and that GID its group, set directory mode `2770`,
+and give both processes that supplementary group. Apply the same group and
+`0660` to existing regular job files after inspecting the spool for unexpected
+symlinks. Do not blindly follow symlinks during migration.
+
+Configure the external worker to retain the inherited group and write files as
+`0660` (for ordinary creation, use umask `0007`; for temporary files created as
+`0600`, explicitly set `0660` before atomic replacement). Restart both processes
+to pick up group membership. Submit one harmless job, verify that the worker can
+read and update it and the service can read the result, and verify an unrelated
+UID cannot read or write the spool. Retain the current mount paths and routes.
+If group or ownership setup is wrong, correct it; do not restore `0777`/`0666`.
+The service now fails closed if it cannot enforce the directory permissions.
+
+Use this same shared-group setup for `runtime/uploads/grid-orders` as described
+in the architecture reference. These are separate spools and both require setup.

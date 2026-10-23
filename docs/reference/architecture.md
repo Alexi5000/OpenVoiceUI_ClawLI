@@ -500,3 +500,13 @@ writer, and give both processes that supplementary group. The service must own
 the directory to enforce its mode. Do not restore world-write permissions to
 work around group configuration. Symlink directories and permission failures
 are rejected; no other mount or route changes are required.
+
+
+### Tool-job shared storage permissions
+
+The separate `runtime/tool-jobs` spool (beside `OVUI_DB_PATH`, overridable with
+`TOOL_JOBS_DIR`) follows the same shared-group contract: directory `2770`, job
+files `0660`, service-owned directory, and both service and external worker in
+its shared group. See [the tool bus deployment steps](../jambot/voice-agent-tool-bus.md#shared-tool-job-spool-deployment)
+for existing-file migration and worker write requirements. The external worker
+is deployment-owned; its live group membership and round-trip require verification.
