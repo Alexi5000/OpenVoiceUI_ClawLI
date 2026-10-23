@@ -1976,8 +1976,13 @@ function bindInputs(){
 
 function setNestedVal(obj,path,val){
   const parts=path.split('.');
+  if(parts.some(k=>!k||k==='__proto__'||k==='constructor'||k==='prototype'))return;
   let cur=obj;
-  for(let i=0;i<parts.length-1;i++){cur=cur[parts[i]]=cur[parts[i]]||{}}
+  for(let i=0;i<parts.length-1;i++){
+    const key=parts[i];
+    if(!Object.prototype.hasOwnProperty.call(cur,key)||!cur[key]||typeof cur[key]!=='object')cur[key]=Object.create(null);
+    cur=cur[key];
+  }
   cur[parts[parts.length-1]]=val;
 }
 function getNestedVal(obj,path){

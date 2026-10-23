@@ -81,7 +81,7 @@ body { background: #0a0a0a; color: #e2e8f0; font-family: 'Inter', sans-serif; pa
 </style>
 </head>
 <body>
-<button class="back-btn" onclick="window.parent.postMessage({type:'canvas-action',action:'menu'},'*')">← Back</button>
+<button class="back-btn" onclick="window.parent.postMessage({type:'canvas-action',action:'menu'},window.location.origin)">← Back</button>
 
 <div class="header">
   <h1>Grid Creator</h1>
@@ -256,7 +256,7 @@ async function placeOrder() {
   // mesh-sends it to the Mac under its own identity, so the Mac knows which client/brand.
   const line = `[GRID-GEN] request_id=${req.request_id} type=${req.grid_type} count=${req.count} `
              + `aspect=${req.aspect} layout=${req.layout} brief="${brief.replace(/"/g,"'")}"`;
-  window.parent.postMessage({ type: 'canvas-action', action: 'speak', text: line }, '*');
+  window.parent.postMessage({ type: 'canvas-action', action: 'speak', text: line }, window.location.origin);
   $('orderBtn').disabled = false; $('orderBtn').textContent = 'Generate grid';
   $('brief').value = '';
   chosenRefs = []; renderRefs();
@@ -296,9 +296,9 @@ function renderJobs() {
 function cutInSplitter(file) {
   // Hand the grid image to the splitter. `navigate` drops query strings, so use `open-url`
   // which loads the URL into the canvas iframe verbatim — the splitter reads ?src= on load.
-  if (!file) { window.parent.postMessage({ type: 'canvas-action', action: 'navigate', page: 'image-splitter' }, '*'); return; }
+  if (!file) { window.parent.postMessage({ type: 'canvas-action', action: 'navigate', page: 'image-splitter' }, window.location.origin); return; }
   const url = '/pages/image-splitter.html?src=' + encodeURIComponent('/uploads/' + file);
-  window.parent.postMessage({ type: 'canvas-action', action: 'open-url', url }, '*');
+  window.parent.postMessage({ type: 'canvas-action', action: 'open-url', url }, window.location.origin);
 }
 
 // Poll for status updates (the Mac writes markers the server exposes here).

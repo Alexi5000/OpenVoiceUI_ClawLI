@@ -30,3 +30,29 @@ assert.equal(accepts({origin: 'https://voice.example', source: trusted}), true);
             script += "assert.equal(accepts({origin: 'https://voice.example', source: {}}), undefined);\n"
         script += '}\n'
     subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
+
+
+def test_grid_order_message_targets_only_same_origin_parent():
+    source = Path('default-pages/grid-creator.html').read_text()
+    start = source.index('async function placeOrder()')
+    end = source.index('function etaText(', start)
+    script = """
+const assert = require('node:assert/strict');
+const messages = [];
+const fields = {brief: {value: 'private brief'}, count: {value: '3'}, aspect: {value: '1:1'}, orderBtn: {}};
+const $ = key => fields[key];
+const window = {location: {origin: 'https://voice.test'}, parent: {postMessage: (...args) => messages.push(args)}};
+const uuid = () => 'order-1';
+let gridType = 'logo', layout = 'separate', chosenRefs = [];
+const fetch = async () => ({});
+const renderRefs = () => {};
+const loadJobs = () => {};
+const setTimeout = () => {};
+""" + source[start:end] + """
+placeOrder().then(() => {
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0][1], 'https://voice.test');
+    assert.ok(messages[0][0].text.includes('private brief'));
+});
+"""
+    subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
