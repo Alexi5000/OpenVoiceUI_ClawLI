@@ -44,7 +44,7 @@ def parse_chatgpt_export(zip_path: Path, output_dir: Path) -> dict:
     except json.JSONDecodeError as e:
         return {
             'total': 0, 'imported': 0, 'skipped': 0,
-            'errors': [f'Invalid JSON in conversations.json: {e}'],
+            'errors': ['Invalid JSON in conversations.json'],
             'conversations': [],
         }
 
@@ -72,7 +72,7 @@ def parse_chatgpt_export(zip_path: Path, output_dir: Path) -> dict:
             else:
                 result['skipped'] += 1
         except Exception as e:
-            result['errors'].append(f"Error processing '{conv.get('title', 'unknown')}': {e}")
+            result['errors'].append("Error processing conversation")
             result['skipped'] += 1
 
     # Write the index file

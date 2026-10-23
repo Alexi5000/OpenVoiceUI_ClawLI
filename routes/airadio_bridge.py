@@ -313,7 +313,7 @@ def _airadio_call(method, path, json=None, files=None, params=None, data=None):
             "mode": mode,
             "error": {
                 "code": "BRIDGE_UNREACHABLE",
-                "message": f"Could not reach AI-Radio: {exc}",
+                "message": "Could not reach AI-Radio",
             },
         }
 

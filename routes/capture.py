@@ -905,7 +905,7 @@ def batch_describe(album_id):
                             break
                     described_count += 1
                 except Exception as exc:
-                    errors.append({'photo_id': photo_id, 'error': str(exc)})
+                    errors.append({'photo_id': photo_id, 'error': 'Vision description failed'})
             album_data['updated_at'] = datetime.now(timezone.utc).isoformat()
 
         return jsonify({
@@ -931,7 +931,7 @@ def batch_describe(album_id):
                         break
                 described_count += 1
             except Exception as exc:
-                errors.append({'photo_id': photo_id, 'error': str(exc)})
+                errors.append({'photo_id': photo_id, 'error': 'Vision description failed'})
         album_data['updated_at'] = datetime.now(timezone.utc).isoformat()
 
     return jsonify({

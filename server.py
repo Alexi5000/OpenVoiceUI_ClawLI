@@ -912,7 +912,7 @@ def diagnostics():
         state["last_hour_stats"] = stats
         conn.close()
     except Exception as e:
-        state["metrics_error"] = str(e)
+        state["metrics_error"] = "Metrics unavailable"
 
     return jsonify(state)
 

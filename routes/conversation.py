@@ -2459,7 +2459,7 @@ def _conversation_inner():
                                     f"text={len(cleaned or '')} chars"
                                 )
                             except Exception as e:
-                                result['error'] = str(e)
+                                result['error'] = 'Speech generation failed'
                             finally:
                                 done.set()
                                 # Wake the stream loop NOW so finished audio is
