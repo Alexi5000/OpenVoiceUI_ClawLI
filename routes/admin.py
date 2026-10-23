@@ -983,7 +983,7 @@ def update_ai_config():
         result = _run_rpc('config.patch', {'raw': json.dumps(partial), 'baseHash': base_hash},
                           timeout=15.0)
         if result.get('ok'):
-            logger.info(f"AI Config: patched via gateway ({', '.join(changes)})")
+            logger.info(str(f"AI Config: patched via gateway ({', '.join(changes)})").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             return jsonify({'ok': True, 'message': 'Config updated via OpenClaw gateway — '
                                                    'changes are validated and applied by openclaw itself.',
                             'changes': changes})
@@ -996,7 +996,7 @@ def update_ai_config():
                                  'container — cannot apply config changes.'}), 409
     try:
         _write_oc_config(_deep_merge(config, partial))
-        logger.info(f"AI Config: wrote openclaw.json directly ({', '.join(changes)})")
+        logger.info(str(f"AI Config: wrote openclaw.json directly ({', '.join(changes)})").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({'ok': True, 'message': 'Config saved to openclaw.json. Restart the openclaw '
                                                'gateway if a change does not take effect.',
                         'changes': changes})
@@ -1072,7 +1072,7 @@ def admin_gateway_configure(gateway_id):
     try:
         result = gw.configure(partial)
     except Exception as exc:
-        logger.error("gateway configure(%s) error: %s", gateway_id, exc)
+        logger.error("gateway configure(%s) error: %s", str(gateway_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(exc).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({'ok': False, 'error': 'configure failed — see server logs'}), 502
     status = result.get('status')
     if status in ('applied', 'needs_restart'):
@@ -1319,7 +1319,7 @@ def admin_plugin_update(plugin_id):
     try:
         result = update_plugin(plugin_id, config=config)
     except Exception as exc:
-        logger.error("plugin update(%s) error: %s", plugin_id, exc)
+        logger.error("plugin update(%s) error: %s", str(plugin_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(exc).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({'ok': False, 'error': 'Update failed — see server logs'}), 500
     if result is None:
         return jsonify({'ok': False, 'error': 'Plugin not installed'}), 404

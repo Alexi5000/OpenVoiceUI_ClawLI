@@ -191,7 +191,7 @@ def _proxy(method: str, path: str, *, params=None, json_body=None):
     except http_requests.Timeout:
         return jsonify({"ok": False, "error": "Cal.diy request timed out."}), 504
     except Exception as e:  # noqa: BLE001 — surface any client error cleanly
-        logger.error("booking proxy error %s %s: %s", method, path, e)
+        logger.error("booking proxy error %s %s: %s", str(method).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(path).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(e).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({"ok": False, "error": 'Request failed.'}), 500
 
     # Pass Cal.diy's JSON body and status straight through.
@@ -366,7 +366,7 @@ def notify_sms(event_type: str, payload: dict) -> None:
     identity = cfg.get("notify_identity", "setup")
     if not notify_phone:
         logger.info("booking: notify_sms skipped for %s — no notify_phone configured "
-                    "(set it in Booking Setup)", event_type)
+                    "(set it in Booking Setup)", str(event_type).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return
 
     attendees = payload.get("attendees") or []
@@ -390,7 +390,7 @@ def notify_sms(event_type: str, payload: dict) -> None:
             "event": event_type, "queued_at": datetime.now(timezone.utc).isoformat(),
         }))
         tmp.replace(qfile)
-        logger.info("booking: notify_sms queued for %s -> %s", event_type, notify_phone)
+        logger.info("booking: notify_sms queued for %s -> %s", str(event_type).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(notify_phone).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     except OSError as e:
         logger.error("booking: notify_sms queue write failed: %s", e)
 
@@ -404,7 +404,7 @@ def crm_record(event_type: str, payload: dict) -> None:
     against https://crm.jam-bot.com/rest (see skills/crm/SKILL.md). One-way only:
     we write into OUR shadow CRM, never the client's own system.
     """
-    logger.info("booking: crm_record stub — %s (TODO: wire Twenty CRM)", event_type)
+    logger.info("booking: crm_record stub — %s (TODO: wire Twenty CRM)", str(event_type).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
 
 # Cal.com trigger names we act on. Others are logged but not fanned out.

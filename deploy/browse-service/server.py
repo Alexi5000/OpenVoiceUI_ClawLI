@@ -446,8 +446,8 @@ class BrowseService:
         try:
             await sess.context.close()
         except Exception as e:
-            logger.debug("context close error tenant=%s: %s", tenant, e)
-        logger.info("session stopped tenant=%s", tenant)
+            logger.debug("context close error tenant=%s: %s", str(tenant).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(e).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
+        logger.info("session stopped tenant=%s", str(tenant).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     # ── navigation + actions ──────────────────────────────────────────────────
     async def _navigate(self, sess: Session, url: str):
@@ -836,7 +836,7 @@ async def h_stream(request):
     await ws.prepare(request)
     sess.viewers.add(ws)
     await svc.start_screencast(sess)
-    logger.info("viewer connected tenant=%s viewers=%d", tenant, len(sess.viewers))
+    logger.info("viewer connected tenant=%s viewers=%d", str(tenant).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), len(sess.viewers))
     # Rate-limit user input so a mash of events can't peg the browser or starve
     # the agent's own actions (they share the per-session lock). ~25 events/s.
     _last_evt = 0.0
@@ -869,7 +869,7 @@ async def h_stream(request):
         sess.viewers.discard(ws)
         if not sess.viewers:
             await svc.stop_screencast(sess)
-        logger.info("viewer gone tenant=%s viewers=%d", tenant, len(sess.viewers))
+        logger.info("viewer gone tenant=%s viewers=%d", str(tenant).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), len(sess.viewers))
     return ws
 
 

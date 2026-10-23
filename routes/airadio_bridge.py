@@ -293,7 +293,7 @@ def _airadio_call(method, path, json=None, files=None, params=None, data=None):
             allow_redirects=False,
         )
     except http_requests.Timeout as exc:
-        logger.warning("AI-Radio timeout: %s %s — %s", method, path, exc)
+        logger.warning("AI-Radio timeout: %s %s — %s", str(method).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(path).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(exc).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return {
             "ok": False,
             "data": None,
@@ -305,7 +305,7 @@ def _airadio_call(method, path, json=None, files=None, params=None, data=None):
             },
         }
     except http_requests.RequestException as exc:
-        logger.warning("AI-Radio request failed: %s %s — %s", method, path, exc)
+        logger.warning("AI-Radio request failed: %s %s — %s", str(method).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(path).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(exc).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return {
             "ok": False,
             "data": None,
@@ -570,7 +570,7 @@ def _encode_cover_data_url(cover_path: str) -> str | None:
             mime = "image/png"
         return f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
     except OSError as exc:
-        logger.warning("AI-Radio cover read failed for %s: %s", cover_path, exc)
+        logger.warning("AI-Radio cover read failed for %s: %s", str(cover_path).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(exc).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return None
 
 

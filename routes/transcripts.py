@@ -409,7 +409,7 @@ def save_conversation_turn(
         # The write itself stays non-fatal (a failed transcript must never break a live
         # voice call), but it is now VISIBLE and names the path so it is actionable.
         _transcript_logger.getLogger(__name__).warning(
-            f'save_conversation_turn FAILED for session={session_id} '
-            f'dir={TRANSCRIPTS_DIR}: {type(exc).__name__}: {exc}'
+            str(f'save_conversation_turn FAILED for session={session_id} '
+            f'dir={TRANSCRIPTS_DIR}: {type(exc).__name__}: {exc}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85')
         )
         return None

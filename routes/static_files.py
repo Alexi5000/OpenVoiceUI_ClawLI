@@ -282,7 +282,7 @@ def _call_skill_runner(path: Path, original_name: str) -> str | None:
         if resp.ok:
             data = resp.json()
             return data.get('text', '')
-        logger.warning('skill-runner /extract returned %d for %s', resp.status_code, original_name)
+        logger.warning('skill-runner /extract returned %d for %s', resp.status_code, str(original_name).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     except Exception as exc:
         logger.debug('skill-runner unavailable, using local extractors: %s', exc)
     return None
@@ -307,7 +307,7 @@ def upload_file():
                 if ext_guess in ('.jpe', '.jpeg'):
                     ext_guess = '.jpg'
                 fname_raw = f'capture_{int(_time.time())}{ext_guess}'
-                logger.info('upload: raw-body fallback — ct=%s len=%s fname=%s', ct, len(raw), fname_raw)
+                logger.info('upload: raw-body fallback — ct=%s len=%s fname=%s', str(ct).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(len(raw)).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(fname_raw).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                 from werkzeug.datastructures import FileStorage
                 f_raw = FileStorage(stream=_io.BytesIO(raw), filename=fname_raw, content_type=ct)
                 # Jump straight to save logic via a local alias
@@ -321,11 +321,11 @@ def upload_file():
             logger.warning(
                 'upload: no file field — content_type=%r content_length=%r '
                 'files_keys=%r form_keys=%r user_agent=%r',
-                ct,
-                request.content_length,
-                list(request.files.keys()),
-                list(request.form.keys()),
-                request.headers.get('User-Agent', '')[:120],
+                str(ct).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'),
+                str(request.content_length).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'),
+                str(list(request.files.keys())).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'),
+                str(list(request.form.keys())).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'),
+                str(request.headers.get('User-Agent', '')[:120]).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'),
             )
             return jsonify({'error': 'No file provided'}), 400
 
@@ -343,7 +343,7 @@ def upload_file():
         if ext_guess in ('.jpe', '.jpeg'):
             ext_guess = '.jpg'
         f.filename = f'capture_{int(_time.time())}{ext_guess}'
-        logger.info('upload: empty filename from client; generated fallback %s (content_type=%s)', f.filename, ct)
+        logger.info('upload: empty filename from client; generated fallback %s (content_type=%s)', str(f.filename).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(ct).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     # --- Sanitize filename, validate extension ---
     original_name = Path(f.filename).name
@@ -384,7 +384,7 @@ def upload_file():
             dest = jpg_dest
             safe_name = jpg_name
             ext = '.jpg'
-            logger.info(f'### HEIC→JPG conversion ok: {jpg_name}')
+            logger.info(str(f'### HEIC→JPG conversion ok: {jpg_name}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         except Exception as _e:
             logger.warning(f'### HEIC→JPG conversion error: {_e}')
 
@@ -468,7 +468,7 @@ def upload_file():
                     result['content_preview_truncated'] = True
 
     except Exception as exc:
-        logger.warning('Document extraction failed for %s: %s', original_name, exc)
+        logger.warning('Document extraction failed for %s: %s', str(original_name).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(exc).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         result['extraction_error'] = f'Could not extract text from {ext} file'
 
     return jsonify(result)

@@ -183,7 +183,7 @@ def _download_remote_plugin(plugin_id: str) -> Optional[Path]:
     # Download the repo archive for the main branch
     zip_url = f"{REMOTE_REPO_URL}/archive/refs/heads/main.zip"
     try:
-        logger.info(f"Downloading plugin '{plugin_id}' from {REMOTE_REPO_URL}")
+        logger.info(str(f"Downloading plugin '{plugin_id}' from {REMOTE_REPO_URL}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         resp = requests.get(zip_url, timeout=REMOTE_FETCH_TIMEOUT, stream=True)
         if not resp.ok:
             logger.error(f"Failed to download repo archive: HTTP {resp.status_code}")
@@ -201,7 +201,7 @@ def _download_remote_plugin(plugin_id: str) -> Optional[Path]:
                     break
 
             if prefix is None:
-                logger.error(f"Plugin '{plugin_id}' not found in remote repo archive")
+                logger.error(str(f"Plugin '{plugin_id}' not found in remote repo archive").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                 return None
 
             # Extract plugin files to a temp directory
@@ -221,15 +221,15 @@ def _download_remote_plugin(plugin_id: str) -> Optional[Path]:
 
             # Verify it has a plugin.json
             if not (tmp_dir / "plugin.json").is_file():
-                logger.error(f"Downloaded plugin '{plugin_id}' has no plugin.json")
+                logger.error(str(f"Downloaded plugin '{plugin_id}' has no plugin.json").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                 shutil.rmtree(str(tmp_dir))
                 return None
 
-            logger.info(f"Plugin '{plugin_id}' downloaded to {tmp_dir}")
+            logger.info(str(f"Plugin '{plugin_id}' downloaded to {tmp_dir}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             return tmp_dir
 
     except Exception as e:
-        logger.error(f"Failed to download remote plugin '{plugin_id}': {e}")
+        logger.error(str(f"Failed to download remote plugin '{plugin_id}': {e}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return None
 
 
@@ -342,7 +342,7 @@ def install_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
     remote_tmp = None
     if (catalog_dir / "plugin.json").is_file():
         shutil.copytree(str(catalog_dir), str(dest))
-        logger.info(f"Plugin installed from local catalog: {plugin_id} → {dest}")
+        logger.info(str(f"Plugin installed from local catalog: {plugin_id} → {dest}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     else:
         # Fallback: download from remote repo
         remote_tmp = _download_remote_plugin(plugin_id)
@@ -350,7 +350,7 @@ def install_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
             return None
         shutil.copytree(str(remote_tmp), str(dest))
         shutil.rmtree(str(remote_tmp))
-        logger.info(f"Plugin installed from remote repo: {plugin_id} → {dest}")
+        logger.info(str(f"Plugin installed from remote repo: {plugin_id} → {dest}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     # Load manifest
     manifest = json.loads((dest / "plugin.json").read_text())
@@ -358,7 +358,7 @@ def install_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
     # Run post_install lifecycle hook (container provisioning, etc.)
     hook_result = _run_lifecycle_hook(manifest, "post_install", config=config)
     if not hook_result.get("ok") and "error" in hook_result:
-        logger.error(f"Post-install hook failed for {plugin_id}, rolling back")
+        logger.error(str(f"Post-install hook failed for {plugin_id}, rolling back").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         shutil.rmtree(str(dest))
         return {"_error": hook_result["error"]}
 
@@ -391,7 +391,7 @@ def install_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
                         shutil.copy2(str(src), str(dst))
                         lore_count += 1
             if lore_count > 0:
-                logger.info(f"Deployed {lore_count} lore files to workspace/{plugin_id}/")
+                logger.info(str(f"Deployed {lore_count} lore files to workspace/{plugin_id}/").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     _registry[plugin_id] = manifest
     return manifest
@@ -410,11 +410,11 @@ def uninstall_plugin(plugin_id: str) -> bool:
             manifest = json.loads(manifest_path.read_text())
             _run_lifecycle_hook(manifest, "pre_uninstall")
         except Exception as e:
-            logger.warning(f"Pre-uninstall hook error for {plugin_id}: {e}")
+            logger.warning(str(f"Pre-uninstall hook error for {plugin_id}: {e}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     shutil.rmtree(str(dest))
     _registry.pop(plugin_id, None)
-    logger.info(f"Plugin uninstalled: {plugin_id}")
+    logger.info(str(f"Plugin uninstalled: {plugin_id}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return True
 
 
@@ -498,7 +498,7 @@ def update_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
     try:
         dest.rename(sidecar)
     except Exception as e:
-        logger.error(f"Plugin update: could not archive current {plugin_id}: {e}")
+        logger.error(str(f"Plugin update: could not archive current {plugin_id}: {e}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return {"_error": "could not archive current version"}
 
     # Drop the runtime registry entry so install_plugin's dest.exists() gate opens.
@@ -522,14 +522,14 @@ def update_plugin(plugin_id: str, config: dict = None) -> Optional[dict]:
             sidecar.rename(dest)
             if prev_manifest is not None:
                 _registry[plugin_id] = prev_manifest
-            logger.info(f"Plugin update rolled back: {plugin_id}")
+            logger.info(str(f"Plugin update rolled back: {plugin_id}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         except Exception as e:
-            logger.error(f"Plugin update: rollback FAILED for {plugin_id}: {e}")
+            logger.error(str(f"Plugin update: rollback FAILED for {plugin_id}: {e}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         err = (result or {}).get("_error", "plugin not found in catalog/registry") \
             if isinstance(result, dict) else "update failed"
         return {"_error": err}
 
-    logger.info(f"Plugin updated: {plugin_id} (previous archived at {sidecar.name})")
+    logger.info(str(f"Plugin updated: {plugin_id} (previous archived at {sidecar.name})").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     result["_updated_from"] = prev_manifest.get("version") if prev_manifest else None
     return result
 
@@ -729,7 +729,7 @@ def get_plugin_config(plugin_id: str) -> Optional[dict]:
         if resp.ok:
             return resp.json()
     except Exception as e:
-        logger.error(f"Failed to read config for {plugin_id}: {e}")
+        logger.error(str(f"Failed to read config for {plugin_id}: {e}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return None
 
 

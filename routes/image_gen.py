@@ -97,7 +97,7 @@ def _assert_image_bytes(content, provider, model_id, declared_ct):
     logger.error(
         'image_gen: %s/%s returned %d bytes that are NOT an image '
         '(declared Content-Type=%s) — refusing to save. Body: %s',
-        provider, model_id, len(content or b''), declared_ct, snippet)
+        str(provider).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(model_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), len(content or b''), str(declared_ct).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(snippet).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     raise ValueError(
         f'{provider} returned a non-image body for {model_id} '
         f'(declared {declared_ct}, {len(content or b"")} bytes): {snippet}')
@@ -197,7 +197,7 @@ def _generate_gemini(model, prompt, images):
             'data': data,
         }})
     parts.append({'text': prompt})
-    logger.info('image_gen: model=%s images=%d prompt_len=%d', model, len([p for p in parts if 'inline_data' in p]), len(prompt))
+    logger.info('image_gen: model=%s images=%d prompt_len=%d', str(model).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), len([p for p in parts if 'inline_data' in p]), len(prompt))
 
     payload = {
         'contents': [{'role': 'user', 'parts': parts}],
@@ -301,7 +301,7 @@ def _generate_huggingface(model_id, prompt, quality='standard', aspect='1:1'):
     height = round(base_h * ar_h / 8) * 8
 
     logger.info('image_gen: HF model=%s quality=%s size=%dx%d prompt_len=%d',
-                model_id, quality, width, height, len(prompt))
+                str(model_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(quality).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), width, height, len(prompt))
 
     # nscale SILENTLY IGNORES width/height keys (the shape the old hf-inference path used)
     # and takes dimensions only via OpenAI's `size` string. Sending the old parameters block
@@ -454,7 +454,7 @@ def enhance_prompt_route():
         log_spend('image-gen/enhance', 'enhance-prompt')
         if not enhanced:
             return jsonify({'error': 'LLM returned empty response'}), 502
-        logger.info('enhance_prompt: idea_len=%d → prompt_len=%d quality=%s', len(idea), len(enhanced), quality)
+        logger.info('enhance_prompt: idea_len=%d → prompt_len=%d quality=%s', len(idea), len(enhanced), str(quality).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({'prompt': enhanced})
     except http.HTTPError as e:
         body = e.response.text[:400] if e.response else str(e)

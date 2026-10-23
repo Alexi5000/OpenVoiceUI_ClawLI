@@ -211,7 +211,7 @@ def style_from_website():
         tenant=tenant,
         user_id=getattr(g, 'clerk_user_id', None),
     )
-    logger.info('brand style requested: job=%s url=%s tenant=%s', job['id'], url, tenant)
+    logger.info('brand style requested: job=%s url=%s tenant=%s', str(job['id']).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(url).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(tenant).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return jsonify({
         'ok': True,
         'job_id': job['id'],

@@ -157,7 +157,7 @@ def elevenlabs_custom_llm():
     if not user_message:
         return _openai_error_response("No user message found in context"), 400
 
-    logger.info(f"[ElevenLabsHybrid] Custom LLM request: {user_message[:80]!r}")
+    logger.info(str(f"[ElevenLabsHybrid] Custom LLM request: {user_message[:80]!r}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     # ── Check Gateway availability ────────────────────────────────────────────
     if not gateway_connection.is_configured():

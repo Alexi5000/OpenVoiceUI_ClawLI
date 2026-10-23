@@ -124,7 +124,7 @@ def create_profile():
     if not manager.save_profile(profile):
         return jsonify({"error": "Failed to save profile"}), 500
 
-    logger.info("Created profile: %s", profile_id)
+    logger.info("Created profile: %s", str(profile_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return jsonify(profile.to_dict()), 201
 
 
@@ -155,7 +155,7 @@ def activate_profile():
 
     _active_profile_id = profile_id
     _save_active_profile_id(profile_id)
-    logger.info("Profile activated: %s", profile_id)
+    logger.info("Profile activated: %s", str(profile_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     return jsonify({
         "ok": True,
@@ -190,7 +190,7 @@ def update_profile(profile_id):
     if updated is None:
         return jsonify({"error": "Failed to update profile"}), 500
 
-    logger.info("Updated profile: %s", profile_id)
+    logger.info("Updated profile: %s", str(profile_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return jsonify(updated.to_dict())
 
 
@@ -211,5 +211,5 @@ def delete_profile(profile_id):
     if not manager.delete_profile(profile_id):
         return jsonify({"error": f"Cannot delete profile '{profile_id}' (protected)"}), 400
 
-    logger.info("Deleted profile: %s", profile_id)
+    logger.info("Deleted profile: %s", str(profile_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return "", 204

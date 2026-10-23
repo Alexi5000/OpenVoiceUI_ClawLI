@@ -913,7 +913,7 @@ class UpdateManager:
 
     def rollback(self, target_commit: str, backed_up_files: list = None):
         """Roll back to a previous commit and restore backups."""
-        logger.info(f"[update] Rolling back to {target_commit}")
+        logger.info(str(f"[update] Rolling back to {target_commit}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
         self._git("reset", "--hard", target_commit)
 

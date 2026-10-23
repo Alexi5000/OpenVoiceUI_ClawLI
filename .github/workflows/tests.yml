@@ -61,5 +61,8 @@ jobs:
       - name: Run registry DOM security regressions
         run: node --test tests/js/registry-dom-security.test.cjs
 
+      - name: Run log boundary regressions
+        run: node --test tests/js/log-data.test.mjs
+
       - name: Run tests
         run: python -m pytest tests/ --tb=short -q

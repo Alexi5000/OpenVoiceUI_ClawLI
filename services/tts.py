@@ -314,7 +314,7 @@ def generate_tts_b64(
     if fallback_state and fallback_state.get('provider') and tts_provider != 'resemble':
         tts_provider = fallback_state['provider']
         voice = fallback_state['voice']
-        logger.info(f"TTS using sticky fallback: provider={tts_provider}, voice={voice}")
+        logger.info(str(f"TTS using sticky fallback: provider={tts_provider}, voice={voice}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     # ── Try primary provider ──────────────────────────────────────────────────
     last_err = None
@@ -331,7 +331,7 @@ def generate_tts_b64(
     for attempt in range(max_attempts):
         try:
             audio_bytes = _generate_with_provider(tts_provider, text, voice)
-            logger.info(f"TTS generated: provider={tts_provider}, voice={voice}, attempt={attempt + 1}")
+            logger.info(str(f"TTS generated: provider={tts_provider}, voice={voice}, attempt={attempt + 1}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             return base64.b64encode(audio_bytes).decode('utf-8')
         except Exception as e:
             last_err = e
@@ -344,14 +344,14 @@ def generate_tts_b64(
             # 5xx once instead of dropping straight to silence. (2026-06-07)
             http_class = _classify_http_error(err_str)
             if http_class == '4xx' or (http_class == '5xx' and tts_provider != 'resemble'):
-                logger.warning(f"TTS HTTP {http_class}, no retry (provider={tts_provider}): {e} — falling back")
+                logger.warning(str(f"TTS HTTP {http_class}, no retry (provider={tts_provider}): {e} — falling back").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                 break
             if attempt < max_attempts - 1:
                 delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
-                logger.warning(f"TTS attempt {attempt + 1} failed (provider={tts_provider}): {e} — retrying in {delay}s")
+                logger.warning(str(f"TTS attempt {attempt + 1} failed (provider={tts_provider}): {e} — retrying in {delay}s").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                 time.sleep(delay)
             else:
-                logger.warning(f"TTS failed (provider={tts_provider}): {e} — trying fallback")
+                logger.warning(str(f"TTS failed (provider={tts_provider}): {e} — trying fallback").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     # ── Fallback through the chain (transitive, cycle-protected — TTS-7) ──────
     # e.g. resemble → groq → supertonic. If groq is also down, we keep walking
@@ -371,25 +371,25 @@ def generate_tts_b64(
         if not fallback_id or fallback_id in tried:
             break
         tried.add(fallback_id)
-        logger.info(f"TTS falling back: {current} → {fallback_id}")
+        logger.info(str(f"TTS falling back: {current} → {fallback_id}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         try:
             # Map the ORIGINAL voice to the closest match on the fallback provider
             # to minimize jarring voice switches mid-response.
             fallback_voice = _map_voice_to_fallback(voice, tts_provider, fallback_id)
             audio_bytes = _generate_with_provider(fallback_id, text, fallback_voice)
-            logger.info(f"TTS fallback OK: provider={fallback_id}, voice={fallback_voice} (original: {tts_provider}/{voice})")
+            logger.info(str(f"TTS fallback OK: provider={fallback_id}, voice={fallback_voice} (original: {tts_provider}/{voice})").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             # Lock sticky fallback for non-Resemble originals — keeps voice consistent.
             # For Resemble: don't lock — next sentence should retry the real voice.
             if fallback_state is not None and tts_provider != 'resemble':
                 fallback_state['provider'] = fallback_id
                 fallback_state['voice'] = fallback_voice
-                logger.info(f"TTS sticky fallback locked: {fallback_id}/{fallback_voice} for rest of response")
+                logger.info(str(f"TTS sticky fallback locked: {fallback_id}/{fallback_voice} for rest of response").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             return base64.b64encode(audio_bytes).decode('utf-8')
         except Exception as fb_err:
             logger.error(f"TTS fallback failed (provider={fallback_id}): {fb_err} — continuing down chain")
             current = fallback_id  # walk to the next hop
 
-    logger.error(f"TTS generation failed — all providers exhausted for: '{text[:60]}'")
+    logger.error(str(f"TTS generation failed — all providers exhausted for: '{text[:60]}'").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return None
 
 

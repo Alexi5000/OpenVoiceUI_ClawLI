@@ -7,7 +7,7 @@ const source = readFileSync(join(__dirname,'../../src/app.js'),'utf8');
 
 test('sound dispatch ignores inherited keys and still plays configured sounds',()=>{
     const audio=[];
-    const context=vm.createContext({CONFIG:{serverUrl:'https://voice.test'},console:{log(){},warn(){},error(){}},
+    const context=vm.createContext({serializeLogData: JSON.stringify, CONFIG:{serverUrl:'https://voice.test'},console:{log(){},warn(){},error(){}},
         Audio:class {constructor(url){this.url=url;this.paused=true;audio.push(this);} play(){return Promise.resolve();}},
     });
     vm.runInContext(source.slice(source.indexOf('const DJSoundboard ='),source.indexOf('// ===== FACE MODULE')),context);
@@ -25,7 +25,7 @@ test('sound dispatch ignores inherited keys and still plays configured sounds',(
 test('category reorder preserves prototype-named categories as own data keys',async()=>{
     const start=source.indexOf('async reorderCategory(');
     const end=source.indexOf('filterPages(query)',start);
-    const context=vm.createContext({console:{log(){}}});
+    const context=vm.createContext({serializeLogData: JSON.stringify, console:{log(){}}});
     vm.runInContext('globalThis.menu = {'+source.slice(start,end)+'};',context);
     const categories=JSON.parse('{"first":{"name":"First"},"__proto__":{"name":"Custom"},"last":{"name":"Last"}}');
     context.menu.manifest={categories};

@@ -761,11 +761,11 @@ def canvas_update():
         path = display_output.get('path', '')
         title = display_output.get('title', '')
 
-        logger.info(f'Canvas update: {display_type} - {title}')
+        logger.info(str(f'Canvas update: {display_type} - {title}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
         if display_type == 'page' and path:
             update_canvas_context(path, title)
-            logger.info(f'Canvas context updated: {path}')
+            logger.info(str(f'Canvas context updated: {path}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
         try:
             canvas_response = http_requests.post(
@@ -906,10 +906,10 @@ def canvas_pages_proxy(path):
                 has_cookie = bool(request.cookies.get('__session'))
                 has_header = bool(request.headers.get('Authorization', '').startswith('Bearer '))
                 logger.info('[canvas-auth] page=%s cookie=%s header=%s token=%s',
-                            path, has_cookie, has_header, bool(token))
+                            str(path).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(has_cookie).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(has_header).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(bool(token)).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                 user_id = verify_clerk_token(token) if token else None
                 if not user_id:
-                    logger.warning('[canvas-auth] DENIED page=%s (no valid token)', path)
+                    logger.warning('[canvas-auth] DENIED page=%s (no valid token)', str(path).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                     if request.headers.get('Accept', '').startswith('text/html'):
                         return redirect('/?redirect=/pages/' + path)
                     return 'Unauthorized', 401
@@ -1309,7 +1309,7 @@ def handle_page_metadata(page_id):
             page = manifest['pages'][page_id]
             filename = page.get('filename')
             page_title = page.get('display_name', page_id)
-            logger.info(f'Deleting canvas page: {page_title} ({filename})')
+            logger.info(str(f'Deleting canvas page: {page_title} ({filename})').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
             old_category = page.get('category')
             if old_category and old_category in manifest['categories']:
@@ -1542,7 +1542,7 @@ def create_canvas_page():
             return jsonify({'error': 'Invalid filename'}), 400
 
         filepath.write_text(html_content, encoding='utf-8')
-        logger.info(f'Canvas page saved: {filename} ({len(html_content)} bytes)')
+        logger.info(str(f'Canvas page saved: {filename} ({len(html_content)} bytes)').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
         page_meta = add_page_to_manifest(filename, title, content=html_content[:500])
         _notify_brain('canvas_page_created', filename=filename, title=title)
@@ -1627,11 +1627,11 @@ def _canvas_data_denied(filename):
         token = get_token_from_request()
         user_id = verify_clerk_token(token) if token else None
     except Exception as exc:                          # noqa: BLE001 -- fail closed
-        logger.warning('[canvas-data-auth] verify error on %s: %s', filename, exc)
+        logger.warning('[canvas-data-auth] verify error on %s: %s', str(filename).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(exc).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         user_id = None
     if user_id:
         return None
-    logger.warning('[canvas-data-auth] DENIED %s (no valid token)', filename)
+    logger.warning('[canvas-data-auth] DENIED %s (no valid token)', str(filename).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return jsonify({'error': 'unauthorized'}), 401
 
 @canvas_bp.route('/api/canvas/data/<path:filename>', methods=['GET'])
@@ -2097,7 +2097,7 @@ def canvas_build_log(project):
             'updated_at': last_ts,
         })
     except Exception as exc:
-        logger.error(f'Build log read error for {project}: {exc}')
+        logger.error(str(f'Build log read error for {project}: {exc}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({'lines': [], 'status': 'error', 'error': 'Request failed.'}), 500
 
 
@@ -2157,5 +2157,5 @@ def dataforseo_proxy():
         )
         return jsonify(resp.json()), resp.status_code
     except Exception as exc:
-        logger.error(f'DataForSEO proxy error ({endpoint}): {exc}')
+        logger.error(str(f'DataForSEO proxy error ({endpoint}): {exc}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({'error': 'Request failed.'}), 502

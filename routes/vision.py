@@ -242,7 +242,7 @@ def _call_vision(image_b64: str, prompt: str, model: str | None = None, file_pat
             # Scrub any key= / api-key that a library put in the message before it is logged.
             msg = re.sub(r'(key=|api[-_]?key["\':\s]+)[A-Za-z0-9._\-]{8,}', r'\1<redacted>',
                          str(exc), flags=re.I)
-            logger.warning('vision: %s failed (%s) — trying next in chain', m, msg[:200])
+            logger.warning('vision: %s failed (%s) — trying next in chain', str(m).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(msg[:200]).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     raise RuntimeError(f'all vision models failed; last error: {last}')
 
 
@@ -426,7 +426,7 @@ def register_face(name):
     out_path = safe_join(face_dir, f'photo_{idx:03d}.jpg', allow_base=False)
     out_path.write_bytes(base64.b64decode(image_data))
 
-    logger.info('Registered face photo: %s (%s)', safe_name, out_path.name)
+    logger.info('Registered face photo: %s (%s)', str(safe_name).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(out_path.name).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     # Clear DeepFace's cached index so the new face is picked up immediately
     with _deepface_lock:

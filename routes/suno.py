@@ -178,11 +178,11 @@ def _is_safe_download_url(url: str) -> bool:
             addr = info[4][0]
             ip = ipaddress.ip_address(addr)
             if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local:
-                logger.warning(f'SSRF blocked: {url} resolves to private IP {addr}')
+                logger.warning(str(f'SSRF blocked: {url} resolves to private IP {addr}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                 return False
         return True
     except (ValueError, socket.gaierror, OSError) as exc:
-        logger.warning(f'SSRF check failed for {url}: {exc}')
+        logger.warning(str(f'SSRF check failed for {url}: {exc}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return False
 
 
@@ -251,8 +251,8 @@ def _add_song_to_metadata(filename: str, title: str, prompt: str, style: str,
         if not entry.get(id_key) and prev.get(id_key):
             entry[id_key] = prev[id_key]
     if not entry.get('task_id'):
-        logger.warning(f'_add_song_to_metadata: {filename} written WITHOUT task_id '
-                       f'(song_id={song_id!r}, kind={kind}) — vocal separation will be unavailable')
+        logger.warning(str(f'_add_song_to_metadata: {filename} written WITHOUT task_id '
+                       f'(song_id={song_id!r}, kind={kind}) — vocal separation will be unavailable').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     metadata[filename] = entry
     _save_generated_metadata(metadata)
     # Durable id ledger — append-only, survives any metadata rewrite. stem_separate
@@ -569,12 +569,12 @@ def _action_generate(_q, body: dict):
         request_body['personaModel'] = persona_model or 'style_persona'
         if request_body['personaModel'] == 'voice_persona' and not request_body.get('customMode'):
             request_body['customMode'] = True
-        logger.info(f'Suno generate: persona {request_body["personaModel"]} id={persona_id[:12]}…')
+        logger.info(str(f'Suno generate: persona {request_body["personaModel"]} id={persona_id[:12]}…').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     if SUNO_CALLBACK_URL:
         request_body['callBackUrl'] = SUNO_CALLBACK_URL
 
-    logger.info(f'Suno generate: mode={"custom" if has_lyrics else "auto"} prompt={song_prompt[:80]}')
+    logger.info(str(f'Suno generate: mode={"custom" if has_lyrics else "auto"} prompt={song_prompt[:80]}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     try:
         resp = http_requests.post(
@@ -677,7 +677,7 @@ def _action_sfx(_q, body: dict):
     # of the music library. The webhook callback path registers results as music,
     # so skipping it prevents SFX from leaking into the music player.
 
-    logger.info(f'Suno sfx: loop={sound_loop} prompt={prompt[:80]}')
+    logger.info(str(f'Suno sfx: loop={sound_loop} prompt={prompt[:80]}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     try:
         resp = http_requests.post(
@@ -1138,7 +1138,7 @@ def _action_status(job_id: str):
                         'reason': reason,
                         'failed_at': datetime.now().isoformat(),
                     })
-                    logger.warning(f'Suno job {job_id} failed: {reason}')
+                    logger.warning(str(f'Suno job {job_id} failed: {reason}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                     return jsonify({
                         'action': 'failed',
                         'status': 'failed',
@@ -2115,8 +2115,8 @@ def _action_generate_persona(_q, body: dict):
     if style:
         request_body['style'] = style
 
-    logger.info(f'Suno generate_persona: name={name!r} audio_id={audio_id} '
-                f'seg={vocal_start}-{vocal_end}')
+    logger.info(str(f'Suno generate_persona: name={name!r} audio_id={audio_id} '
+                f'seg={vocal_start}-{vocal_end}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     try:
         resp = http_requests.post(
             f'{SUNO_API_BASE}/api/v1/generate/generate-persona',
@@ -2165,7 +2165,7 @@ def _action_voice_validate(_q, body: dict):
     if SUNO_CALLBACK_URL:
         request_body['callBackUrl'] = SUNO_CALLBACK_URL
 
-    logger.info(f'Suno voice_validate: seg={start_s}-{end_s} url={voice_url[:80]}')
+    logger.info(str(f'Suno voice_validate: seg={start_s}-{end_s} url={voice_url[:80]}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     try:
         resp = http_requests.post(
             f'{SUNO_API_BASE}/api/v1/voice/validate',
@@ -2244,7 +2244,7 @@ def _action_voice_generate(_q, body: dict):
     if SUNO_CALLBACK_URL:
         request_body['callBackUrl'] = SUNO_CALLBACK_URL
 
-    logger.info(f'Suno voice_generate: task_id={task_id} skill={skill} name={voice_name!r}')
+    logger.info(str(f'Suno voice_generate: task_id={task_id} skill={skill} name={voice_name!r}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     try:
         resp = http_requests.post(
             f'{SUNO_API_BASE}/api/v1/voice/generate',
@@ -2342,7 +2342,7 @@ def _action_file_upload(_q, body: dict):
     if file_name:
         request_body['fileName'] = file_name
 
-    logger.info(f'Suno file_upload: path={upload_path} url={file_url[:80]}')
+    logger.info(str(f'Suno file_upload: path={upload_path} url={file_url[:80]}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     try:
         resp = http_requests.post(
             f'{SUNO_FILE_UPLOAD_BASE}/api/file-url-upload',
@@ -2399,7 +2399,7 @@ def suno_callback():
             )
 
         data = request.json or {}
-        logger.info(f'Suno callback: {json.dumps(data, indent=2)[:500]}')
+        logger.info(str(f'Suno callback: {json.dumps(data, indent=2)[:500]}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
         # Vocal-removal completion (different shape: data.vocal_removal_info,
         # snake_case task_id). Persist the paid stems server-side — the browser
@@ -2412,9 +2412,9 @@ def suno_callback():
             _find_stem_urls(vri, urls)
             try:
                 saved = _persist_stem_urls(urls, name_stem)
-                logger.info(f'Suno callback: persisted vocal-removal stems for {name_stem}: {list(saved)}')
+                logger.info(str(f'Suno callback: persisted vocal-removal stems for {name_stem}: {list(saved)}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             except Exception as exc:
-                logger.warning(f'Suno callback: stem persist failed ({name_stem}): {exc}')
+                logger.warning(str(f'Suno callback: stem persist failed ({name_stem}): {exc}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             return jsonify({'status': 'ok'})
 
         if data.get('code') == 200:
@@ -2458,7 +2458,7 @@ def suno_callback():
                     'reason': reason,
                     'failed_at': datetime.now().isoformat(),
                 })
-                logger.warning(f'Suno callback reported error for task {task_id}: {reason}')
+                logger.warning(str(f'Suno callback reported error for task {task_id}: {reason}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                 return jsonify({'status': 'ok'})
 
             # sunoapi.org sends: "text" (lyrics ready), "first"/"second" (audio ready), "complete"
@@ -2637,8 +2637,8 @@ def delete_song(filename):
     renamed = target.with_suffix(target.suffix + '.deleted')
     try:
         target.rename(renamed)
-        logger.info(f'[suno] Archived song: {filename} -> {renamed.name}')
+        logger.info(str(f'[suno] Archived song: {filename} -> {renamed.name}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({'ok': True, 'archived': renamed.name})
     except Exception as e:
-        logger.error(f'[suno] Failed to archive {filename}: {e}')
+        logger.error(str(f'[suno] Failed to archive {filename}: {e}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({'error': 'Request failed.'}), 500

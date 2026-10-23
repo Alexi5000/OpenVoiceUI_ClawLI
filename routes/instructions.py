@@ -207,7 +207,7 @@ def update_instruction(name: str):
     if err:
         return jsonify({'error': err}), 500
 
-    logger.info(f'[instructions] updated {name} ({len(content)} chars)')
+    logger.info(str(f'[instructions] updated {name} ({len(content)} chars)').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return jsonify({
         'ok': True,
         'id': name,

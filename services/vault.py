@@ -784,7 +784,7 @@ def sync_credential(username: str, cred_id: str) -> set[str]:
             break
 
     if not cat_entry:
-        logger.debug(f"No catalog entry for {cred_id}, skipping sync")
+        logger.debug(str(f"No catalog entry for {cred_id}, skipping sync").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return set()
 
     vault = read_vault(username)
@@ -795,7 +795,7 @@ def sync_credential(username: str, cred_id: str) -> set[str]:
     # Build the dict of env vars to set for this credential
     env_vars = _env_vars_for_credential(cat_entry, raw_value, raw_fields)
     if not env_vars:
-        logger.debug(f"No env vars to sync for {cred_id}")
+        logger.debug(str(f"No env vars to sync for {cred_id}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return set()
 
     containers_to_restart: set[str] = set()
@@ -806,13 +806,13 @@ def sync_credential(username: str, cred_id: str) -> set[str]:
                 env_path = _CLIENTS_DIR / username / 'compose' / '.openclaw.env'
                 if _update_env_file(env_path, env_vars):
                     containers_to_restart.add(f'openclaw-{username}')
-                    logger.info(f"Synced {cred_id} → {env_path.name} ({len(env_vars)} var(s))")
+                    logger.info(str(f"Synced {cred_id} → {env_path.name} ({len(env_vars)} var(s))").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             elif consumer_name == 'openvoiceui':
                 # openvoiceui consumer → .env (per-client)
                 env_path = _CLIENTS_DIR / username / 'compose' / '.env'
                 if _update_env_file(env_path, env_vars):
                     containers_to_restart.add(f'openvoiceui-{username}')
-                    logger.info(f"Synced {cred_id} → {env_path.name} ({len(env_vars)} var(s))")
+                    logger.info(str(f"Synced {cred_id} → {env_path.name} ({len(env_vars)} var(s))").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             else:
                 # Plugin consumer (e.g., "hermes") — route credential updates
                 # through the JamBot provisioning service's PUT /config/<plugin>/<user>
@@ -833,14 +833,14 @@ def sync_credential(username: str, cred_id: str) -> set[str]:
                         username, plugin_id, env_vars, consumer_cfg
                     ):
                         logger.info(
-                            f"Synced {cred_id} → {plugin_id}-{username} via provision service"
+                            str(f"Synced {cred_id} → {plugin_id}-{username} via provision service").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85')
                         )
                 elif consumer_type == 'oauth_token':
                     pass  # OAuth tokens are read directly, no push needed
                 else:
-                    logger.debug(f"Unhandled consumer {consumer_name} (type={consumer_type}) for {cred_id}")
+                    logger.debug(str(f"Unhandled consumer {consumer_name} (type={consumer_type}) for {cred_id}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         except Exception as exc:
-            logger.error(f"Sync {cred_id} → {consumer_name} failed: {exc}")
+            logger.error(str(f"Sync {cred_id} → {consumer_name} failed: {exc}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     return containers_to_restart
 
