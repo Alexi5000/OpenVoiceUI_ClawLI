@@ -480,7 +480,16 @@ def generate_icon():
             data.get('prompt', ''), name=data.get('name', ''), style=data.get('style', ''),
         )
     except IconGenerationError as e:
-        return jsonify({'error': str(e)}), e.status
+        message = 'Icon generation failed'
+        if str(e) == 'Missing prompt':
+            message = 'Missing prompt'
+        elif str(e) == 'GEMINI_API_KEY not configured':
+            message = 'GEMINI_API_KEY not configured'
+        elif str(e) == 'Gemini icon generation failed; retry shortly':
+            message = 'Gemini icon generation failed; retry shortly'
+        elif str(e) == 'Gemini did not return an image':
+            message = 'Gemini did not return an image'
+        return jsonify({'error': message}), e.status
     return jsonify(result)
 
 

@@ -54,3 +54,19 @@ def test_successful_icon_generation_retains_image_and_metadata(monkeypatch, tmp_
     assert (tmp_path / 'circle.png').read_bytes() == image
     assert json.loads((tmp_path / 'circle.png.meta.json').read_text())['prompt'] == 'a blue circle'
     metered_spend.log_spend.assert_called_once_with('icons/generate', icons.GEMINI_MODEL)
+
+
+@pytest.mark.parametrize('message,status,expected', [
+    ('Missing prompt', 400, 'Missing prompt'),
+    ('GEMINI_API_KEY not configured', 500, 'GEMINI_API_KEY not configured'),
+    ('Gemini did not return an image', 502, 'Gemini did not return an image'),
+    ('/private/config token=secret-sentinel', 502, 'Icon generation failed'),
+])
+def test_icon_route_only_exposes_documented_public_messages(monkeypatch, message, status, expected):
+    from routes import icons
+    monkeypatch.setattr(icons, 'generate_icon_image', Mock(side_effect=icons.IconGenerationError(message, status)))
+    app = Flask(__name__)
+    app.register_blueprint(icons.icons_bp)
+    response = app.test_client().post('/api/icons/generate', json={'prompt': 'circle'})
+    assert response.status_code == status
+    assert response.json == {'error': expected}

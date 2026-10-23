@@ -1980,10 +1980,13 @@ function setNestedVal(obj,path,val){
   let cur=obj;
   for(let i=0;i<parts.length-1;i++){
     const key=parts[i];
+    if(key==='__proto__'||key==='constructor'||key==='prototype')return;
     if(!Object.prototype.hasOwnProperty.call(cur,key)||!cur[key]||typeof cur[key]!=='object')cur[key]=Object.create(null);
     cur=cur[key];
   }
-  cur[parts[parts.length-1]]=val;
+  const key=parts[parts.length-1];
+  if(key==='__proto__'||key==='constructor'||key==='prototype')return;
+  cur[key]=val;
 }
 function getNestedVal(obj,path){
   return path.split('.').reduce((o,k)=>o&&o[k],obj);
