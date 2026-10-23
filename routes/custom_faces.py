@@ -466,7 +466,7 @@ def promote_canvas_to_face():
         if not ok:
             return jsonify(payload), status
     else:
-        logger.warning("custom-faces: promote FORCED without perf attestation: %s", page_id)
+        logger.warning("custom-faces: promote FORCED without perf attestation: %s", str(page_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     # Copy to faces dir
     FACES_DIR.mkdir(parents=True, exist_ok=True)

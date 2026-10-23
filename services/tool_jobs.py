@@ -162,7 +162,7 @@ def create(
     }
     _write_atomic(_path(job_id), job)
     logger.info(
-        "tool_jobs: queued %s tool=%s tenant=%s profile=%s", job_id, tool, tenant, profile
+        "tool_jobs: queued %s tool=%s tenant=%s profile=%s", str(job_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(tool).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(tenant).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(profile).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85')
     )
     return job
 
@@ -178,7 +178,7 @@ def get(job_id: str) -> Optional[Dict[str, Any]]:
         with open(path, "r", encoding="utf-8") as fh:
             return json.load(fh)
     except Exception as exc:
-        logger.error("tool_jobs: unreadable job %s: %s", job_id, exc)
+        logger.error("tool_jobs: unreadable job %s: %s", str(job_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(exc).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         # An unreadable job is an ALERT, not a nothing — memory
         # `monitors-that-report-unreadable-as-fine`.
         return {"id": job_id, "status": FAILED, "error": "job file unreadable"}

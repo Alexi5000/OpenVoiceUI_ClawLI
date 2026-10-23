@@ -336,7 +336,7 @@ def create_app(config_override: dict = None):
             if _is_admin_path:
                 from services.auth import is_admin_user
                 if not is_admin_user(user_id):
-                    logger.warning('Admin authz denied: user_id=%s path=%s', user_id, path)
+                    logger.warning('Admin authz denied: user_id=%s path=%s', str(user_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(path).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                     if path.startswith('/api/'):
                         return jsonify({'error': 'Admin access required', 'code': 'admin_required'}), 403
                     return redirect('/')

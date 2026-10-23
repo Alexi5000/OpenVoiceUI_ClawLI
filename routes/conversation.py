@@ -1385,7 +1385,7 @@ def _conversation_inner():
         logger.error('ERROR: No JSON data in request')
         return jsonify({'error': 'No JSON data provided'}), 400
 
-    logger.info(f'Received conversation request: {data}')
+    logger.info(str(f'Received conversation request: {data}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
     user_message = data.get('message', '').strip()
     tts_provider = data.get('tts_provider') or os.getenv('DEFAULT_TTS_PROVIDER', 'groq')
@@ -1427,7 +1427,7 @@ def _conversation_inner():
     import re as _re
     _meaningful_chars = _re.sub(r'[^a-zA-Z0-9]', '', user_message)
     if len(_meaningful_chars) < 2:
-        logger.info(f'### FILTERED garbage STT: "{user_message}" ({len(_meaningful_chars)} meaningful chars)')
+        logger.info(str(f'### FILTERED garbage STT: "{user_message}" ({len(_meaningful_chars)} meaningful chars)').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         # Return a no-op stream in NDJSON format (same wire format the rest of
         # this route uses — was previously SSE, which the client could not
         # parse, leaving the UI stuck in "thinking" state forever).
@@ -1671,7 +1671,7 @@ def _conversation_inner():
                         )
                 context_parts.append(f'[UPLOADED IMAGE ANALYSIS: {_upload_desc}]')
             else:
-                logger.warning('Uploaded image not found or too large: %s', image_path)
+                logger.warning('Uploaded image not found or too large: %s', str(image_path).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                 context_parts.append('[UPLOADED IMAGE: File could not be analyzed — may be too large or missing.]')
         except Exception as exc:
             logger.warning('Vision analysis of uploaded image failed: %s', exc)
@@ -2117,7 +2117,7 @@ def _conversation_inner():
     # when you are" drift. This makes the on-screen greeting deterministic across
     # restarts. Profiles without a greeting fall back to the open-ended prompt.
     if user_message == '__session_start__':
-        logger.info(f"### CALL_START session={session_id}")
+        logger.info(str(f"### CALL_START session={session_id}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         _face = identified_person or {}
         _face_name = _face.get('name', '') if _face.get('name', '') != 'unknown' else ''
         _profile_greeting = ''
@@ -3717,7 +3717,7 @@ def conversation_abort():
     aborted = False
     if gw and hasattr(gw, 'abort_active_run'):
         aborted = gw.abort_active_run(session_key)
-    logger.info(f"### ABORT request session={session_key} aborted={aborted} source={source} text={source_text!r}")
+    logger.info(str(f"### ABORT request session={session_key} aborted={aborted} source={source} text={source_text!r}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     if source == 'stopVoiceInput':
         logger.info(f"### CALL_END session={session_key}")
     return jsonify({'ok': True, 'aborted': aborted})
@@ -3771,8 +3771,8 @@ def conversation_steer():
         record_recent_steer(session_key, message)
 
     logger.info(
-        f"### STEER request session={session_key} steered={steered} "
-        f"source={source} text={message!r}"
+        str(f"### STEER request session={session_key} steered={steered} "
+        f"source={source} text={message!r}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85')
     )
 
     # Log the steer message as a user turn so the transcript is preserved
@@ -3829,8 +3829,8 @@ def conversation_interject():
             record_recent_steer(session_key, message)
         action = 'queued'
         logger.info(
-            f"### INTERJECT [context] session={session_key} action={action} "
-            f"source={source} text={message!r}"
+            str(f"### INTERJECT [context] session={session_key} action={action} "
+            f"source={source} text={message!r}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85')
         )
     elif lane == 'steer':
         # Inject at next tool boundary — skip remaining tools
@@ -3839,8 +3839,8 @@ def conversation_interject():
             record_recent_steer(session_key, message)
         action = 'steered'
         logger.info(
-            f"### INTERJECT [steer] session={session_key} action={action} "
-            f"source={source} text={message!r}"
+            str(f"### INTERJECT [steer] session={session_key} action={action} "
+            f"source={source} text={message!r}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85')
         )
     else:  # fast_lane
         # Route to the fast lane agent via a separate session key.
@@ -3884,8 +3884,8 @@ def conversation_interject():
 
             action = 'fast_lane'
             logger.info(
-                f"### INTERJECT [fast_lane] session={fast_session_key} "
-                f"source={source} text={message!r} → response={_fast_text[:100]!r}"
+                str(f"### INTERJECT [fast_lane] session={fast_session_key} "
+                f"source={source} text={message!r} → response={_fast_text[:100]!r}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85')
             )
 
             # Return the fast lane response directly — frontend can TTS it
@@ -3906,8 +3906,8 @@ def conversation_interject():
             steered = gateway_manager.send_steer(message, session_key)
             action = 'steered'
             logger.info(
-                f"### INTERJECT [fast_lane→steer fallback] session={session_key} "
-                f"source={source} text={message!r}"
+                str(f"### INTERJECT [fast_lane→steer fallback] session={session_key} "
+                f"source={source} text={message!r}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85')
             )
 
     # Log the interjected message as a user turn for transcript
@@ -4082,7 +4082,7 @@ def tts_set_default_provider():
         _tts_invalidate()
 
         logger.info(
-            f'TTS default provider changed: {old_default} → {provider_id}'
+            str(f'TTS default provider changed: {old_default} → {provider_id}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85')
         )
         return jsonify({
             'ok': True,
@@ -4153,7 +4153,7 @@ def tts_set_default_voice():
         # Drop the cached config so the next read reflects the new voice order.
         _tts_invalidate()
 
-        logger.info(f'TTS default voice for {provider_id} → {voice}')
+        logger.info(str(f'TTS default voice for {provider_id} → {voice}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({
             'ok': True,
             'provider': provider_id,
@@ -4224,8 +4224,8 @@ def tts_generate():
             return jsonify({'error': 'Invalid TTS provider', 'available_providers': available}), 400
 
         logger.info(
-            f"TTS request: provider={provider_id}, text='{text[:50]}...', "
-            f"voice={voice}, lang={lang}, speed={speed}"
+            str(f"TTS request: provider={provider_id}, text='{text[:50]}...', "
+            f"voice={voice}, lang={lang}, speed={speed}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85')
         )
 
         gen_params = {'text': text}
@@ -4242,7 +4242,7 @@ def tts_generate():
         except ValueError as e:
             return jsonify({'error': 'Invalid parameter'}), 400
         except Exception as e:
-            logger.error(f'Speech generation failed for {provider_id}: {e}')
+            logger.error(str(f'Speech generation failed for {provider_id}: {e}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             return jsonify({'error': 'Speech generation failed'}), 500
 
         provider_format = provider.get_info().get('audio_format', 'wav')
@@ -4346,8 +4346,8 @@ def tts_clone_voice():
 
         # --- Route to provider ---
         logger.info(
-            f"Voice clone request: provider={provider_id}, name='{name}', "
-            f"url={audio_url[:80] if audio_url else 'N/A'}"
+            str(f"Voice clone request: provider={provider_id}, name='{name}', "
+            f"url={audio_url[:80] if audio_url else 'N/A'}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85')
         )
 
         if provider_id == 'qwen3':
@@ -4469,11 +4469,11 @@ def tts_delete_voice(voice_id):
         # Rename to .retired instead of removing (NEVER DELETE rule)
         renamed = voice_dir.with_name(voice_dir.name + '.retired')
         voice_dir.rename(renamed)
-        logger.info(f"Cloned voice retired: {voice_id}")
+        logger.info(str(f"Cloned voice retired: {voice_id}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
         return jsonify({'status': 'ok', 'voice_id': voice_id, 'action': 'retired'})
     except Exception as e:
-        logger.error(f"Failed to retire voice {voice_id}: {e}")
+        logger.error(str(f"Failed to retire voice {voice_id}: {e}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({'error': 'Request failed.'}), 500
 
 
@@ -4517,12 +4517,12 @@ def supertonic_tts_endpoint():
                          f"Available: {', '.join(valid_voices)}"
             }), 400
 
-        logger.info(f"Generating speech: {text[:50]}... (lang={lang}, speed={speed})")
+        logger.info(str(f"Generating speech: {text[:50]}... (lang={lang}, speed={speed})").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
         try:
             tts_instance = get_supertonic_for_voice(voice_style)
         except Exception as e:
-            logger.error(f'Failed to initialize TTS with voice {voice_style}: {e}')
+            logger.error(str(f'Failed to initialize TTS with voice {voice_style}: {e}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             return jsonify({'error': 'Failed to load voice style'}), 500
 
         try:
@@ -4586,7 +4586,7 @@ def tts_preview():
                 'available_providers': available,
             }), 400
 
-        logger.info(f"TTS preview: provider={provider_id}, voice={voice}, text='{text[:40]}'")
+        logger.info(str(f"TTS preview: provider={provider_id}, voice={voice}, text='{text[:40]}'").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
         audio_b64 = _tts_generate_b64(
             text=text,

@@ -181,7 +181,7 @@ def extract():
             return jsonify({'error': f'No extractor for {ext}'}), 415
 
     except Exception as exc:
-        logger.exception('Extraction failed for %s', filename)
+        logger.exception('Extraction failed for %s', str(filename).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({'error': 'Extraction failed'}), 500
     finally:
         try:
@@ -189,7 +189,7 @@ def extract():
         except Exception:
             pass
 
-    logger.info('Extracted %s → %d chars (%s)', filename, len(text), ext)
+    logger.info('Extracted %s → %d chars (%s)', str(filename).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), len(text), str(ext).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return jsonify({'text': text, 'type': ext.lstrip('.'), 'chars': len(text), **meta})
 
 
@@ -245,7 +245,7 @@ def analyze_csv():
         )
 
     except Exception as exc:
-        logger.exception('CSV analysis failed for %s', filename)
+        logger.exception('CSV analysis failed for %s', str(filename).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({'error': 'Analysis failed'}), 500
     finally:
         try:
@@ -253,7 +253,7 @@ def analyze_csv():
         except Exception:
             pass
 
-    logger.info('Analyzed CSV %s → %d rows × %d cols', filename, rows, cols)
+    logger.info('Analyzed CSV %s → %d rows × %d cols', str(filename).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), rows, cols)
     return jsonify({
         'summary': summary,
         'rows': rows,

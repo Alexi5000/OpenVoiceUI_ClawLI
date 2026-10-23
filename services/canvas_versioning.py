@@ -257,7 +257,7 @@ def restore_version(page_id: str, timestamp: int) -> bool:
     _file_hashes[current_file.name] = _content_hash(restored_content)
     _file_contents[current_file.name] = restored_content
 
-    logger.info(f'Restored canvas page {page_id} to version {timestamp}')
+    logger.info(str(f'Restored canvas page {page_id} to version {timestamp}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return True
 
 

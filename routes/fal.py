@@ -115,7 +115,7 @@ def fal_image():
     if body.get('num_inference_steps'):
         payload['num_inference_steps'] = int(body['num_inference_steps'])
 
-    logger.info('fal: model=%s prompt_len=%d num=%d', model, len(prompt), num_images)
+    logger.info('fal: model=%s prompt_len=%d num=%d', str(model).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), len(prompt), num_images)
     try:
         resp = http.post(FAL_ENDPOINTS[model],
                          headers={'Authorization': f'Key {FAL_KEY}',

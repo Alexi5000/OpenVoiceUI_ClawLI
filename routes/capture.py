@@ -456,7 +456,7 @@ def upload_photo(album_id):
         existing = _read_json_safe(receipt_path)
         if existing:
             logger.info("Idempotent upload -- client_uuid=%s already ingested as %s",
-                        client_uuid, existing.get('photo_id'))
+                        str(client_uuid).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(existing.get('photo_id')).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             return jsonify(existing), 200
 
     file = request.files.get('file')
@@ -840,7 +840,7 @@ def describe_photo(album_id, photo_id):
     try:
         result = _describe_with_vision(media_file)
     except Exception as exc:
-        logger.error("Vision describe failed for %s: %s", photo_id, exc)
+        logger.error("Vision describe failed for %s: %s", str(photo_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(exc).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return jsonify({'error': 'Vision API error'}), 502
 
     # Update photo record under flock

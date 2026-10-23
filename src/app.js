@@ -7,6 +7,7 @@
  * Loaded by thin-shell index.html via: <script type="module" src="src/app.js">
  */
 import { createSessionId } from './security/session-id.mjs';
+import { serializeLogData } from './security/log-data.mjs';
 import { createMusicEmbed } from './security/music-embed.mjs';
 import { inject } from './ui/AppShell.js';
 import { initUpdateChecker } from './ui/UpdateBanner.js';
@@ -67,7 +68,7 @@ connectAiradio();
                         const payload = JSON.parse(text.slice(jsonStart, i));
                         tags.push({ tagStart, tagEnd: i + 1, payload });
                     } catch (e) {
-                        console.warn('[CANVAS_ACTION] JSON parse failed:', text.slice(jsonStart, i + 1), e);
+                        console.warn(serializeLogData(['[CANVAS_ACTION] JSON parse failed:', text.slice(jsonStart, i + 1), e]));
                     }
                 }
                 return tags;
@@ -95,7 +96,7 @@ connectAiradio();
                 if (!iframe?.contentWindow) return;
                 while (pending.length > 0) {
                     const a = pending.shift();
-                    console.log('[Canvas] CANVAS_ACTION dispatch (flush):', a.action, a.payload);
+                    console.log(serializeLogData(['[Canvas] CANVAS_ACTION dispatch (flush):', a.action, a.payload]));
                     iframe.contentWindow.postMessage({ type: 'canvas-action', action: a.action, payload: a.payload }, '*');
                 }
             };
@@ -127,10 +128,10 @@ connectAiradio();
                     (doc?.readyState === 'complete' && doc?.location?.href !== 'about:blank')
                 );
                 if (ready) {
-                    console.log('[Canvas] CANVAS_ACTION dispatch:', action, payload);
+                    console.log(serializeLogData(['[Canvas] CANVAS_ACTION dispatch:', action, payload]));
                     iframe.contentWindow.postMessage({ type: 'canvas-action', action, payload }, '*');
                 } else {
-                    console.log('[Canvas] CANVAS_ACTION queued (iframe not ready):', action);
+                    console.log(serializeLogData(['[Canvas] CANVAS_ACTION queued (iframe not ready):', action]));
                     pending.push({ action, payload });
                 }
             };
@@ -666,7 +667,7 @@ connectAiradio();
 
             play(soundName) {
                 if (!Object.hasOwn(this.sounds, soundName)) {
-                    console.warn('Unknown sound:', soundName);
+                    console.warn(serializeLogData(['Unknown sound:', soundName]));
                     return;
                 }
 
@@ -4264,20 +4265,20 @@ connectAiradio();
                         // CLIENT-FACING RULE (Mike 2026-06-28): never dump a raw gateway
                         // message (e.g. "weekly limit"/"overloaded") into the visible chat.
                         // Show at most a neutral reconnecting line; raw detail to devtools only.
-                        console.warn('Clawdbot WS error:', data.message || 'Unknown error');
+                        console.warn(serializeLogData(['Clawdbot WS error:', data.message || 'Unknown error']));
                         this.addSystemMessage('One moment — reconnecting…');
                         this.callbacks.onError(data.message || 'Unknown error');
                         break;
 
                     default:
-                        console.log('Clawdbot: Unknown message type:', data.type);
+                        console.log(serializeLogData(['Clawdbot: Unknown message type:', data.type]));
                 }
             }
 
             async _handleProactiveMessage(data) {
                 const rawText = data.text || '';
                 if (!rawText.trim()) return;
-                console.log('📣 Proactive message from agent:', rawText.substring(0, 120));
+                console.log(serializeLogData(['📣 Proactive message from agent:', rawText.substring(0, 120)]));
                 ActionConsole.addEntry('system', '✅ Background task complete — agent update');
 
                 // Dispatch [CANVAS:page] / [CANVAS_MENU] tags (mirrors the HTTP
@@ -7013,7 +7014,7 @@ connectAiradio();
                 const toolCallId = message.tool_call_id;
                 const parameters = JSON.parse(message.parameters || '{}');
 
-                console.log('Tool call:', toolName, parameters);
+                console.log(serializeLogData(['Tool call:', toolName, parameters]));
 
                 let result = { success: false, error: 'Unknown tool' };
 
@@ -7150,7 +7151,7 @@ connectAiradio();
 
                 // Prevent multiple clips from playing at once
                 if (this.clipPlaying) {
-                    console.log('DJ clip already playing, ignoring:', toolName);
+                    console.log(serializeLogData(['DJ clip already playing, ignoring:', toolName]));
                     return {
                         success: false,
                         message: 'A DJ clip is already playing! Wait for it to finish before playing another.'
@@ -7161,7 +7162,7 @@ connectAiradio();
                 // Duck the music, play the clip, then restore music volume
 
                 try {
-                    console.log('Playing DJ clip:', toolName, clipInfo);
+                    console.log(serializeLogData(['Playing DJ clip:', toolName, clipInfo]));
                     this.clipPlaying = true;
                     this.currentClipAudio = new Audio(`${CONFIG.serverUrl}/sounds/${clipInfo.file}`);
                     this.currentClipAudio.volume = 0.9;  // Clip at 90% volume
@@ -7329,7 +7330,7 @@ connectAiradio();
                         content: JSON.stringify(result)
                     };
                     this.socket.send(JSON.stringify(response));
-                    console.log('Tool response sent:', toolCallId, result);
+                    console.log(serializeLogData(['Tool response sent:', toolCallId, result]));
                 }
             }
         }
@@ -7986,7 +7987,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                         const lastPage = localStorage.getItem('canvas_last_page');
                         if (lastPage) {
                             this.iframe.src = `/pages/${lastPage}`;
-                            console.log('Canvas loading last page:', lastPage);
+                            console.log(serializeLogData(['Canvas loading last page:', lastPage]));
                             // Notify server of what page is displayed
                             try {
                                 await fetch(`${CONFIG.serverUrl}/api/canvas/context`, {
@@ -8054,13 +8055,13 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                 const filename = pageId.endsWith('.html') ? pageId : pageId + '.html';
                 const stem = filename.replace(/\.html$/, '');
                 if (menu?.manifest?.pages?.[stem]) {
-                    console.log('[Canvas] showPageById exact:', stem);
+                    console.log(serializeLogData(['[Canvas] showPageById exact:', stem]));
                     menu.showPage(menu.manifest.pages[stem].filename);
                     return;
                 }
                 // Manifest doesn't have it (not synced yet, or a raw filename
                 // stem) — direct-load by filename. Still exact, no fuzzy fallback.
-                console.log('[Canvas] showPageById direct:', filename);
+                console.log(serializeLogData(['[Canvas] showPageById direct:', filename]));
                 if (this.iframe) {
                     this.iframe.src = `/pages/${filename}?t=${Date.now()}`;
                     localStorage.setItem('canvas_last_page', filename);
@@ -8077,7 +8078,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                 if (!menu?.manifest) {
                     // Manifest not loaded yet — try direct filename
                     const filename = pageName.replace(/\s+/g, '-').toLowerCase() + '.html';
-                    console.log('[Canvas] showPageByName direct:', filename);
+                    console.log(serializeLogData(['[Canvas] showPageByName direct:', filename]));
                     if (this.iframe) {
                         this.iframe.src = `/pages/${filename}?t=${Date.now()}`;
                         localStorage.setItem('canvas_last_page', filename);
@@ -8093,7 +8094,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                 } else {
                     // Fallback: try as-is with .html
                     const filename = pageName.replace(/\s+/g, '-').toLowerCase() + '.html';
-                    console.log('[Canvas] showPageByName fallback:', filename);
+                    console.log(serializeLogData(['[Canvas] showPageByName fallback:', filename]));
                     if (this.iframe) {
                         this.iframe.src = `/pages/${filename}?t=${Date.now()}`;
                         localStorage.setItem('canvas_last_page', filename);
@@ -8660,7 +8661,7 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
             },
 
             async reorderCategory(draggedCatId, targetCatId) {
-                console.log(`Reordering: ${draggedCatId} before ${targetCatId}`);
+                console.log(serializeLogData([`Reordering: ${draggedCatId} before ${targetCatId}`]));
 
                 // Get category keys in order
                 const catKeys = Object.keys(this.manifest.categories);

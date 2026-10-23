@@ -118,7 +118,7 @@ def _profile_tool_grants(profile_id: Optional[str]) -> Tuple[Set[str], Set[str]]
         logger.warning("tools: invalid profile id — no tools granted")
         return set(), set()
     if not path.exists():
-        logger.warning("tools: unknown profile %r — no tools granted", profile_id)
+        logger.warning("tools: unknown profile %r — no tools granted", str(profile_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return set(), set()
 
     try:
@@ -126,7 +126,7 @@ def _profile_tool_grants(profile_id: Optional[str]) -> Tuple[Set[str], Set[str]]
             data = json.load(fh)
     except Exception as exc:
         # Unreadable config is an ALERT, and it must fail CLOSED.
-        logger.error("tools: profile %s unreadable (%s) — no tools granted", profile_id, exc)
+        logger.error("tools: profile %s unreadable (%s) — no tools granted", str(profile_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(exc).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
         return set(), set()
 
     block = data.get("tools")
@@ -148,7 +148,7 @@ def _log_invocation(tool: str, params: Dict[str, Any], *, profile: Optional[str]
     before it (voice-agent-tool-bus.md §4)."""
     logger.info(
         "tool-invoke tool=%s outcome=%s profile=%s user=%s params=%s",
-        tool, outcome, profile, user_id, json.dumps(params, ensure_ascii=False)[:500],
+        str(tool).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(outcome).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(profile).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(user_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(json.dumps(params, ensure_ascii=False)[:500]).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'),
     )
 
 

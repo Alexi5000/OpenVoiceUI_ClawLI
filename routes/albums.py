@@ -136,7 +136,7 @@ def create_album():
     }
     _save_album(album_id, data)
     _update_index_entry(album_id, data)
-    logger.info('album created: %s "%s"', album_id, name)
+    logger.info('album created: %s "%s"', str(album_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(name).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return jsonify(data), 201
 
 
@@ -251,7 +251,7 @@ def upload_photo(album_id: str):
     _save_album(album_id, data)
     _update_index_entry(album_id, data)
 
-    logger.info('photo added to album %s: %s (gps=%s,%s)', album_id, safe_name, lat or '-', lng or '-')
+    logger.info('photo added to album %s: %s (gps=%s,%s)', str(album_id).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(safe_name).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(lat or '-').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'), str(lng or '-').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
     return jsonify({'photo': photo_entry, 'album_id': album_id}), 201
 
 
