@@ -219,6 +219,8 @@ def suno_app(monkeypatch, tmp_path):
     monkeypatch.setattr(suno, 'completed_songs_queue', [])
     monkeypatch.setattr(suno, 'failed_songs_queue', [])
     monkeypatch.setattr(suno, 'SUNO_API_KEY', 'dummy-suno-key')
+    monkeypatch.setattr(suno, 'SUNO_CALLBACK_TOKENS_FILE', tmp_path / 'cb-tokens.json')
+    monkeypatch.setattr(suno, 'SUNO_CALLBACK_URL', 'https://voice.example/api/suno/callback')
 
     def build():
         app, _ = create_app({'TESTING': True, 'RATELIMIT_ENABLED': False})
@@ -232,7 +234,7 @@ def test_unsigned_callback_rejected_when_clerk_enabled_without_secret(suno_app, 
     monkeypatch.setenv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_alias')
     monkeypatch.setattr(suno, 'SUNO_WEBHOOK_SECRET', '')
     r = build().post('/api/suno/callback', json=_ERROR_EVENT)
-    assert r.status_code == 503
+    assert r.status_code == 403
     assert suno.failed_songs_queue == []
 
 
@@ -258,25 +260,77 @@ def test_callback_with_secret_requires_token_or_signature(suno_app, monkeypatch)
                        headers={'X-Suno-Signature': sig}).status_code == 200
 
 
-def test_callback_url_carries_derived_token_not_raw_secret(suno_app, monkeypatch):
+def _cb_token(url):
+    from urllib.parse import parse_qs, urlsplit
+    return parse_qs(urlsplit(url).query)['cb'][0]
+
+
+def test_callback_url_carries_fresh_per_request_token(suno_app, monkeypatch):
     suno, _ = suno_app
-    monkeypatch.setattr(suno, 'SUNO_CALLBACK_URL', 'https://voice.example/api/suno/callback')
+    for secret in ('', 'webhook-secret'):
+        monkeypatch.setattr(suno, 'SUNO_WEBHOOK_SECRET', secret)
+        u1, u2 = suno._callback_url(), suno._callback_url()
+        assert u1.startswith('https://voice.example/api/suno/callback?cb=')
+        assert _cb_token(u1) != _cb_token(u2)
+        assert len(_cb_token(u1)) >= 40
+        assert 'webhook-secret' not in u1
+    # Only hashes are stored, never the token itself.
+    raw = (suno.SUNO_CALLBACK_TOKENS_FILE).read_text()
+    assert _cb_token(u1) not in raw
+
+
+def test_callback_url_without_configured_url_is_unchanged(suno_app, monkeypatch):
+    suno, _ = suno_app
+    monkeypatch.setattr(suno, 'SUNO_CALLBACK_URL', '')
+    assert suno._callback_url() == ''
+
+
+def test_per_request_token_authenticates_callback_without_secret(suno_app, monkeypatch):
+    suno, build = suno_app
+    monkeypatch.setenv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_alias')
     monkeypatch.setattr(suno, 'SUNO_WEBHOOK_SECRET', '')
-    assert suno._callback_url() == 'https://voice.example/api/suno/callback'
-    monkeypatch.setattr(suno, 'SUNO_WEBHOOK_SECRET', 'webhook-secret')
-    url = suno._callback_url()
-    assert url == f'https://voice.example/api/suno/callback?token={suno._callback_token()}'
-    assert 'webhook-secret' not in url
+    client = build()
+    token = _cb_token(suno._callback_url())
+    assert client.post('/api/suno/callback?cb=forged', json=_ERROR_EVENT).status_code == 403
+    assert suno.failed_songs_queue == []
+    assert client.post(f'/api/suno/callback?cb={token}', json=_ERROR_EVENT).status_code == 200
+    assert len(suno.failed_songs_queue) == 1
+    # Repeated callbacks for the same task (text/first/complete stages) are fine.
+    assert client.post(f'/api/suno/callback?cb={token}', json=_ERROR_EVENT).status_code == 200
+
+
+def test_per_request_token_is_bound_to_first_task_id(suno_app, monkeypatch):
+    suno, build = suno_app
+    monkeypatch.setenv('CLERK_PUBLISHABLE_KEY', 'pk_test_canonical')
+    monkeypatch.setattr(suno, 'SUNO_WEBHOOK_SECRET', '')
+    client = build()
+    token = _cb_token(suno._callback_url())
+    assert client.post(f'/api/suno/callback?cb={token}', json=_ERROR_EVENT).status_code == 200
+    other = {'code': 200, 'data': {'callbackType': 'error', 'task_id': 'other-task',
+                                    'errorMessage': 'fixture'}}
+    assert client.post(f'/api/suno/callback?cb={token}', json=other).status_code == 403
+    assert len(suno.failed_songs_queue) == 1
+
+
+def test_expired_per_request_token_is_rejected(suno_app, monkeypatch):
+    suno, build = suno_app
+    monkeypatch.setenv('CLERK_PUBLISHABLE_KEY', 'pk_test_canonical')
+    monkeypatch.setattr(suno, 'SUNO_WEBHOOK_SECRET', '')
+    token = _cb_token(suno._callback_url())
+    real_time = suno.time.time
+    monkeypatch.setattr(suno.time, 'time', lambda: real_time() + suno._CALLBACK_TOKEN_TTL_S + 1)
+    assert build().post(f'/api/suno/callback?cb={token}', json=_ERROR_EVENT).status_code == 403
+    assert suno.failed_songs_queue == []
 
 
 def test_generate_request_sends_tokenized_callback(suno_app, monkeypatch):
     suno, build = suno_app
-    monkeypatch.setattr(suno, 'SUNO_CALLBACK_URL', 'https://voice.example/api/suno/callback')
-    monkeypatch.setattr(suno, 'SUNO_WEBHOOK_SECRET', 'webhook-secret')
+    monkeypatch.setattr(suno, 'SUNO_WEBHOOK_SECRET', '')
     with patch.object(suno.http_requests, 'post', side_effect=suno.http_requests.RequestException('stub')) as post:
         build().post('/api/suno', json={'action': 'generate', 'prompt': 'dummy'})
     assert post.called
-    assert post.call_args.kwargs['json']['callBackUrl'] == suno._callback_url()
+    sent = post.call_args.kwargs['json']['callBackUrl']
+    assert suno._verify_callback_token(_cb_token(sent), 'dummy-task')
 
 
 def test_unsigned_callback_still_accepted_in_local_mode(suno_app, monkeypatch):
