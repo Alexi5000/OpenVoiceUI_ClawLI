@@ -199,6 +199,7 @@ def generate_tts_chunked(provider, text: str, voice: str, max_chars: int = 800) 
 # (WO-3.1) and are read THROUGH services.tts_fallback at call time so an admin
 # edit takes effect on the next utterance with no restart. The inline defaults
 # in services.tts_fallback._DEFAULT_FALLBACK are the guaranteed fallback.
+from services.voice_catalog import owner_of, voice_mismatch
 from services.tts_fallback import (  # noqa: E402
     get_fallback_chain, get_voice_gender_map,
 )
@@ -273,6 +274,10 @@ def _generate_with_provider(tts_provider: str, text: str, voice: str) -> bytes:
         if len(text) > 400:
             return generate_tts_chunked(provider, text, voice, max_chars=400)
         return provider.generate_speech(text=text, voice=voice)
+    # qwen3-mlx splits per sentence itself (one request per sentence keeps the
+    # cloned voice from drifting) and returns one stitched WAV.
+    if tts_provider == 'qwen3-mlx':
+        return provider.generate_speech(text=text, voice=voice)
     # Cloud providers returning MP3 (groq, elevenlabs) handle their own limits
     if audio_format == 'mp3':
         return provider.generate_speech(text=text, voice=voice)
@@ -316,6 +321,19 @@ def generate_tts_b64(
         voice = fallback_state['voice']
         logger.info(str(f"TTS using sticky fallback: provider={tts_provider}, voice={voice}").replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
+    # ── Voice not on this engine? Map it before the first attempt ─────────────
+    # A profile can pair a voice with an engine that does not have it (tenant-g
+    # 2026-10-02: "troy", a Groq voice, on supertonic). Supertonic is the END of the
+    # fallback chain, so the old path failed every sentence and spoke nothing for ten
+    # days. Use the engine's same-gender voice and say so loudly in the log; the save-
+    # time check in profiles/manager.py stops new mismatches being written.
+    _mm = voice_mismatch(tts_provider, voice)
+    if _mm:
+        _mapped = _map_voice_to_fallback(voice, owner_of(voice) or 'unknown', tts_provider)
+        if _mapped != voice:
+            logger.warning("TTS voice mismatch: using a compatible fallback voice; fix the profile voice")
+            voice = _mapped
+
     # ── Try primary provider ──────────────────────────────────────────────────
     last_err = None
     # Resemble gets 2 attempts (was 6 — TTS-2). Its custom CLONE voice is worth a
@@ -324,7 +342,7 @@ def generate_tts_b64(
     # (see _generate_with_provider) keeps each request short, so 2 attempts against
     # the now-30s STREAM_TIMEOUT is the sane ceiling. Other cloud providers
     # (groq/elevenlabs/qwen3) also get 2.
-    if tts_provider in ('resemble', 'groq', 'qwen3', 'qwen3-local', 'elevenlabs'):
+    if tts_provider in ('resemble', 'groq', 'qwen3', 'qwen3-local', 'qwen3-mlx', 'elevenlabs'):
         max_attempts = 2
     else:
         max_attempts = _MAX_RETRIES + 1
@@ -356,9 +374,9 @@ def generate_tts_b64(
     # ── Fallback through the chain (transitive, cycle-protected — TTS-7) ──────
     # e.g. resemble → groq → supertonic. If groq is also down, we keep walking
     # to supertonic (free, always-on) instead of going silent.
-    # Custom CLONED voices (Resemble — e.g. bhb's Kyle) must NEVER be substituted
+    # Custom CLONED voices (Resemble — e.g. a tenant's cloned character voice) must NEVER be substituted
     # with a different voice. For tenants with RESEMBLE_NO_FALLBACK=1, a brief
-    # silence beats a wrong/switching voice. (Mike 2026-06-07, bhb)
+    # silence beats a wrong/switching voice. (Mike 2026-06-07, persona-tenant)
     resemble_no_fallback = (
         tts_provider == 'resemble'
         and os.getenv('RESEMBLE_NO_FALLBACK', '').strip().lower() in ('1', 'true', 'yes', 'on')

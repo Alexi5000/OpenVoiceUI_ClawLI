@@ -123,7 +123,7 @@ def _load_voice_system_prompt() -> str:
 
 
 # ── DEGRADED-MODE ADDENDUM for the Z.AI-direct fallback ─────────────────────
-# WHY (danielle, 2026-08-31 + 2026-09-01, escalated by danielle-sms@mesh):
+# WHY (tenant-j, 2026-08-31 + 2026-09-01, escalated by a tenant SMS agent):
 # when the openclaw turn stalls (llm_inference 500-600s with ZERO output tokens,
 # then "STREAM EXIT ... unprocessed"), we answer the user from a DIRECT Z.AI call.
 # That call:
@@ -225,7 +225,7 @@ _VOICE_INSTRUCTIONS = (
     "CUSTOM FACE WORKFLOW (when the user wants a page as the actual face, not a canvas page): "
     "TEST FIRST: open it as a canvas page and verify it runs light (>=50fps on the user's device, "
     "UI stays responsive, RAF-only, pause-when-hidden) — full performance gate + workflow in "
-    "/mnt/shared-skills/custom-faces/SKILL.md; read it before building a face. "
+    "the custom-faces skill (bundled at skills/custom-faces/SKILL.md); read it before building a face. "
     "Step 1 — the page needs <meta name=\"face-name\" content=\"...\"> (+ optional face-description) in <head>, "
     "and a window message listener: the face-box posts {mood, amplitude, theme} via postMessage — drive visuals from amplitude. "
     "GET /api/custom-faces/template shows the expected handler shape. "
@@ -300,15 +300,17 @@ _VOICE_INSTRUCTIONS = (
     # --- SoundCloud (real playback, no auth) ---
     "SOUNDCLOUD: [SOUNDCLOUD:<full-track-url>] — embeds the track in the music player and plays it. "
     "Always use with a full https://soundcloud.com/<user>/<slug> URL. NEVER invent URLs — get them from "
-    "CLIENT.md (if present) or run the `soundcloud` skill: "
-    "`python3 /mnt/shared-skills/soundcloud/scripts/find_track.py \"artist - track\" --json`. "
+    "CLIENT.md (if present) or, if the `soundcloud` skill is installed, run its "
+    "`scripts/find_track.py \"artist - track\" --json` (path relative to that skill's folder) "
+    "and use the `url` field; with neither, ask the user for the link. "
     "For a full-screen embed page instead of the small player: [SOUNDCLOUD_PAGE:<url>]. "
     "Default to this for any 'play <track>' request when the artist has SoundCloud presence. "
 
     # --- Bandcamp (real playback, no auth) ---
     "BANDCAMP: [BANDCAMP:<full-album-or-track-url>] — embeds the Bandcamp player in the music panel. "
     "URL must match <artist>.bandcamp.com/album/<slug> or .../track/<slug>. NEVER invent URLs — "
-    "use the `bandcamp` skill: `python3 /mnt/shared-skills/bandcamp/scripts/find_track.py \"artist - album\" --json`. "
+    "if the `bandcamp` skill is installed, run its `scripts/find_track.py \"artist - album\" --json` "
+    "(path relative to that skill's folder) and use the `url` field; otherwise ask the user for the link. "
     "For full-screen canvas page: [BANDCAMP_PAGE:<url>]. "
 
     # --- Facial expressions / mood ---
@@ -553,13 +555,13 @@ _double_empty_window_start: float = 0
 _DOUBLE_EMPTY_MAX_RESTARTS: int = 2       # max restart flags per window
 _DOUBLE_EMPTY_WINDOW_SECONDS: float = 300  # 5-minute sliding window
 
-#: ── Context-bloat guard (2026-07-13, bhb session overflow; #94 2026-07-19) ─
+#: ── Context-bloat guard (2026-07-13, persona-tenant session overflow; #94 2026-07-19) ─
 #: The STATIC instruction blocks (voice action-tag instructions, canvas page
 #: list, track list, DJ sounds, profile instructions, canvas style,
 #: CURRENT_USER/office briefing, latest generated song) used to be re-sent
 #: verbatim on EVERY turn (~17KB/turn). The gateway session keeps full
 #: history, so after a day of voice chat the duplicated blocks alone overflowed
-#: GLM-5's context window (bhb 2026-07-13: 199-message session, repeated
+#: GLM-5's context window (persona-tenant 2026-07-13: 199-message session, repeated
 #: 'Context overflow' + a wedged ReplyRunAlreadyActive run → UI stuck in
 #: 'Connection lost — retrying'). The full static block is sent only when
 #: its CONTENT CHANGES (hash), on __session_start__, or as a periodic refresh;
@@ -805,7 +807,7 @@ def _with_recent_history(fallback_msg: str) -> str:
     The direct fallback bypasses the openclaw session entirely, so without
     this the fallback model answers with ZERO conversation memory — the
     client-facing "amnesia" replies ("no indication of what 'one' refers
-    to", phatty 2026-07-02). Reuses the recovery-prime builder (last turns
+    to", tenant-e 2026-07-02). Reuses the recovery-prime builder (last turns
     from conversation_log). Fail-open: on any problem, return the message
     unchanged.
     """
@@ -843,7 +845,7 @@ def restore_recovery_prime(prime: str | None) -> None:
     recovery session dies (common — the same upstream brownout that poisoned
     the session is usually still in progress), the conversation context is
     lost forever and the user meets an amnesiac agent. Verified live on
-    bricks 2026-06-11 19:58 ("Injecting session-recovery prime (2758 chars)"
+    tenant-p 2026-06-11 19:58 ("Injecting session-recovery prime (2758 chars)"
     immediately followed by "EMPTY-FINAL RETRY FAILED: both attempts empty").
 
     Only restores while still in recovery mode and only if no newer prime has
@@ -980,7 +982,7 @@ def _check_recovery_timeout():
     the next conversation back onto the possibly-still-poisoned main key:
     every >10-minute pause cost the user two dead turns (empty + retry-empty)
     and a context switch into yet another recovery session. Verified live on
-    bricks 2026-06-11: TIMEOUT-clear of a healthy recovery → next interaction
+    tenant-p 2026-06-11: TIMEOUT-clear of a healthy recovery → next interaction
     on main → DOUBLE EMPTY → new recovery.
     """
     global _session_recovery_key, _recovery_context_prime
@@ -1123,6 +1125,68 @@ def normalize_action_tags(text: str) -> str:
     return text
 
 
+# Tags that DO work: the frontend executes them. A reply carrying one acted this
+# turn even with zero tool calls, and nudging it as a broken promise can re-run the
+# action (a second paid Suno generation). Measured 2026-10-01 01:55Z on tenant-g: a
+# reply with [SUNO_GENERATE:...] and no tool call was nudged. Expressive tags
+# ([MOOD:], [WAIT:], [SLEEP]) are not work and do not count.
+WORK_ACTION_TAG_RE = re.compile(
+    r'\[(?:SUNO_GENERATE|JINGLE_GENERATE|CANVAS|CANVAS_URL|CANVAS_ACTION|CANVAS_STYLE|CANVAS_MENU|CANVAS_CLOSE|'
+    r'MUSIC_PLAY|MUSIC_STOP|START_TASK|TASK_COMPLETE|SOUNDCLOUD|SOUNDCLOUD_PAGE|BANDCAMP_PAGE|'
+    r'OPEN_TAB|NAVIGATE|CLICK|FILL|SCROLL|BROWSE_ACTION|DOWNLOAD_IMAGE|REGISTER_FACE|HIGHLIGHT)'
+    r'(?::[^\]]*)?\]'
+)
+
+# "I'll / let me ... <verb>" with the committing verb anywhere within 80 chars of
+# the opener, so compound phrasing like "I'll mark the ones and add a button"
+# still catches `add`.
+PROMISE_RE = re.compile(
+    r"\b(?:let me|i'?ll|i am going to|i'?m going to|i will|i'?m about to|gonna|going to)\b"
+    r".{0,80}?"
+    r"\b(?:write|build|create|update|save|add|edit|run|fetch|generate|make|"
+    r"set up|put together|pull|grab|load|open|check|look|query|send|post|commit|push|"
+    r"refactor|deploy|install|rebuild|restart|scaffold|configure|"
+    r"mark|highlight|tag|label|link|embed|include|list|draft|prepare|"
+    r"implement|modify|append|remove|delete|clean|organize|sort|render|"
+    r"test|publish|upload|download|compile|parse|extract|apply|assign|"
+    r"wire|hook|bind|attach|register|inject|populate|fill|insert|replace|"
+    r"rename|move|copy|merge|split|style|design|format|export|import|"
+    r"patch|fix|revert|rollback|scaffold|bootstrap|finalize|finish)"
+    r"\b",
+    re.IGNORECASE,
+)
+
+
+def gateway_reports_tools(gateway_id) -> bool:
+    """True only for the OpenClaw gateway, the one gateway that reports tool_count.
+    A plugin gateway (comms-brain, hermes, ...) always reports 0 tools, so the
+    uncommitted-promise detector would fire on every "I'll ..." reply it gives and
+    send a bracket-only [SYSTEM: ...] steer it was never built to answer. Measured on
+    test-dev 2026-10-20 01:14-01:21Z: comms-brain answered each steer with its own
+    "Sorry, I didn't catch that." 4 times in 7 minutes, spoken after real replies."""
+    return gateway_id in (None, 'openclaw')
+
+
+def is_uncommitted_promise(text, tool_count, llm_ms):
+    """True when a reply promised work it did not do: it says "I'll / let me <verb>",
+    called ZERO tools, carried no work-doing action tag, took >1s (instant
+    degenerate empties go to the empty-retry branch), and does not END with a
+    question. A closing question is the agent asking the user for a decision
+    (tenant-e 2026-07-02); forcing "do it now" bypasses the answer AND lands a
+    chat.send in the finalization window, where it coalesces into a bare final."""
+    if not text or not text.strip():
+        return False
+    if tool_count:
+        return False
+    if (llm_ms or 0) <= 1000:
+        return False
+    if WORK_ACTION_TAG_RE.search(text):
+        return False
+    if text.strip().rstrip('*_ \n').endswith('?'):
+        return False
+    return bool(PROMISE_RE.search(text))
+
+
 def strip_canvas_action_tags(text: str) -> str:
     """Strip [CANVAS_ACTION:{...JSON...}] tags via a brace walker.
 
@@ -1206,6 +1270,7 @@ def clean_for_tts(text: str) -> str:
     text = re.sub(r'\[MUSIC_STOP\]', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\[MUSIC_NEXT\]', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\[SUNO_GENERATE:[^\]]*\]', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\[JINGLE_GENERATE:[^\]]*\]', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\[SLEEP\]', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\[AIRADIO_[A-Z_]+(?::[^\]]*)?\]', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\[MOOD:[^\]]*\]', '', text, flags=re.IGNORECASE)
@@ -1594,10 +1659,12 @@ def _conversation_inner():
                             logger.warning('Sync Gemini vision failed (%s) — falling back to '
                                            'vision@mesh queue for %s', type(_ge).__name__, _img_file.name)
                 if _upload_desc is None:
-                    # No cache yet — route to vision@mesh via openclaw container (has mesh-send + mesh mount)
-                    # Non-blocking: mesh task, vision agent writes .image-intel sidecar async
-                    # OVU runs inside Docker; mesh-send isn't in this image but openclaw-<tenant> has it.
-                    import subprocess as _sp
+                    # No cache yet — queue a vision@mesh task for this tenant.
+                    # Non-blocking: mesh task, vision agent writes .image-intel sidecar async.
+                    # SEC-059: with RESTART_VIA_BROKER=1 this is POST /mesh-task/<tenant> on the
+                    # host broker (mesh-send runs on the host side, bound to this tenant); the
+                    # legacy path lives in services/host_broker.py.queue_vision_task_legacy.
+                    from services import host_broker as _hb
                     # Initialised BEFORE the `if _tenant` guard on purpose: it is read after that
                     # block, so a tenant-less request would otherwise raise NameError. Defaulting
                     # to False also makes the no-tenant path honest — nothing was queued there
@@ -1612,35 +1679,30 @@ def _conversation_inner():
                             f'tenant: {_tenant}\n'
                             f'filename: {_img_file.name}'
                         )
-                        _mesh_cmd = (
-                            f'AGENT_URI=openvoiceui@mesh '
-                            f'/mnt/shared-skills/agent-mesh/bin/mesh-send '
-                            f'--to vision@mesh --kind task '
-                            f'--subject analyze-{_img_file.stem[:40]}'
-                        )
-                        # CHECK THE RETURN CODE. This previously ran with capture_output=True, no
-                        # check=, and no inspection of returncode — then logged "Image analysis
-                        # queued" unconditionally. A mesh-send that exited non-zero (unknown kind,
-                        # missing mailbox, rate limit) was reported as SUCCESS BY THE SENDER while
-                        # nothing was ever queued, and the user was told "being analyzed now" for
-                        # an image nothing would ever look at. Success must come from the receiver,
-                        # or at minimum from the exit code — never from having reached the call.
+                        _subject = _hb.safe_subject(_img_file.stem)
+                        # SUCCESS COMES FROM THE RESPONSE. This previously logged "Image analysis
+                        # queued" unconditionally after reaching the call. A mesh-send that exited
+                        # non-zero (unknown kind, missing mailbox, rate limit) was reported as
+                        # SUCCESS BY THE SENDER while nothing was ever queued, and the user was told
+                        # "being analyzed now" for an image nothing would ever look at. The broker
+                        # answers ok only on mesh-send exit 0 with the delivered path; the legacy
+                        # helper returns True only on exit 0.
                         _queued = False
                         try:
-                            _r = _sp.run(
-                                ['docker', 'exec', '-i', f'openclaw-{_tenant}',
-                                 'bash', '-c', _mesh_cmd],
-                                input=_msg_body.encode(),
-                                timeout=8, capture_output=True,
-                            )
-                            if _r.returncode == 0:
+                            if _hb.via_broker():
+                                _res = _hb.queue_vision_task(_tenant, _subject, _msg_body)
                                 _queued = True
-                                logger.info('Image analysis queued to vision@mesh via openclaw-%s: %s',
-                                            _tenant, _img_file.name)
+                                logger.info('Image analysis queued to vision@mesh via host broker '
+                                            'for %s: %s (%s)', _tenant, _img_file.name,
+                                            _res.get('delivered', ''))
                             else:
-                                logger.error('vision@mesh queue FAILED rc=%s tenant=%s file=%s stderr=%s',
-                                             _r.returncode, _tenant, _img_file.name,
-                                             (_r.stderr or b'').decode('utf-8', 'replace')[:300])
+                                _queued = _hb.queue_vision_task_legacy(_tenant, _subject, _msg_body)
+                                if _queued:
+                                    logger.info('Image analysis queued to vision@mesh via openclaw-%s: %s',
+                                                _tenant, _img_file.name)
+                        except _hb.BrokerError as _be:
+                            logger.error('vision@mesh queue FAILED via host broker tenant=%s file=%s: %s',
+                                         _tenant, _img_file.name, _be)
                         except Exception as _se:
                             logger.warning('Failed to queue vision task to vision@mesh: %s', _se)
                     # Do not promise an analysis that was never queued.
@@ -1669,7 +1731,17 @@ def _conversation_inner():
                             'could not be started. If the user asks about it, run the image tool on '
                             'that exact workspace path — the image tool rejects /app/runtime/uploads/.'
                         )
-                context_parts.append(f'[UPLOADED IMAGE ANALYSIS: {_upload_desc}]')
+                context_parts.append(
+                    f'[UPLOADED IMAGE ANALYSIS: {_upload_desc}]\n'
+                    '[ATTACHED-IMAGE RULE: The user attached THIS image with their message. '
+                    'If their request is about this image (use it, recreate it, reorganize it, '
+                    'build from it), the attached image is the subject of the task — work from '
+                    'the description above. Do NOT substitute other files from the uploads '
+                    'library; that fallback is only for when the user gives no direction. If '
+                    'the task needs the individual image files visible inside this image and '
+                    'they are not separately available, say so and ask the user to attach them '
+                    'or name which upload files map to them.]'
+                )
             else:
                 logger.warning('Uploaded image not found or too large: %s', str(image_path).replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
                 context_parts.append('[UPLOADED IMAGE: File could not be analyzed — may be too large or missing.]')
@@ -1903,19 +1975,11 @@ def _conversation_inner():
         except Exception:
             pass
 
-        # Recently FAILED Suno generations — agent must tell user something went wrong
-        try:
-            from routes.suno import failed_songs_queue
-            if failed_songs_queue:
-                _failed = failed_songs_queue[-3:]
-                _failed_lines = []
-                for f in _failed:
-                    label = f.get('brand') or f.get('title') or 'a track'
-                    reason = f.get('reason', 'unknown error')
-                    _failed_lines.append(f'{label!r} — {reason}')
-                context_parts.append(f'[Suno generation FAILED: {"; ".join(_failed_lines)} — apologize to user and offer to try again]')
-        except Exception:
-            pass
+        # Recently FAILED Suno generations are NOT injected here. This block used to append
+        # them to context_parts on every turn and nothing ever cleared the queue, so one failure
+        # would have been re-announced on every turn until a restart. Failures are now delivered
+        # ONCE as a [SYSTEM] prefix on the next real user turn, next to the completion note
+        # (search SUNO-REJECT-SURFACED below).
 
         # Available canvas pages (agent needs IDs for [CANVAS:page-id])
         try:
@@ -1950,7 +2014,7 @@ def _conversation_inner():
     # the text_done capture hook in stream_response evaluates _grot_active on
     # EVERY turn (closure), and the assignments below only run in the
     # __session_start__ branch. Without these defaults every non-greeting turn
-    # raised NameError mid-stream → 'Connection lost — retrying' (bhb 2026-07-13).
+    # raised NameError mid-stream → 'Connection lost — retrying' (persona-tenant 2026-07-13).
     _grot_active = False
     _grot_state_path = ''
     _persona_greeting_prompt = ''
@@ -2005,8 +2069,10 @@ def _conversation_inner():
         # a non-admin customer get NO mesh access; admin sessions get full
         # both-direction access. host/test-dev/webtops bypass the gate.
         # See /mnt/system/base/skills/agent-mesh/bin/mesh-gate-check.
-        ADMIN_CLERK_ID = 'user_3AJGqe2Fgn1qD580pg6tt2ysplR'
-        if _clerk_uid == ADMIN_CLERK_ID:
+        # The platform operator comes from PLATFORM_ADMIN_USER_IDS (services/auth.py);
+        # no id is built into the source.
+        from services.auth import is_platform_admin as _is_platform_admin
+        if _is_platform_admin(_clerk_uid):
             try:
                 _gate_path = '/app/runtime/uploads/.mesh-admin-session'
                 _ts_iso = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
@@ -2126,7 +2192,7 @@ def _conversation_inner():
                 _profile_greeting = (getattr(_prof.conversation, 'greeting', '') or '').strip()
         except Exception:
             _profile_greeting = ''
-        # ENTERTAINMENT-PERSONA greeting (opt-in per profile, e.g. Kyle/BHB).
+        # ENTERTAINMENT-PERSONA greeting (opt-in per profile, e.g. persona-tenant).
         # A profile that defines conversation.greeting_angles wants a FRESH, in-character
         # greeting every single wake-up — never one canned line, and never the same TOPIC
         # twice in a row. We ROTATE through the profile's angles (a persisted index that
@@ -2135,7 +2201,7 @@ def _conversation_inner():
         # last few openers. The greeting is produced by the gateway agent that loads the
         # real persona — so the humour comes from the character, not a thin caricature here.
         # Gated entirely on greeting_angles → any tenant without it is completely unaffected.
-        # (BHB/Kyle 2026-07-13 — replaces the wrong 'King of Entrepreneurship' caricature.)
+        # (persona-tenant 2026-07-13 — replaces the wrong 'King of Entrepreneurship' caricature.)
         _grot_active = False
         _grot_state_path = ''
         _persona_greeting_prompt = ''
@@ -2184,7 +2250,7 @@ def _conversation_inner():
                                     f"naturally, or not.")
                 # Per-profile bit style: a profile can define conversation.greeting_bit_style
                 # to control the SHAPE of the opener (length, pacing, sound tags). Without it,
-                # the default stays the short punchy 40-word greeting. (Kyle/BHB wants the
+                # the default stays the short punchy 40-word greeting. (persona-tenant wants the
                 # full episode-style cold-open ramble — 2026-07-14.)
                 _bit_style = (_pconf.get('greeting_bit_style') or '').strip()
                 if not _bit_style:
@@ -2257,9 +2323,16 @@ def _conversation_inner():
         except Exception as _e:
             logger.warning(f'Suno pending-note injection failed: {_e}')
 
+    # SUNO-REJECT-SURFACED (2026-09-29): see _suno_failure_prefix().
+    if user_message not in ('__session_start__',):
+        _suno_prefix = _suno_failure_prefix() + _suno_prefix
+
     _gateway_message_with_suno = _suno_prefix + _gateway_message if _suno_prefix else _gateway_message
     message_with_context = context_prefix + _gateway_message_with_suno if context_prefix else _gateway_message_with_suno
     ai_response = None
+    # True when the gateway ended the turn on purpose with no reply
+    # (text_done deferred=True) — see the streaming DEFERRED branch.
+    _deferred_turn = False
     captured_actions = []
 
     # ── PRIMARY PATH: Gateway (routed by gateway_id from request/profile) ──
@@ -2679,9 +2752,16 @@ def _conversation_inner():
                                 _tts_pending.append(_fire_tts(_remaining_interim))
                                 _tts_buf = ''
 
-                            # If no sentences were extracted mid-stream, fire TTS
-                            # for the full interim text
-                            if not _tts_pending and interim_response:
+                            # Fallback: no sentences extracted mid-stream, fire TTS
+                            # for the full interim text. Guard on _chunks_sent, NOT
+                            # just _tts_pending (same double-audio bug text_done
+                            # fixed 2026-07-12): the delta path pops finished
+                            # sentences from _tts_pending as their audio is yielded,
+                            # so when the interim event arrives after a fast sentence
+                            # the list is already empty and this re-spoke the WHOLE
+                            # reply a second time (measured live on test-dev
+                            # 2026-09-15 — same 217-char sentence TTS'd twice).
+                            if not _tts_pending and _chunks_sent == 0 and interim_response:
                                 tts_text_interim = clean_for_tts(interim_response)
                                 if tts_text_interim and tts_text_interim.strip():
                                     _tts_pending.append(_fire_tts(tts_text_interim))
@@ -2716,6 +2796,53 @@ def _conversation_inner():
 
                         if evt['type'] == 'text_done':
                             logger.info(f"### TEXT_DONE received. response={len(evt.get('response', '') or '')} chars, _tts_pending={len(_tts_pending)}, _tts_buf={repr(_tts_buf[:80])}")
+                            # ── DEFERRED turn: the gateway ended this turn on purpose ──
+                            # A gateway sets deferred=True with an empty response when
+                            # the agent is still holding the words and will answer later
+                            # through its own proactive push channel. That is NOT a
+                            # failure: no empty-retry, no fallback LLM, no substituted
+                            # line, no TTS (NO FAKE REPLIES — Mike 2026-10-20). End the
+                            # turn silently, tell the frontend there is no audio, log
+                            # metrics, and save nothing (there is no assistant turn yet).
+                            # Gateways that never set `deferred` never enter this branch.
+                            if evt.get('deferred') and not evt.get('error') \
+                                    and not (evt.get('response') or '').strip():
+                                metrics['llm_inference_ms'] = int((time.time() - t_llm_start) * 1000)
+                                metrics['tool_count'] = sum(
+                                    1 for a in captured_actions
+                                    if a.get('type') == 'tool' and a.get('phase') == 'start'
+                                )
+                                metrics['profile'] = 'gateway-deferred'
+                                metrics['deferred'] = 1
+                                metrics['response_len'] = 0
+                                if _tts_pending or _tts_buf.strip():
+                                    logger.info(
+                                        f"### DEFERRED: discarding {len(_tts_pending)} pending TTS "
+                                        f"chunk(s) + buffer {len(_tts_buf)} chars (deferred turn speaks nothing)"
+                                    )
+                                _tts_buf = ''
+                                _tts_pending = []
+                                logger.info(
+                                    "### DEFERRED TURN — gateway "
+                                    f"ended the turn with no reply on purpose "
+                                    f"({metrics['llm_inference_ms']}ms, tools={metrics['tool_count']}); "
+                                    f"answer will arrive via push — no retry, no fallback, no TTS"
+                                )
+                                yield json.dumps({
+                                    'type': 'text_done',
+                                    'response': '',
+                                    'deferred': True,
+                                    'actions': captured_actions,
+                                    'timing': {
+                                        'handshake_ms': metrics.get('handshake_ms'),
+                                        'llm_ms': metrics.get('llm_inference_ms'),
+                                    }
+                                }) + '\n'
+                                yield json.dumps({'type': 'no_audio', 'deferred': True}) + '\n'
+                                metrics['total_ms'] = int((time.time() - t_request_start) * 1000)
+                                log_metrics(metrics)
+                                break
+
                             # Handle LLM/gateway errors with a spoken fallback
                             if evt.get('error') and not evt.get('response'):
                                 error_msg = evt['error']
@@ -2844,38 +2971,34 @@ def _conversation_inner():
                             # chars of the "I'll / let me" opener, so compound
                             # phrasing like "I'll mark the ones and add a button"
                             # still catches `add` (the mid-sentence verb).
-                            _promise_re = re.compile(
-                                r"\b(?:let me|i'?ll|i am going to|i'?m going to|i will|i'?m about to|gonna|going to)\b"
-                                r".{0,80}?"
-                                r"\b(?:write|build|create|update|save|add|edit|run|fetch|generate|make|"
-                                r"set up|put together|pull|grab|load|open|check|look|query|send|post|commit|push|"
-                                r"refactor|deploy|install|rebuild|restart|scaffold|configure|"
-                                r"mark|highlight|tag|label|link|embed|include|list|draft|prepare|"
-                                r"implement|modify|append|remove|delete|clean|organize|sort|render|"
-                                r"test|publish|upload|download|compile|parse|extract|apply|assign|"
-                                r"wire|hook|bind|attach|register|inject|populate|fill|insert|replace|"
-                                r"rename|move|copy|merge|split|style|design|format|export|import|"
-                                r"patch|fix|revert|rollback|scaffold|bootstrap|finalize|finish)"
-                                r"\b",
-                                re.IGNORECASE,
-                            )
+                            # Verdict on the nudge sent last pass: did the agent act?
+                            # Without this a nudge that does not land is
+                            # indistinguishable from one that did.
+                            if getattr(stream_response, '_continue_pending', False):
+                                stream_response._continue_pending = False
+                                if (metrics.get('tool_count', 0) == 0
+                                        and not WORK_ACTION_TAG_RE.search(full_response or '')):
+                                    logger.warning(
+                                        f'### PROMISE STILL UNFULFILLED after auto-continue: '
+                                        f'{(full_response or "").strip()[:100]!r} '
+                                        f'(tool_count=0, ms={metrics.get("llm_inference_ms")})'
+                                    )
+                                else:
+                                    logger.info(
+                                        f'### AUTO-CONTINUE FULFILLED: '
+                                        f'tools={metrics.get("tool_count", 0)}'
+                                    )
                             if (
-                                full_response
-                                and full_response.strip()
-                                and metrics.get('tool_count', 0) == 0
-                                and metrics.get('llm_inference_ms', 0) > 1000
-                                and not getattr(stream_response, '_continued', False)
-                                and _promise_re.search(full_response)
-                                # Question guard (phatty 2026-07-02): a reply that
-                                # ENDS with a question is the agent asking the user
-                                # for a decision ("Want me to send this for approval
-                                # first, or just fire it?"). Forcing "actually do it
-                                # now" both bypasses the user's answer AND lands a
-                                # chat.send in the turn-finalization window where it
-                                # gets coalesced → bare final → recovery cascade.
-                                and not full_response.strip().rstrip('*_ \n').endswith('?')
+                                not getattr(stream_response, '_continued', False)
+                                and gateway_reports_tools(gateway_id)
+                                and is_uncommitted_promise(
+                                    full_response,
+                                    metrics.get('tool_count', 0),
+                                    metrics.get('llm_inference_ms', 0),
+                                )
                             ):
                                 stream_response._continued = True
+                                stream_response._continue_pending = True
                                 logger.warning(
                                     f'### UNCOMMITTED PROMISE detected: '
                                     f'{full_response.strip()[:100]!r} '
@@ -3150,7 +3273,7 @@ def _conversation_inner():
                             # That leaves a 5-30s gap: a single non-retried slow empty
                             # would fall straight to text_done(None) → "No response from agent
                             # after recovery" → user sees agent died (observed 2026-05-23
-                            # on bhb: 16882ms + 17370ms empties, both fell through).
+                            # on persona-tenant: 16882ms + 17370ms empties, both fell through).
                             #
                             # Try Z.AI direct (bypasses gateway and any poisoned openclaw
                             # session state) — same code path the double-empty branch uses.
@@ -3201,7 +3324,7 @@ def _conversation_inner():
                                 # greeting (or intentional silence, feedback_no_hardcoded_responses).
                                 # Setting one here left full_response non-empty, so that block's
                                 # `if not _gs...` skipped — the canned "give me a moment" filler
-                                # then won over the tenant's persona greeting (BHB/Kyle, 2026-07-13).
+                                # then won over the tenant's persona greeting (persona-tenant, 2026-07-13).
                                 if not full_response or not full_response.strip():
                                     if user_message != '__session_start__':
                                         full_response = (
@@ -3238,7 +3361,7 @@ def _conversation_inner():
                                 _gs_tag_only = bool(_gs) and re.match(r'^\s*(\[[^\]]+\]\s*)+$', _gs)
                                 if (not _gs) or _gs_norm in ('NO', 'YES') or _gs_tag_only:
                                     # Empty/degenerate wake-up turn — substitute a greeting.
-                                    # ENTERTAINMENT-PERSONA path (opt-in per profile, e.g. Kyle/BHB):
+                                    # ENTERTAINMENT-PERSONA path (opt-in per profile, e.g. persona-tenant):
                                     # the gateway emptied, so take ONE more shot using the SAME rotated
                                     # persona prompt we built for the gateway turn above
                                     # (_persona_greeting_prompt — faithful voice + fresh angle + avoid-recent).
@@ -3246,7 +3369,7 @@ def _conversation_inner():
                                     # also empties, rotate a VARIED real-voice line from fallback_greetings.
                                     # Gated on the persona config, so tenants without it are unaffected —
                                     # they keep the plain profile-greeting-or-silence behaviour below.
-                                    # (BHB/Kyle 2026-07-13; feedback_no_hardcoded_responses honoured — all
+                                    # (persona-tenant 2026-07-13; feedback_no_hardcoded_responses honoured — all
                                     # copy lives in the tenant's own profile, nothing hardcoded here.)
                                     _fb_greeting = ''
                                     try:
@@ -3313,7 +3436,7 @@ def _conversation_inner():
                                 _tts_buf = ''
                                 _tts_pending.clear()
 
-                            # Persona greeting rotation (Kyle/BHB): remember what he ACTUALLY
+                            # Persona greeting rotation (persona-tenant): remember what he ACTUALLY
                             # opened with, so the next wake-up's prompt can avoid echoing it.
                             # Best-effort — the rotation index already advanced at prompt-build
                             # time, so a miss here never repeats an angle. Persona path only.
@@ -3589,9 +3712,12 @@ def _conversation_inner():
                         ai_response = evt.get('response')
                         if ai_response:
                             ai_response = normalize_action_tags(ai_response)
+                        if evt.get('deferred') and not evt.get('error') \
+                                and not (ai_response or '').strip():
+                            _deferred_turn = True
                     elif evt['type'] == 'handshake':
                         metrics['handshake_ms'] = evt['ms']
-                if not ai_response:
+                if not ai_response and not _deferred_turn:
                     # Turn failed — re-arm any consumed recovery prime so the
                     # next request still carries the conversation context.
                     restore_recovery_prime(_recovery_prime)
@@ -3614,6 +3740,25 @@ def _conversation_inner():
 
         except Exception as e:
             logger.error(f'Failed to call Clawdbot Gateway: {e}')
+
+    # ── DEFERRED: gateway ended the turn on purpose, answer comes via push ──
+    # NO FAKE REPLIES: no flash fallback, no generic line, no TTS, nothing saved.
+    if _deferred_turn:
+        metrics['profile'] = 'gateway-deferred'
+        metrics['response_len'] = 0
+        metrics['total_ms'] = int((time.time() - t_request_start) * 1000)
+        logger.info('### DEFERRED TURN (non-streaming) — no reply, no fallback, no TTS')
+        log_metrics(metrics)
+        _deferred_data = {'response': '', 'deferred': True, 'user_said': user_message}
+        if captured_actions:
+            _deferred_data['actions'] = captured_actions
+        _deferred_data['timing'] = {
+            'handshake_ms': metrics.get('handshake_ms'),
+            'llm_ms': metrics.get('llm_inference_ms'),
+            'tts_ms': None,
+            'total_ms': metrics.get('total_ms'),
+        }
+        return jsonify(_deferred_data)
 
     # ── FALLBACK: Z.AI direct (glm-5-flash, no tools) ───────────────────
     if not ai_response:
@@ -4629,3 +4774,42 @@ def stt_events():
         return jsonify({'ok': True})
     except Exception:
         return jsonify({'ok': False}), 500
+
+
+def _suno_failure_prefix() -> str:
+    """SUNO-REJECT-SURFACED (2026-09-29). Consume routes.suno.failed_songs_queue ONCE and
+    return a [SYSTEM] prefix for the next real user turn ('' when nothing failed).
+
+    A generation that did NOT go through — refused at submit (e.g. out of credits) or failed
+    during generation — must reach the agent so it can correct a "ready in 45 seconds" it
+    already said. Consuming here (not re-reading every turn) is the point: the old
+    context_parts block never cleared the queue.
+    """
+    try:
+        from routes import suno as _suno_mod
+        with _suno_mod._suno_lock:
+            _taken = list(_suno_mod.failed_songs_queue)[-3:]
+            del _suno_mod.failed_songs_queue[:]   # consume once
+    except Exception as _e:
+        logger.warning(f'Suno failure-note injection failed: {_e}')
+        return ''
+    if not _taken:
+        return ''
+    _fail_lines, _out_of_credits, _seen = [], False, set()
+    for f in _taken:
+        # the status poll AND the callback can both queue the same job
+        if f.get('job_id') in _seen:
+            continue
+        _seen.add(f.get('job_id'))
+        _label = f.get('title') or f.get('brand') or f"a {f.get('kind') or 'song'}"
+        _reason = str(f.get('reason') or 'unknown error')
+        _out_of_credits = _out_of_credits or 'credit' in _reason.lower()
+        _fail_lines.append(f'{_label!r} ({_reason[:160]})')
+    _hint = ("The platform's music credits are used up, so trying again right now will fail "
+             "the same way — offer to make it once that is sorted."
+             if _out_of_credits else "Offer to try again.")
+    return (
+        f'[SYSTEM: Music generation you started did NOT go through: {"; ".join(_fail_lines)}. '
+        f'If you told the user it was on its way, correct that now: say plainly that it did '
+        f'not go through, with no technical detail and no time promise. {_hint}]\n\n'
+    )

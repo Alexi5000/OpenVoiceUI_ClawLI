@@ -59,14 +59,32 @@ if _CLERK_CONFIGURED and not _ALLOWED_USER_IDS:
         'FAILING CLOSED: no users will be permitted. Set ALLOWED_USER_IDS in .env.'
     )
 
+
+def _parse_ids(raw: Optional[str]) -> set[str]:
+    return {uid.strip() for uid in (raw or '').split(',') if uid.strip()}
+
+
+# Platform admins — a STRICTLY SMALLER set than tenant admins (SEC-069).
+# ADMIN_USER_IDS is written into every tenant's own .env and grants the tenant
+# OWNER the admin dashboard. A few surfaces are not the tenant's to touch at all:
+# /api/vault/platform-setup reads/writes .platform-oauth.env, the PLATFORM's
+# shared OAuth app client_id/client_secret used by every tenant's OpenVoiceUI.
+# Those surfaces gate on this set instead. It is NEVER derived from
+# ADMIN_USER_IDS: it comes only from the host-controlled PLATFORM_ADMIN_USER_IDS
+# env var (comma-separated Clerk user ids). No id is built into the source:
+# unset means NO platform admin (fail closed), never a default operator.
+def _parse_platform_admin_ids(raw: Optional[str]) -> set[str]:
+    return _parse_ids(raw)
+
+
+_PLATFORM_ADMIN_USER_IDS: set[str] = _parse_platform_admin_ids(os.getenv('PLATFORM_ADMIN_USER_IDS', ''))
+
 # Admin users — server-side authorization for the admin dashboard and privileged
 # APIs (/admin, /api/admin/*, /api/vault/*, /api/workspace/*, /api/plugins/*, ...).
 # Set ADMIN_USER_IDS=user_abc,user_xyz in .env to grant tenant owners access.
-# Defaults to the platform admin so multi-user tenants never expose the dashboard
+# Defaults to the platform admins so multi-user tenants never expose the dashboard
 # to every allowlisted voice user (ALLOWED_USER_IDS gates the app, not admin ops).
-_PLATFORM_ADMIN_ID = 'user_3AJGqe2Fgn1qD580pg6tt2ysplR'
-_raw_admins = os.getenv('ADMIN_USER_IDS', '')
-_ADMIN_USER_IDS: set[str] = {uid.strip() for uid in _raw_admins.split(',') if uid.strip()} or {_PLATFORM_ADMIN_ID}
+_ADMIN_USER_IDS: set[str] = _parse_ids(os.getenv('ADMIN_USER_IDS', '')) or set(_PLATFORM_ADMIN_USER_IDS)
 
 
 def clerk_auth_enabled() -> bool:
@@ -125,6 +143,16 @@ def websocket_origin_allowed() -> bool:
 def is_admin_user(user_id: Optional[str]) -> bool:
     """True if this Clerk user may use the admin dashboard + privileged APIs."""
     return bool(user_id) and user_id in _ADMIN_USER_IDS
+
+
+def is_platform_admin(user_id: Optional[str]) -> bool:
+    """True only for the platform operator — never for a tenant admin as such.
+
+    Tenant admin (ADMIN_USER_IDS) and platform admin are independent sets; a
+    user may be in both (the platform admin usually is) but membership in one
+    never implies the other.
+    """
+    return bool(user_id) and user_id in _PLATFORM_ADMIN_USER_IDS
 
 # ---------------------------------------------------------------------------
 # JWKS cache
@@ -206,28 +234,48 @@ def verify_clerk_token(token: str) -> Optional[str]:
     return None
 
 
-def get_clerk_user_profile(user_id: str) -> dict:
-    """Fetch username/name from Clerk Backend API. Returns {} on failure."""
-    import urllib.request, urllib.error, json as _json
-    secret = os.getenv('CLERK_SECRET_KEY', '')
-    if not secret or not user_id:
-        return {}
+# Why a token was NOT accepted, for diagnostics only. verify_clerk_token() stays the one grant
+# decision; this is asked only after it returned None, so a caller can tell a stale session from a
+# forged one. Clerk session tokens live about 60 s and the app shell re-writes the __session cookie
+# every 50 s while it is open (src/app.js _syncSessionCookie), but the cookie itself lives 30 days.
+# A browser that left the shell (a top-level canvas page, a texted link) keeps sending the last
+# token after it expired. PyJWT checks the signature BEFORE exp, so TOKEN_EXPIRED means a token this
+# Clerk instance really signed; a forged or foreign token is TOKEN_INVALID, never TOKEN_EXPIRED.
+TOKEN_OK = 'ok'                    # verifies now (it raced a refresh)
+TOKEN_ABSENT = 'absent'            # nothing presented
+TOKEN_EXPIRED = 'expired'          # genuine signature, exp in the past: a stale session cookie
+TOKEN_NOT_ALLOWED = 'not-allowed'  # genuine and current, but the user is not in ALLOWED_USER_IDS
+TOKEN_NO_KEYS = 'no-keys'          # this instance could not load its JWKS
+TOKEN_INVALID = 'invalid'          # malformed, forged, or signed by another Clerk instance
+
+
+def token_failure_reason(token: Optional[str]) -> str:
+    """Classify a token for logs. Never a grant: callers decide with verify_clerk_token()."""
+    if not token:
+        return TOKEN_ABSENT
     try:
-        req = urllib.request.Request(
-            f'https://api.clerk.com/v1/users/{user_id}',
-            headers={'Authorization': f'Bearer {secret}'},
-        )
-        with urllib.request.urlopen(req, timeout=4) as r:
-            data = _json.loads(r.read())
-        return {
-            'username':   data.get('username') or '',
-            'first_name': data.get('first_name') or '',
-            'last_name':  data.get('last_name') or '',
-            'email':      (data.get('email_addresses') or [{}])[0].get('email_address', ''),
-            'user_id':    user_id,
-        }
+        keys = _get_jwks()
     except Exception:
-        return {'user_id': user_id}
+        return TOKEN_NO_KEYS
+    if not keys:
+        return TOKEN_NO_KEYS
+    for key_data in keys:
+        try:
+            public_key = jwt.algorithms.RSAAlgorithm.from_jwk(key_data)
+            payload = jwt.decode(token, public_key, algorithms=['RS256'],
+                                 options={'verify_aud': False})
+        except jwt.ExpiredSignatureError:
+            return TOKEN_EXPIRED
+        except Exception:
+            continue  # wrong key, malformed, forged: try the next key
+        user_id = payload.get('sub')
+        if not user_id:
+            return TOKEN_INVALID
+        if (_CLERK_CONFIGURED and not _ALLOWED_USER_IDS) or (
+                _ALLOWED_USER_IDS and user_id not in _ALLOWED_USER_IDS):
+            return TOKEN_NOT_ALLOWED
+        return TOKEN_OK
+    return TOKEN_INVALID
 
 
 def get_token_from_request() -> Optional[str]:

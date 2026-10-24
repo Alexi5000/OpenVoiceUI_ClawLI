@@ -160,7 +160,7 @@ if DEFAULT_PAGES_DIR.is_dir():
         # A single non-writable tenant page (e.g. a canvas-pages copy owned by a
         # different uid with restrictive perms) must NOT crash the whole server boot.
         # Log-and-skip so seeding stays best-effort. (host 2026-06-28 — fleet-roll fix:
-        # josh crash-looped here when website-creator.html was uid-1000/664 vs appuser 1001.)
+        # tenant-k crash-looped here when website-creator.html was uid-1000/664 vs appuser 1001.)
         try:
             if not dest.exists():
                 shutil.copy2(src, dest)
@@ -179,8 +179,17 @@ if DEFAULT_PAGES_DIR.is_dir():
         except (PermissionError, OSError) as _seed_exc:
             logger.warning("Skipped seeding default page %s (non-fatal): %s", src.name, _seed_exc)
 
+# Seed shared canvas modules (canvas-shared/*) into canvas-pages/_shared/ so pages can import
+# them from /pages/_shared/<file> (e.g. html-surfaces.js for the bundled threejs-html-surfaces skill).
+from services.paths import CANVAS_SHARED_DIR
+from services.canvas_shared import seed_canvas_shared
+seed_canvas_shared(CANVAS_SHARED_DIR, CANVAS_PAGES_DIR)
+
 from routes.static_files import static_files_bp, DJ_SOUNDS, SOUNDS_DIR
 app.register_blueprint(static_files_bp)
+
+from routes.intake import intake_bp
+app.register_blueprint(intake_bp)
 
 from routes.albums import albums_bp
 app.register_blueprint(albums_bp)
@@ -1614,32 +1623,8 @@ def upload_file():
     return jsonify(result)
 
 
-@app.route("/api/uploads", methods=["GET"])
-def list_uploads():
-    """List uploaded files. Optional ?type=image|text filter."""
-    file_type = request.args.get("type")  # "image", "text", or None for all
-    image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-    text_exts = {".pdf", ".txt", ".md", ".json", ".csv", ".html", ".js", ".py", ".ts", ".css"}
-
-    files = []
-    for f in sorted(UPLOADS_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-        if f.is_dir() or f.name.startswith("."):
-            continue
-        ext = f.suffix.lower()
-        is_image = ext in image_exts
-        kind = "image" if is_image else ("text" if ext in text_exts else "other")
-        if file_type and kind != file_type:
-            continue
-        stat = f.stat()
-        files.append({
-            "filename": f.name,
-            "url": f"/uploads/{f.name}",
-            "type": kind,
-            "size": stat.st_size,
-            "modified": stat.st_mtime,
-        })
-
-    return jsonify({"files": files, "count": len(files)})
+# GET /api/uploads (the uploads listing) lives in routes/static_files.py::list_uploads, behind
+# the same uploads gate as the files themselves.
 
 
 # ---------------------------------------------------------------------------
@@ -1750,7 +1735,7 @@ def _note_push_client_session(ws, session_key):
             _push_client_session[ws] = session_key
 
 
-def push_proactive_message(text: str, session_key: str = None):
+def push_proactive_message(text: str, session_key: str = None, run_id: str = None):
     """Broadcast an agent-initiated message to connected browsers.
 
     Called from a daemon thread (gateway loop side) — no Flask context.
@@ -1760,7 +1745,20 @@ def push_proactive_message(text: str, session_key: str = None):
     Delivery is scoped (WS-9): if this frame carries a sessionKey AND a client
     has declared one, it is delivered only on a match; a client that never
     declared a sessionKey receives everything (backward compatible).
+
+    Returns the number of browsers the message was enqueued to. Every call
+    writes a receipt — including delivered=0 when no browser is connected, so
+    a completion that finished while the owner was away leaves a trace (the
+    gateway then relays it through the tenant's own agent).
     """
+    with _push_clients_lock:
+        any_clients = bool(_push_clients)
+    if not any_clients:
+        # Checked before TTS so an unheard push does not pay for audio.
+        logger.warning("Proactive push: no connected browsers — message not delivered "
+                       f"(text: {text[:100]})")
+        _write_push_receipt(text, session_key, 0, 0, run_id)
+        return 0
     spoken = re.sub(r'\[[A-Z_]+(?::[^\]]*)?\]', '', text).strip()
     audio_b64 = None
     if spoken:
@@ -1778,10 +1776,11 @@ def push_proactive_message(text: str, session_key: str = None):
     with _push_clients_lock:
         targets = list(_push_clients.items())
         sessions = dict(_push_client_session)
-    if not targets:
+    if not targets:  # last browser left while TTS was generating
         logger.warning("Proactive push: no connected browsers — message not delivered "
                        f"(text: {text[:100]})")
-        return
+        _write_push_receipt(text, session_key, 0, 0, run_id)
+        return 0
     delivered = 0
     for ws, q in targets:
         reg_key = sessions.get(ws)
@@ -1793,20 +1792,25 @@ def push_proactive_message(text: str, session_key: str = None):
         except Exception:
             _unregister_push_client(ws)
     logger.info(f"Proactive push: enqueued to {delivered}/{len(targets)} clients")
-    _write_push_receipt(text, session_key, delivered, len(targets))
+    _write_push_receipt(text, session_key, delivered, len(targets), run_id)
+    return delivered
 
 
-def _write_push_receipt(text, session_key, delivered, clients):
+_PUSH_RECEIPT_PATH = Path("/app/runtime/transcripts/.proactive-push.jsonl")
+
+
+def _write_push_receipt(text, session_key, delivered, clients, run_id=None):
     """Durable, host-visible receipt of every proactive push (bind-mounted
     transcripts dir) — drives the JamFlow board signal and survives restarts.
     Multiple proactive-push threads can append concurrently, so serialize the
     write under a module lock — interleaved partial lines corrupt the JSONL
     the JamFlow board reads (WS-10)."""
     try:
-        receipt_path = Path("/app/runtime/transcripts/.proactive-push.jsonl")
+        receipt_path = _PUSH_RECEIPT_PATH
         line = json.dumps({
             "ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
             "session_key": session_key,
+            "run_id": run_id,
             "delivered": delivered,
             "clients": clients,
             "text": text[:300],

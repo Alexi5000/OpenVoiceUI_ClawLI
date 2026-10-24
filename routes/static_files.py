@@ -10,13 +10,17 @@ Registers routes:
   GET  /api/dj-sound                   — DJ soundboard API (list/play)
 """
 
+import hmac
+import json
 import logging
+import os
 import random
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from flask import Blueprint, Response, jsonify, request, send_file
+from flask import Blueprint, Response, jsonify, redirect, request, send_file
 
 logger = logging.getLogger(__name__)
 
@@ -491,6 +495,196 @@ def serve_emulator(filepath):
     return response
 
 
+# ---------------------------------------------------------------------------
+# Uploads auth (2026-10-06): /uploads/ was served to anyone with the URL, and search engines index it.
+# A plain login gate would BREAK legitimate machine consumers (scripts fetching files over HTTP, MMS
+# providers fetching media), so this ships in phases, controlled by UPLOADS_AUTH_MODE:
+#   off     — no check (self-hosted default when CANVAS_REQUIRE_AUTH is off)
+#   shadow  — serve as before, but log every request that WOULD be denied (the default)
+#   enforce — deny unless the request carries a grant (401, or a login redirect for browsers)
+# A request is granted by ANY of:
+#   session    — a valid Clerk token (the same check canvas pages use)
+#   signature  — ?exp=&sig= minted by services/upload_links.py with this instance's UPLOADS_SIGNING_KEY
+#   agent_key  — the internal X-Agent-Key header matching AGENT_API_KEY (same check as app.require_auth)
+# Each would-deny row records the state of all three grants, so enforcement can be decided per consumer.
+# The would-deny log is a dotfile, so serve_upload never exposes it.
+# ---------------------------------------------------------------------------
+UPLOADS_AUTH_MODE = os.getenv('UPLOADS_AUTH_MODE', 'shadow').strip().lower()
+UPLOADS_REQUIRE_AUTH = os.getenv('CANVAS_REQUIRE_AUTH', 'false').lower() == 'true'
+UPLOADS_SHADOW_LOG = UPLOADS_DIR / '.uploads-auth-shadow.jsonl'
+_UPLOADS_SHADOW_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _upload_has_session():
+    from services.auth import get_token_from_request, verify_clerk_token
+    try:
+        token = get_token_from_request()
+        return bool(token and verify_clerk_token(token))
+    except Exception:
+        return False
+
+
+def _upload_session_state():
+    """'ok' | 'absent' | why a presented token failed. The grant is decided by verify_clerk_token
+    alone; the failure reason is a diagnostic. 'expired' is the common one: the __session cookie
+    lives 30 days but carries a ~60 s Clerk token that only the app shell refreshes, so a browser
+    that navigated away from the shell sends a stale token."""
+    from services.auth import get_token_from_request
+    if _upload_has_session():
+        return 'ok'
+    try:
+        token = get_token_from_request()
+    except Exception:
+        return 'invalid'
+    if not token:
+        return 'absent'
+    try:
+        from services.auth import token_failure_reason
+        why = token_failure_reason(token)
+    except Exception:
+        return 'invalid'
+    # 'ok' here means it verified a moment after verify_clerk_token said no; the decision stands.
+    return why if why in ('expired', 'not-allowed', 'no-keys') else 'invalid'
+
+
+def _upload_agent_key_state():
+    """The internal agent key, checked exactly as app.require_auth does (X-Agent-Key vs
+    AGENT_API_KEY, no grant when the key is unset), with a constant-time comparison."""
+    presented = request.headers.get('X-Agent-Key')
+    if not presented:
+        return 'absent'
+    expected = os.getenv('AGENT_API_KEY', '').strip()
+    if not expected:
+        return 'unconfigured'
+    return 'ok' if hmac.compare_digest(presented.encode('utf-8'), expected.encode('utf-8')) else 'invalid'
+
+
+def _upload_signature_state(filename):
+    from services import upload_links
+    return upload_links.verify('/uploads/' + filename, request.args.get('exp'), request.args.get('sig'))
+
+
+def _upload_grants(filename, listing=False):
+    """Evaluate grants cheapest-first, stopping at the first that holds. Returns
+    (granted_by or None, {grant: state}) — states are only complete when nothing granted.
+    A listing (/api/uploads) has no signed-link grant: a signature opens one file, never the index."""
+    states = {}
+    checks = [('agent_key', _upload_agent_key_state)]
+    if not listing:
+        checks.append(('signature', lambda: _upload_signature_state(filename)))
+    checks.append(('session', _upload_session_state))
+    for name, check in checks:
+        states[name] = check()
+        if states[name] == 'ok':
+            return name, states
+    return None, states
+
+
+def _upload_deny_reason(states):
+    """The most specific reason: the first PRESENTED credential that failed, else no credential."""
+    for name in ('signature', 'agent_key', 'session'):
+        if states.get(name) not in (None, 'absent'):
+            return f'{name}-{states[name]}'
+    return 'no-credential'
+
+
+def _upload_wants_html():
+    return request.headers.get('Accept', '').startswith('text/html')
+
+
+def _upload_enforce_action(listing=False):
+    """What enforce would answer this request: a browser navigation is sent through the login
+    shell, which refreshes a stale session and comes straight back (the canvas-page bounce);
+    anything else gets a bare 401 and does not recover on its own."""
+    return 'login-redirect' if (not listing and _upload_wants_html()) else '401'
+
+
+def _upload_shadow_record(filename, exists, states=None, reason=None, listing=False):
+    try:
+        if UPLOADS_SHADOW_LOG.exists() and UPLOADS_SHADOW_LOG.stat().st_size > _UPLOADS_SHADOW_MAX_BYTES:
+            return
+        ref = request.headers.get('Referer', '')
+        row = {
+            'ts': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'file': filename[:200], 'exists': bool(exists), 'mode': UPLOADS_AUTH_MODE,
+            'ua': request.headers.get('User-Agent', '')[:160],
+            'ref_host': (urlsplit(ref[:2048]).hostname or '')[:120] if ref else '',
+            'accept': request.headers.get('Accept', '')[:60],
+            'reason': reason or 'no-credential',
+            'grants': states or {},
+            'enforce_action': _upload_enforce_action(listing),
+        }
+        fd = os.open(str(UPLOADS_SHADOW_LOG), os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, (json.dumps(row) + '\n').encode('utf-8'))
+        finally:
+            os.close(fd)
+    except Exception as e:  # measurement must never break serving
+        logger.warning('[uploads-auth] shadow record failed: %s', e)
+
+
+def _upload_access_denied(filename, exists, listing=False):
+    """None = serve. Otherwise the deny response (enforce mode only).
+
+    Every route that serves bytes from UPLOADS_DIR calls this BEFORE checking existence:
+    serve_upload, routes/albums.py serve_album_photo, and the /api/uploads listing (listing=True,
+    which takes no signed-link grant and always answers JSON)."""
+    if UPLOADS_AUTH_MODE not in ('shadow', 'enforce') or not UPLOADS_REQUIRE_AUTH:
+        return None
+    granted_by, states = _upload_grants(filename, listing=listing)
+    if granted_by:
+        return None
+    reason = _upload_deny_reason(states)
+    _upload_shadow_record(filename, exists, states, reason, listing=listing)
+    if UPLOADS_AUTH_MODE != 'enforce':
+        return None
+    logger.warning('[uploads-auth] denied request without a valid credential')
+    if _upload_enforce_action(listing) == 'login-redirect':
+        return redirect('/?redirect=/uploads/' + filename)
+    if listing:
+        return jsonify({'error': 'Unauthorized', 'code': 'auth_required'}), 401
+    return 'Unauthorized', 401
+
+
+_UPLOADS_LISTING = '(listing) /api/uploads'
+
+
+@static_files_bp.route('/api/uploads', methods=['GET'])
+def list_uploads():
+    """List uploaded files. Optional ?type=image|text filter.
+
+    Moved here from server.py (uploads auth phase 3): app.require_auth treats every path that starts with
+    '/api/upload' as public (the POST upload route), so the listing has to gate itself. It goes
+    through the same uploads gate as the files, as a listing: shadow logs, enforce answers 401.
+    """
+    denied = _upload_access_denied(_UPLOADS_LISTING, True, listing=True)
+    if denied is not None:
+        return denied
+    file_type = request.args.get("type")  # "image", "text", or None for all
+    image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+    text_exts = {".pdf", ".txt", ".md", ".json", ".csv", ".html", ".js", ".py", ".ts", ".css"}
+
+    files = []
+    for f in sorted(UPLOADS_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if f.is_dir() or f.name.startswith("."):
+            continue
+        ext = f.suffix.lower()
+        is_image = ext in image_exts
+        kind = "image" if is_image else ("text" if ext in text_exts else "other")
+        if file_type and kind != file_type:
+            continue
+        stat = f.stat()
+        files.append({
+            "filename": f.name,
+            "url": f"/uploads/{f.name}",
+            "type": kind,
+            "size": stat.st_size,
+            "modified": stat.st_mtime,
+        })
+
+    return jsonify({"files": files, "count": len(files)})
+
+
 @static_files_bp.route('/uploads/<path:filename>')
 def serve_upload(filename):
     """Serve uploaded files (path traversal guarded).
@@ -508,9 +702,14 @@ def serve_upload(filename):
     upload_path = _safe_path(UPLOADS_DIR, filename)
     if upload_path is None:
         return jsonify({"error": "Invalid path"}), 400
+    # Uploads auth: decide access BEFORE answering whether the file exists (no 401/404 existence oracle).
+    denied = _upload_access_denied(filename, upload_path.exists())
+    if denied is not None:
+        return denied
     if not upload_path.exists():
         return jsonify({"error": "File not found"}), 404
     resp = send_file(upload_path)
+    resp.headers['X-Robots-Tag'] = 'noindex, nofollow, noarchive'
     # F-5 (2026-07-15): neutralize STORED XSS. Uploads are user/agent-supplied; an
     # .html or .svg served with a rendering content-type executes in OUR origin and can
     # steal the Clerk session. Serve only known-safe media types inline with their real
@@ -522,15 +721,32 @@ def serve_upload(filename):
         '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.avif',
         '.mp4', '.webm', '.ogg', '.mov', '.mp3', '.wav', '.m4a', '.pdf',
     }
+    # Inert DOWNLOAD formats (2026-10-12): office documents, CSV and zip never execute in a
+    # browser, so they keep their REAL mime — still an attachment, still nosniff + the
+    # sandbox CSP below. Downgrading them to text/plain made iOS Safari show a client's .xlsx
+    # as mojibake and save it as "<name>.xlsx.txt". Anything not listed (html, svg, js, xml,
+    # unknown) still falls back to text/plain, so the F-5 guard fails closed as before.
+    _DOWNLOAD_MIME = {
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.xls': 'application/vnd.ms-excel',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.doc': 'application/msword',
+        '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        '.ppt': 'application/vnd.ms-powerpoint',
+        '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
+        '.odt': 'application/vnd.oasis.opendocument.text',
+        '.csv': 'text/csv; charset=utf-8',
+        '.zip': 'application/zip',
+    }
     if _ext not in _SAFE_INLINE:
-        resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
+        resp.headers['Content-Type'] = _DOWNLOAD_MIME.get(_ext, 'text/plain; charset=utf-8')
         resp.headers['Content-Disposition'] = (
             'attachment; filename="%s"' % Path(filename).name.replace('"', ''))
     resp.headers['X-Content-Type-Options'] = 'nosniff'
     # CSP by type (2026-08-02): the strict `sandbox; default-src 'none'` neutralizes stored
     # XSS in html/svg/js, but `sandbox` with no allowlist ALSO stops the browser's built-in
     # media/pdf viewer from loading — so direct links to an uploaded .mp4/.mp3/.pdf served 200
-    # but played nothing (koolfoam video, mac-claude directive). Inert media served inline with
+    # but played nothing. Inert media served inline with
     # its real mime + nosniff has no script surface, so it gets a CSP that permits only
     # self-origin media/images/pdf to render while still blocking all script + framing, and
     # crucially drops `sandbox`. Non-safe types (already downgraded to a text/plain attachment

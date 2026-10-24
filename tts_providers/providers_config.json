@@ -16,13 +16,13 @@
       ],
       "requires_api_key": false,
       "status": "inactive",
-      "description": "Pocket TTS (Kyutai) \u2014 $0 local voice cloning on the macdaddy video/voice node. Clones a per-client brand voice from a ~10-20s reference clip into a reusable .safetensors state, then generates VO clips (~2-3s each). Client-facing via this Voice Cloning Studio canvas; jobs route to mac-claude@mesh over the Syncthing Dropzone bridge.",
+      "description": "Pocket TTS (Kyutai) \u2014 $0 local voice cloning on the mac-node video/voice node. Clones a per-client brand voice from a ~10-20s reference clip into a reusable .safetensors state, then generates VO clips (~2-3s each). Client-facing via this Voice Cloning Studio canvas; jobs route to the mac agent over the Syncthing Dropzone bridge.",
       "documentation_url": "https://github.com/kyutai-labs/pocket-tts",
       "languages": [
         "en"
       ],
       "max_characters": 600,
-      "notes": "Self-hosted on the macdaddy node (handle_voice_clone). status=inactive until the OVU->mesh Dropzone bridge (POST /api/voice-clone/submit + result ingest) is wired; the studio card stays hidden while inactive, then auto-reveals like qwen3-local. Guardrail: dedicated deterministic handler, source-allowlisted host@mesh, NOT the permissionless claude path.",
+      "notes": "Self-hosted on the mac-node node (handle_voice_clone). status=inactive until the OVU->mesh Dropzone bridge (POST /api/voice-clone/submit + result ingest) is wired; the studio card stays hidden while inactive, then auto-reveals like qwen3-local. Guardrail: dedicated deterministic handler, source-allowlisted the host agent, NOT the permissionless claude path.",
       "requires_microphone": false,
       "requires_websocket": false,
       "mode": "tts-only"
@@ -187,6 +187,34 @@
       "requires_websocket": false,
       "mode": "tts-only",
       "audio_format": "mp3",
+      "sample_rate": 24000
+    },
+    "qwen3-mlx": {
+      "name": "Qwen3-TTS (MLX node)",
+      "provider_id": "qwen3-mlx",
+      "cost_per_minute": 0.0,
+      "quality": "very-high",
+      "latency": "fast",
+      "voices": [],
+      "features": [
+        "voice-cloning",
+        "self-hosted",
+        "free",
+        "wav-output",
+        "no-api-key"
+      ],
+      "requires_api_key": false,
+      "status": "active",
+      "description": "Qwen3-TTS on a self-hosted Apple-silicon (mlx-audio) node over HTTP. One request per sentence, allow-listed reference voices only.",
+      "languages": [
+        "en"
+      ],
+      "max_characters": 5000,
+      "notes": "QWEN_MLX_TTS_URL + QWEN_MLX_TTS_VOICES (allow-list, fail closed) required; QWEN_MLX_TTS_DENY_PREFIXES optional. Unset URL = inert. Server down = falls back via config/tts-fallback.json (qwen3-mlx -> groq -> supertonic).",
+      "requires_microphone": false,
+      "requires_websocket": false,
+      "mode": "tts-only",
+      "audio_format": "wav",
       "sample_rate": 24000
     },
     "resemble": {

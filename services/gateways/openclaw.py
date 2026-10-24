@@ -131,9 +131,107 @@ def _sign_device_connect(identity: dict, client_id: str, client_mode: str,
     }
 
 
+def extract_default_agent_id(hello_data: dict) -> str | None:
+    """Return the gateway's announced default agent id from a connect response.
+
+    The hello-ok body rides in the `res` frame's `payload` (older shapes used
+    `result`) as `snapshot.sessionDefaults.defaultAgentId` — verified present in
+    openclaw 2026.5.7 and 2026.8.35. Returns None when the gateway does not
+    announce one, which keeps wire_session_key() a no-op for that gateway.
+    """
+    if not isinstance(hello_data, dict):
+        return None
+    body = hello_data.get('payload') or hello_data.get('result') or {}
+    snapshot = body.get('snapshot') if isinstance(body, dict) else None
+    defaults = snapshot.get('sessionDefaults') if isinstance(snapshot, dict) else None
+    agent_id = defaults.get('defaultAgentId') if isinstance(defaults, dict) else None
+    if isinstance(agent_id, str) and agent_id.strip():
+        return agent_id.strip()
+    return None
+
+
+def wire_session_key(key, default_agent_id):
+    """Map an internal session alias to the agent-scoped key sent on the wire.
+
+    openclaw 2026.8.35 rejects a bare sessionKey ("main") once more than one
+    agent is configured ("...has no explicit owner. Use an agent-prefixed session
+    key"); every JamBot tenant has two (openvoiceui + openvoiceui-fast). 2026.5.7
+    canonicalizes a bare key to agent:<defaultAgentId>:<key> itself, so sending
+    that prefixed form addresses the SAME session on both versions.
+
+    Unchanged: falsy keys, keys already agent-scoped, the unscoped "global" /
+    "unknown" keys (both versions keep those bare — prefixing would select a
+    different session), and every key when the gateway announced no default.
+    Only the wire form changes; subscriptions, steer maps and caches keep the
+    short alias, and inbound matching (_sk_match) already accepts canonical
+    agent:<id>:<alias> event keys.
+    """
+    if not key or not isinstance(key, str):
+        return key
+    lowered = key.strip().lower()
+    if lowered.startswith('agent:') or lowered in ('global', 'unknown'):
+        return key
+    if not default_agent_id:
+        return key
+    return f"agent:{default_agent_id}:{key}"
+
+
+def res_error_message(data: dict) -> str | None:
+    """Error text when `data` is a `res` frame the gateway REJECTED
+    (`ok: false` and/or an `error`), else None. openclaw's error shape is
+    {code, message, details?}; a plain string is accepted too."""
+    if not isinstance(data, dict) or data.get('type') != 'res':
+        return None
+    err = data.get('error')
+    if data.get('ok') is not False and not err:
+        return None
+    msg = (err.get('message') or err.get('code')) if isinstance(err, dict) else err
+    return str(msg) if msg else 'request rejected by gateway'
+
+
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
+
+
+def item_stream_tool_start(payload, our_run_ids, session_key, captured_actions):
+    """Return a tool-start action for an `item`-stream tool call, or None.
+
+    openclaw reports every tool call twice: `stream: "tool"` and `stream: "item"`
+    (data.kind == "tool"). Some runs deliver ONLY the item copy. Measured
+    2026-10-02 on tenant-g: the auto-continue run 77808579 ran exec, exec, read
+    with zero `tool`-stream events, so tool_count read 0 and the logs claimed the
+    promise-completion nudge did nothing.
+
+    Counts only THIS turn's run: a sub-agent's run on the same socket carries its
+    own runId and sessionKey and must not be credited to the user's turn. When no
+    run id is known yet, falls back to the turn's session key. Never returns a
+    second start for a toolCallId already captured from either stream.
+    """
+    if payload.get('stream') != 'item':
+        return None
+    item = payload.get('data') or {}
+    tcid = item.get('toolCallId', '')
+    if item.get('kind') != 'tool' or item.get('phase') != 'start' or not tcid:
+        return None
+    rid = payload.get('runId')
+    if rid and our_run_ids:
+        if rid not in our_run_ids:
+            return None
+    elif payload.get('sessionKey', '') != session_key:
+        return None
+    if any(a.get('type') == 'tool' and a.get('toolCallId') == tcid for a in captured_actions):
+        return None
+    return {
+        'type': 'tool',
+        'phase': 'start',
+        'name': item.get('name', 'unknown'),
+        'toolCallId': tcid,
+        'sessionKey': payload.get('sessionKey', ''),
+        'input': {},
+        'source': 'item',
+        'ts': time.time(),
+    }
 
 
 class _WSClosedError(Exception):
@@ -198,9 +296,11 @@ _PROACTIVE_HANDLER = None
 
 
 def set_proactive_handler(fn):
-    """Register a callable(text, session_key) that delivers an agent-initiated
-    message to connected browsers. Called from a daemon thread — must not
-    assume a Flask request context."""
+    """Register a callable(text, session_key, run_id=None) that delivers an
+    agent-initiated message to connected browsers and returns how many it
+    reached (0 = nobody connected → the gateway relays it through the tenant's
+    own agent). Called from a daemon thread — must not assume a Flask request
+    context."""
     global _PROACTIVE_HANDLER
     _PROACTIVE_HANDLER = fn
 
@@ -213,6 +313,31 @@ _SUBAGENT_NUDGE_MSG = (
     "sentence about what was done. If it produced a canvas page, open it by "
     "including [CANVAS:page-name] in your reply. Do not narrate your checking "
     "steps — just the outcome."
+)
+
+# How long the orphan continuation waits for the parent's reply to the nudge.
+# It was 180 s; a parent turn after a timed-out child has been measured at
+# 303 s, and on expiry with no text the continuation returned before any push
+# receipt or relay, so the completion was lost again without a trace. Matches
+# agents.defaults.subagents.announceTimeoutMs (600000) on hosted gateways.
+# Nobody is waiting on this stream (the owner's request is already gone), so
+# a longer wait costs nothing user-visible.
+_ORPHAN_COLLECT_S = 600
+
+# Offline relay — a subagent result that finished while no browser was
+# connected is handed to the tenant's OWN agent (default agent, in a session
+# of its own) so it can reach the owner on the owner's channel from the
+# tenant's own identity. OVU never sends SMS itself. Loop guard: this session
+# is never orphan-continued and never relayed again, and the prompt carries a
+# marker that is refused as relay input.
+_OFFLINE_RELAY_SESSION = 'offline-relay'
+_OFFLINE_RELAY_MARKER = '[OFFLINE_RELAY]'
+_OFFLINE_RELAY_MSG = (
+    _OFFLINE_RELAY_MARKER + " The owner is offline. This finished while they "
+    "were away: {summary}\n\nIf it is something they asked for, text them the "
+    "result and its /pages/ link the way you normally text them (your usual "
+    "owner channel and identity, never a company line), once. If they already "
+    "have it, or it is not for them, do nothing."
 )
 
 
@@ -268,7 +393,7 @@ class EventDispatcher:
         # but gateway events carry the CANONICAL key
         # ('agent:openvoiceui:main'). Strict == comparisons therefore NEVER
         # matched, silently disabling followup-run routing and session-scoped
-        # fallback delivery (found 2026-07-02, phatty bare-final incident).
+        # fallback delivery (found 2026-07-02, tenant-e bare-final incident).
         # Learned from runId-routed events, which pair a sub (alias) with the
         # event's canonical key authoritatively.
         self._canonical_keys: dict[str, str] = {}
@@ -277,9 +402,10 @@ class EventDispatcher:
         # timed out / aborted, or the spawn came from cron), the in-stream
         # continuation nudge in _stream_events can never fire. The hook below
         # (set by GatewayConnection) runs the orphan continuation instead.
-        self._orphan_hook = None                      # callable(parent_alias)
+        self._orphan_hook = None                      # callable(parent_alias, run_ids)
         self._orphan_debounce: dict[str, asyncio.Task] = {}  # parent → pending task
         self._orphan_last_fired: dict[str, float] = {}       # parent → ts cooldown
+        self._orphan_run_ids: dict[str, set] = {}     # parent → finished subagent runIds
         self._last_sub_alias: str | None = None       # newest subscribe() alias
 
     ORPHAN_DEBOUNCE_S = 5      # batch: wait for sibling subagents to finish
@@ -329,6 +455,8 @@ class EventDispatcher:
         if now - self._orphan_last_fired.get(parent, 0) < self.ORPHAN_COOLDOWN_S:
             logger.info(f"### ORPHAN SUBAGENT END: cooldown active for {parent} — skipped")
             return
+        if payload.get('runId'):
+            self._orphan_run_ids.setdefault(parent, set()).add(payload['runId'])
         pending = self._orphan_debounce.get(parent)
         if pending and not pending.done():
             pending.cancel()
@@ -346,10 +474,12 @@ class EventDispatcher:
         for sub in self._subscriptions.values():
             if sub.state != Subscription.DONE and self._sk_match_alias(parent, sub.session_key):
                 logger.info(f"### ORPHAN continuation cancelled — live sub exists for {parent}")
+                self._orphan_run_ids.pop(parent, None)
                 return
         self._orphan_last_fired[parent] = time.time()
+        run_ids = tuple(sorted(self._orphan_run_ids.pop(parent, ())))
         try:
-            self._orphan_hook(parent)
+            self._orphan_hook(parent, run_ids)
         except Exception as e:
             logger.error(f"### ORPHAN hook failed: {e}")
 
@@ -436,6 +566,13 @@ class EventDispatcher:
             if req_id.startswith('chat-'):
                 chat_id = req_id[5:]
                 sub = self._subscriptions.get(chat_id)
+                if sub and res_error_message(data) is not None:
+                    # Rejected send: not a queue placement. Leave the state
+                    # alone (marking it QUEUED would let it claim another
+                    # turn's followup run); _stream_events ends the turn.
+                    logger.info(f"### chat-{chat_id[:8]} rejected by gateway")
+                    await sub.event_queue.put(data)
+                    return
                 if sub:
                     result = data.get('result') or data.get('payload') or {}
                     run_id = result.get('runId') or data.get('runId')
@@ -611,7 +748,24 @@ class GatewayConnection:
     """
 
     DEFAULT_URL = 'ws://127.0.0.1:18791'
-    BACKOFF_DELAYS = [1, 2, 4, 8, 16, 30, 60]
+    # Sized against the MEASURED gateway restart-to-listen time, not a guess.
+    # tenant-q-voice supplied 4 timestamped occurrences (2026-08-28, 09-05, 09-06 x2), each
+    # with the same shape: claw_sigterm at t=0, then Errno 111 refusals until the
+    # gateway listens again at t≈70-72s. The old ladder [1,2,4,8,16,30,60] with
+    # max_attempts=5 spent its gaps 2+4+8+16 = 30s and exhausted at t≈35s — less than
+    # HALF the outage — so every gateway restart guaranteed a 5/5 exhaustion, on ~25
+    # tenants at once (the nightly review's identical fleet-wide signature).
+    #
+    # Exhausting is not merely cosmetic: after the 5th failure the client stops probing
+    # and waits for a fresh cycle, so a gateway that came back EARLY was still not
+    # noticed until the next cycle began (measured: exhausted 19:45:57, reconnected
+    # 19:46:32 — a 35s window in which nothing was even trying).
+    #
+    # The ladder now CAPS at 15s instead of climbing to 60s. Early attempts stay fast
+    # (a quick restart is caught in seconds), then it probes steadily rather than
+    # backing off past the event it is waiting for — the failure here is a service
+    # restarting on a known ~70s cadence, not an overloaded peer that needs sparing.
+    BACKOFF_DELAYS = [1, 2, 4, 8, 15, 15, 15]
 
     def __init__(self):
         self._ws = None
@@ -619,6 +773,7 @@ class GatewayConnection:
         self._loop: asyncio.AbstractEventLoop = None
         self._loop_thread: threading.Thread = None
         self._ws_lock: asyncio.Lock = None
+        self._relayed_runs: dict[str, float] = {}  # runId → ts (offline relay, once each)
         self._dispatcher: EventDispatcher = None
         self._started = False
         self._start_lock = threading.Lock()
@@ -626,6 +781,11 @@ class GatewayConnection:
         self._last_disconnect_time = 0.0
         self._server_version: str | None = None
         self._reconnected_at: float = 0.0  # timestamp of last successful reconnect after failure
+        # Default agent announced in the connect hello
+        # (snapshot.sessionDefaults.defaultAgentId). Refreshed on EVERY
+        # successful handshake so a reconnect to a reconfigured gateway is
+        # picked up; None when the gateway does not announce one.
+        self._default_agent_id: str | None = None
 
     @staticmethod
     def _jittered_delay(base_delay):
@@ -665,8 +825,8 @@ class GatewayConnection:
                 self._ws_lock = asyncio.Lock()
                 self._dispatcher = EventDispatcher()
                 self._dispatcher.set_orphan_hook(
-                    lambda parent: asyncio.ensure_future(
-                        self._run_orphan_continuation(parent)))
+                    lambda parent, run_ids=(): asyncio.ensure_future(
+                        self._run_orphan_continuation(parent, run_ids)))
                 ready.set()
                 self._loop.run_forever()
 
@@ -735,6 +895,8 @@ class GatewayConnection:
         server_version = extract_server_version(result)
         negotiated_protocol = result.get('protocol', PROTOCOL_MIN)
         self._negotiated_protocol = negotiated_protocol
+        self._default_agent_id = extract_default_agent_id(hello_data)
+        logger.info(f"### Gateway default agent: {self._default_agent_id or '(not announced)'}")
         return hello_data, server_version
 
     async def _connect(self):
@@ -869,23 +1031,33 @@ class GatewayConnection:
                 logger.info(f"### WS backoff: waiting {wait:.1f}s before reconnect")
                 await asyncio.sleep(wait)
 
-            # WS-9 (pledge 50bef735, 2026-09-10): openclaw gateway restart-to-ready
-            # measured at ~37-38s (container StartedAt -> "[gateway] ready" log
-            # line; openclaw-danielle 37.0s, openclaw-azrim 37.8s on 2026-09-10).
-            # The old max_attempts=5 schedule only covered a ~30s window (2+4+8+16s
-            # of sleep between attempts) before raising RuntimeError. Measured
-            # consequence in openvoiceui-azrim's logs for the 04:29 restart: all 5
-            # attempts (04:29:56.75 -> 04:30:26.94) failed because the gateway
-            # wasn't ready until 04:30:30.7, the supervisor gave up ("Failed to
-            # connect to Gateway after 5 attempts — retrying in 30s"), and only
-            # reconnected on its NEXT cycle ~35s later — a ~37s restart became a
-            # ~65s+ outage, and the retry budget was fully exhausted on every
-            # gateway restart across ~25 tenants (the condition this pledge exists
-            # to fix). max_attempts=6 extends the nominal (pre-jitter) sleep budget
-            # to 60s (2+4+8+16+30), comfortably covering the measured restart time
-            # with margin, while _jittered_delay (+/-15%) keeps tenants whose
-            # gateways restart together from retrying in lockstep.
-            max_attempts = 6
+            # RECONCILES TWO MEASUREMENTS THAT DISAGREED (merge of #482 with WS-9 on main).
+            # Both were real; they measured different restarts:
+            #   WS-9 (pledge 50bef735, 2026-09-10): openclaw restart-to-ready 37.0s / 37.8s
+            #     (container StartedAt -> "[gateway] ready"; openclaw-tenant-j, openclaw-tenant-d).
+            #   #482 (tenant-q-voice, 4 timestamped cases 2026-08-28 / 09-05 / 09-06 x2): claw_sigterm
+            #     at t=0, Errno 111 refusals until the gateway listens again at t=70-72s.
+            # A restart is therefore not one duration but a RANGE, ~37s to ~72s, and the schedule
+            # has to clear the top of it.
+            #
+            # WHY max_attempts=6 (main's value) IS NOW WRONG rather than merely smaller: it was
+            # sized against the OLD ladder [1,2,4,8,16,30,60], where 6 attempts bought
+            # 2+4+8+16+30 = 60s. #482 caps the ladder at 15s, and that change merged cleanly —
+            # so under the ladder now in this file, 6 attempts buys only 2+4+8+15+15 = 44s.
+            # Keeping 6 would silently cut WS-9's own budget from 60s to 44s and miss every
+            # 70s restart tenant-q measured. 10 attempts restores the intent: 2+4+8+15*6 = 104s.
+            #
+            # Attempt 4 still lands at t=14s, so a fast restart is caught exactly as quickly as
+            # before; attempts 5-10 probe every 15s (t=29,44,59,74,89,104s nominal), ~44% clear of
+            # the worst measured case. With +/-15% jitter on every sleep the last attempt lands
+            # between ~88s and ~120s. A genuinely dead gateway still raises inside ~2 minutes.
+            #
+            # Corroborated by the 2026-09-19 nightly review, which is what this schedule is for:
+            # tenant-c-voice recovered on attempt 5 (261ms) and tenant-q-voice saw a ~35s refusal window
+            # the same night. Exhausting the budget is not cosmetic — after the final failure the
+            # client stops probing until a fresh cycle, so a gateway that came back EARLY went
+            # unnoticed anyway (measured: exhausted 19:45:57, reconnected 19:46:32).
+            max_attempts = 10
             for attempt in range(max_attempts):
                 try:
                     logger.info(f"### WS connect attempt {attempt + 1}/{max_attempts}...")
@@ -903,14 +1075,34 @@ class GatewayConnection:
 
             raise RuntimeError(f"Failed to connect to Gateway after {max_attempts} attempts")
 
-    async def _run_orphan_continuation(self, session_key):
+    def _wire_session_key(self, key):
+        """The sessionKey to put in an outbound RPC — see wire_session_key().
+
+        Scoped to the default agent THIS connection's gateway announced. Note:
+        the `agent_id` threaded through stream_to_queue()/_send_and_stream()
+        (e.g. 'openvoiceui-fast' for the fast lane) is a CONNECTION selector
+        (GatewayRouter picks a gateway URL by it), not the session's owning
+        agent — it never reached the gateway, so the fast lane has always run on
+        the default agent. Deliberately not used here: honouring it would switch
+        that lane's agent/model.
+        """
+        return wire_session_key(key, self._default_agent_id)
+
+    async def _run_orphan_continuation(self, session_key, run_ids=()):
         """Nudge the idle main agent after an orphaned subagent completion,
         collect its reply, and hand it to the registered proactive handler.
 
         Runs on the gateway loop thread. The originating HTTP stream is gone,
         so the reply cannot ride the normal NDJSON path — server.py's
-        push_proactive_message broadcasts it over /ws/clawdbot instead.
+        push_proactive_message broadcasts it over /ws/clawdbot instead. When
+        no browser receives it, the result is relayed through the tenant's
+        own agent (_relay_offline_completion).
         """
+        if session_key == _OFFLINE_RELAY_SESSION:
+            # Loop guard: a relay turn's own subagents never trigger another
+            # continuation (its nudge could re-text the owner) or relay.
+            logger.info("### ORPHAN continuation skipped — offline-relay session")
+            return
         if _PROACTIVE_HANDLER is None:
             logger.info("### ORPHAN continuation skipped — no proactive handler registered")
             return
@@ -928,7 +1120,7 @@ class GatewayConnection:
                     "method": "chat.send",
                     "params": {
                         "message": _PROMPT_ARMOR + _SUBAGENT_NUDGE_MSG,
-                        "sessionKey": session_key,
+                        "sessionKey": self._wire_session_key(session_key),
                         "idempotencyKey": cont_chat_id,
                     },
                 })
@@ -936,7 +1128,7 @@ class GatewayConnection:
                             f"(session={session_key}, chat_id={cont_chat_id[:8]})")
                 collected_text = ''
                 prev_len = 0
-                deadline = time.time() + 180
+                deadline = time.time() + _ORPHAN_COLLECT_S
                 while time.time() < deadline:
                     try:
                         data = await asyncio.wait_for(sub.event_queue.get(), timeout=10.0)
@@ -983,18 +1175,78 @@ class GatewayConnection:
                 self._dispatcher.unsubscribe(cont_chat_id)
 
             text = _strip_internal_markers(collected_text or '')
+            if not text and time.time() >= deadline:
+                logger.warning(
+                    f"### ORPHAN continuation: no reply within {_ORPHAN_COLLECT_S}s "
+                    f"(session={session_key}, runs={list(run_ids)}) — completion "
+                    f"NOT pushed or relayed")
+                return
             if not text or is_system_response(text):
                 logger.info("### ORPHAN continuation: no user-facing text — nothing to push")
                 return
             logger.info(f"### ORPHAN continuation: pushing proactive message "
                         f"({len(text)} chars): {text[:120]}")
             handler = _PROACTIVE_HANDLER
-            threading.Thread(
-                target=lambda: handler(text, session_key),
-                name='proactive-push', daemon=True,
-            ).start()
+            loop = asyncio.get_running_loop()
+            relay_ids = tuple(run_ids) or (cont_chat_id,)
+
+            def _deliver():
+                delivered = handler(text, session_key, run_id=','.join(relay_ids))
+                if delivered == 0 and not isinstance(delivered, bool):
+                    asyncio.run_coroutine_threadsafe(
+                        self._relay_offline_completion(text, session_key, relay_ids),
+                        loop)
+
+            threading.Thread(target=_deliver, name='proactive-push', daemon=True).start()
         except Exception as e:
             logger.error(f"### ORPHAN continuation failed: {e}")
+
+    _RELAYED_RUNS_MAX = 500
+
+    async def _relay_offline_completion(self, text, session_key, run_ids):
+        """Hand a completion no browser received to the tenant's own agent.
+
+        Fire-and-forget chat.send (same shape as _send_steer) on the default
+        agent's dedicated _OFFLINE_RELAY_SESSION; its events match no
+        subscription and are dropped by the dispatcher, so nothing leaks into
+        a voice stream. At most one relay per subagent runId. Returns True if
+        a relay was sent.
+        """
+        if session_key == _OFFLINE_RELAY_SESSION or _OFFLINE_RELAY_MARKER in (text or ''):
+            logger.info("### OFFLINE RELAY skipped — relay-originated turn")
+            return False
+        relayed = self._relayed_runs
+        fresh = [r for r in run_ids if r and r not in relayed]
+        if not fresh:
+            logger.info(f"### OFFLINE RELAY skipped — already relayed {list(run_ids)}")
+            return False
+        if not self._connected or not self._ws or not self._dispatcher:
+            logger.warning("### OFFLINE RELAY skipped — gateway not connected")
+            return False
+        for r in fresh:
+            relayed[r] = time.time()
+        while len(relayed) > self._RELAYED_RUNS_MAX:
+            relayed.pop(next(iter(relayed)))
+        chat_id = str(uuid.uuid4())
+        try:
+            await self._dispatcher.send(self._ws, {
+                "type": "req",
+                "id": f"relay-{chat_id}",
+                "method": "chat.send",
+                "params": {
+                    "message": _PROMPT_ARMOR + _OFFLINE_RELAY_MSG.format(summary=text[:1500]),
+                    "sessionKey": self._wire_session_key(_OFFLINE_RELAY_SESSION),
+                    "idempotencyKey": chat_id,
+                },
+            })
+        except Exception as e:
+            for r in fresh:
+                relayed.pop(r, None)  # allow a later continuation to retry
+            logger.warning(f"### OFFLINE RELAY send failed: {e}")
+            return False
+        logger.info(f"### OFFLINE RELAY sent to own agent (runs={fresh}, "
+                    f"from_session={session_key}): {text[:120]}")
+        return True
 
     async def _send_abort(self, run_id, session_key, reason="voice-disconnect"):
         """Send chat.abort for a specific run via the dispatcher's send lock."""
@@ -1003,7 +1255,7 @@ class GatewayConnection:
                 "type": "req",
                 "id": f"abort-{run_id}",
                 "method": "chat.abort",
-                "params": {"sessionKey": session_key, "runId": run_id}
+                "params": {"sessionKey": self._wire_session_key(session_key), "runId": run_id}
             }
             await self._dispatcher.send(self._ws, abort_req)
             logger.info(f"### ABORT sent for run {run_id[:12]}... reason={reason}")
@@ -1070,7 +1322,7 @@ class GatewayConnection:
             "method": "chat.send",
             "params": {
                 "message": full_message,
-                "sessionKey": session_key,
+                "sessionKey": self._wire_session_key(session_key),
                 "idempotencyKey": chat_id,
             }
         }
@@ -1180,6 +1432,17 @@ class GatewayConnection:
 
             # ACK for our chat.send
             if data.get('type') == 'res' and data.get('id') == f'chat-{chat_id}':
+                # A REJECTED chat.send is terminal, not an ACK: no run exists,
+                # so no event will ever follow. Treated as an ACK it left the
+                # turn heartbeating to the 300s hard timeout and then ending
+                # as a null text_done with the reason lost (the heartbeats
+                # also keep the outer idle watchdog fed, so it never fires).
+                rejected = res_error_message(data)
+                if rejected is not None:
+                    logger.error(f"### chat.send REJECTED by gateway: {rejected}")
+                    event_queue.put({'type': 'text_done', 'response': None,
+                                     'actions': captured_actions, 'error': rejected})
+                    return
                 result = data.get('result') or data.get('payload') or {}
                 run_id = result.get('runId') or data.get('runId')
                 logger.info(f"### chat.send ACK runId={run_id[:8] if run_id else 'none'}")
@@ -1236,9 +1499,23 @@ class GatewayConnection:
                     }
                     if phase == 'result':
                         action['result'] = str(tool_data.get('result', tool_data.get('meta', '')))[:200]
-                    captured_actions.append(action)
-                    event_queue.put({'type': 'action', 'action': action})
-                    if phase == 'start':
+                    # The `item` fallback below may already hold this call's start.
+                    # Upgrade it in place (args arrive only on the `tool` stream)
+                    # instead of appending a second start, which would double
+                    # tool_count.
+                    _item_start = next(
+                        (a for a in captured_actions
+                         if phase == 'start' and a.get('source') == 'item'
+                         and a.get('toolCallId') and a.get('toolCallId') == action['toolCallId']),
+                        None,
+                    )
+                    if _item_start is not None:
+                        _item_start.update(action)
+                        _item_start.pop('source', None)
+                    else:
+                        captured_actions.append(action)
+                        event_queue.put({'type': 'action', 'action': action})
+                    if phase == 'start' and _item_start is None:
                         tool_name = tool_data.get('name', '?')
                         logger.info(f"### TOOL START: {tool_name}")
                         if is_subagent_spawn_tool(tool_name):
@@ -1250,6 +1527,35 @@ class GatewayConnection:
                             }})
                     elif phase == 'result':
                         logger.info(f"### TOOL RESULT: {tool_data.get('name', '?')}")
+
+                # ── Tool calls reported ONLY on the `item` stream ────────────
+                # openclaw reports every tool call twice: `stream: "tool"` and
+                # `stream: "item"` (data.kind == "tool"). Some runs deliver only
+                # the `item` copy. Measured 2026-10-02 on tenant-g: the
+                # auto-continue run 77808579 ran exec, exec, read with zero
+                # `tool`-stream events, so tool_count read 0, the log said the
+                # promise-completion nudge did nothing, and the detector itself
+                # would fire on turns that DID work. Count an item tool start
+                # only for THIS turn's run (a sub-agent's run on the same socket
+                # has its own runId/sessionKey and must not be credited here),
+                # and only once per toolCallId.
+                _item_action = item_stream_tool_start(
+                    payload,
+                    {r for r in (sub.run_id, getattr(continuation_sub, 'run_id', None)) if r},
+                    session_key,
+                    captured_actions,
+                )
+                if _item_action is not None:
+                    captured_actions.append(_item_action)
+                    event_queue.put({'type': 'action', 'action': _item_action})
+                    logger.info(f"### TOOL START (item stream): {_item_action['name']}")
+                    if is_subagent_spawn_tool(_item_action['name']):
+                        subagent_active = True
+                        logger.info(f"### SUBAGENT SPAWN DETECTED via item stream: {_item_action['name']}")
+                        event_queue.put({'type': 'action', 'action': {
+                            'type': 'subagent', 'phase': 'spawning',
+                            'tool': _item_action['name'], 'ts': time.time()
+                        }})
 
                 if canonical_stream == 'lifecycle':
                     phase = payload.get('data', {}).get('phase', '')
@@ -1302,7 +1608,7 @@ class GatewayConnection:
                                 "method": "chat.send",
                                 "params": {
                                     "message": cont_msg,
-                                    "sessionKey": session_key,
+                                    "sessionKey": self._wire_session_key(session_key),
                                     "idempotencyKey": cont_chat_id,
                                 }
                             }
@@ -1362,7 +1668,7 @@ class GatewayConnection:
                                     "method": "chat.send",
                                     "params": {
                                         "message": cont_msg,
-                                        "sessionKey": session_key,
+                                        "sessionKey": self._wire_session_key(session_key),
                                         "idempotencyKey": cont_chat_id,
                                     }
                                 }
@@ -1526,7 +1832,7 @@ class GatewayConnection:
                     else:
                         # ── Bare final, ZERO events for our run: message was
                         # QUEUED, not answered (root cause of the 2026-07-02
-                        # phatty amnesia + 2026-06-30 src collapse family).
+                        # tenant-e amnesia + 2026-06-30 tenant-r collapse family).
                         # When chat.send lands on a session that is busy (or
                         # still finalizing the previous turn), openclaw queue
                         # mode "collect" coalesces the payload into a followup
@@ -1624,7 +1930,7 @@ class GatewayConnection:
                 "method": "chat.send",
                 "params": {
                     "message": full_message,
-                    "sessionKey": session_key,
+                    "sessionKey": self._wire_session_key(session_key),
                     "idempotencyKey": chat_id
                 }
             }
@@ -1649,7 +1955,7 @@ class GatewayConnection:
                         "method": "chat.send",
                         "params": {
                             "message": full_message,
-                            "sessionKey": session_key,
+                            "sessionKey": self._wire_session_key(session_key),
                             "idempotencyKey": retry_chat_id,
                         },
                     }

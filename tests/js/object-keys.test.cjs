@@ -85,12 +85,14 @@ for (const page of ['website-setup.html', 'retired/website-creator.html']) {
 }
 
 test('login redirect keeps local paths and rejects external URL forms', () => {
-    const start = source.indexOf('const redirectTo = new URLSearchParams');
+    const start = source.indexOf('const redirectTo = safeRedirectTarget');
+    assert.ok(start >= 0);
+    const helper = readFileSync(join(__dirname, '../../src/core/safeRedirect.js'), 'utf8').replace('export function', 'function');
     const end = source.indexOf('\n                    };', start);
     const code = source.slice(start, end);
     for (const input of ['/canvas?page=1#top', '//evil.test', '/\\evil.test', '/\t/evil.test', 'https://evil.test', '//[invalid']) {
         const location = {origin: 'https://voice.test', search: '?redirect=' + encodeURIComponent(input), href: 'unchanged'};
-        vm.runInNewContext(code, {window: {location}, URL, URLSearchParams});
-        assert.equal(location.href, input === '/canvas?page=1#top' ? 'https://voice.test/canvas?page=1#top' : 'unchanged');
+        vm.runInNewContext(helper + '\n' + code, {window: {location}, URL, URLSearchParams});
+        assert.equal(location.href, input === '/canvas?page=1#top' ? '/canvas?page=1#top' : 'unchanged');
     }
 });

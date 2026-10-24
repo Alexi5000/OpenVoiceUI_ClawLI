@@ -73,6 +73,14 @@ def _plugin_path(base: Path, plugin_id: str) -> Optional[Path]:
         return None
 
 
+def _broker_headers(username: str) -> dict:
+    """SEC-059: the host broker binds every route (status/config/provision/deprovision)
+    to the tenant in the path and requires X-Tenant-Token. Without the token the new
+    broker answers 403/503 — never silently — and the old broker ignores the header."""
+    from services.host_broker import auth_headers
+    return auth_headers(username)
+
+
 def _get_provision_url() -> str:
     """Get the provisioning service URL, auto-detecting the Docker gateway IP."""
     host = os.getenv("PROVISION_SERVICE_HOST", "")
@@ -242,7 +250,7 @@ def _get_username() -> str:
     username = os.getenv("JAMBOT_USERNAME", "")
     if username:
         return username
-    # CLIENT_NAME is set in every client's compose .env (e.g. "Test-dev", "Nick")
+    # CLIENT_NAME is set in every client's compose .env (e.g. "Test-dev", "Example")
     client_name = os.getenv("CLIENT_NAME", "")
     if client_name:
         return client_name.lower().replace(" ", "-")
@@ -278,7 +286,8 @@ def _run_lifecycle_hook(manifest: dict, hook_name: str, config: dict = None) -> 
             resp = requests.post(
                 f"{_get_provision_url()}/provision/{plugin_type}/{username}",
                 json=config if config else None,
-                headers={"Content-Type": "application/json"} if config else {},
+                headers={**({"Content-Type": "application/json"} if config else {}),
+                         **_broker_headers(username)},
                 timeout=PROVISION_TIMEOUT,
             )
             result = resp.json()
@@ -305,6 +314,7 @@ def _run_lifecycle_hook(manifest: dict, hook_name: str, config: dict = None) -> 
             logger.info(f"Deprovisioning container: {plugin_type} for {username}")
             resp = requests.post(
                 f"{_get_provision_url()}/deprovision/{plugin_type}/{username}",
+                headers=_broker_headers(username),
                 timeout=60,
             )
             logger.info(f"Deprovision result: {resp.json()}")
@@ -548,7 +558,8 @@ def get_container_status(plugin_id: str) -> Optional[dict]:
     if not plugin_type or not username:
         return None
     try:
-        resp = requests.get(f"{_get_provision_url()}/status/{plugin_type}/{username}", timeout=10)
+        resp = requests.get(f"{_get_provision_url()}/status/{plugin_type}/{username}",
+                            headers=_broker_headers(username), timeout=10)
         if resp.ok:
             return resp.json()
     except Exception:
@@ -724,6 +735,7 @@ def get_plugin_config(plugin_id: str) -> Optional[dict]:
     try:
         resp = requests.get(
             f"{_get_provision_url()}/config/{plugin_type}/{username}",
+            headers=_broker_headers(username),
             timeout=10,
         )
         if resp.ok:
@@ -752,7 +764,7 @@ def update_plugin_config(plugin_id: str, config: dict) -> dict:
         resp = requests.put(
             f"{_get_provision_url()}/config/{plugin_type}/{username}",
             json=config,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **_broker_headers(username)},
             timeout=PROVISION_TIMEOUT,
         )
         return resp.json()
