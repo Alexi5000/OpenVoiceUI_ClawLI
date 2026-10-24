@@ -433,8 +433,10 @@ def serve_generated_subdir_file(subdir, filename):
     """Serve a generated sound effect, WAV conversion or music video. ?download=1 saves it."""
     if subdir not in _GENERATED_SUBDIRS:
         return jsonify({"error": "Generated file not found"}), 404
-    base = GENERATED_MUSIC_DIR / subdir
-    file_path = _safe_path(base, filename)
+    try:
+        file_path = safe_join(GENERATED_MUSIC_DIR, subdir, filename, allow_base=False)
+    except UnsafePathError:
+        return jsonify({"error": "Generated file not found"}), 404
     if file_path is None or not file_path.is_file():
         return jsonify({"error": "Generated file not found"}), 404
     mime_type = _GENERATED_SUBDIR_MIME_TYPES.get(file_path.suffix.lower(), "application/octet-stream")

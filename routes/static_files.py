@@ -18,6 +18,7 @@ import random
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from flask import Blueprint, Response, jsonify, redirect, request, send_file
 
@@ -607,7 +608,7 @@ def _upload_shadow_record(filename, exists, states=None, reason=None, listing=Fa
             'ts': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
             'file': filename[:200], 'exists': bool(exists), 'mode': UPLOADS_AUTH_MODE,
             'ua': request.headers.get('User-Agent', '')[:160],
-            'ref_host': re.sub(r'^https?://([^/]+).*$', r'\1', ref)[:120] if ref else '',
+            'ref_host': (urlsplit(ref[:2048]).hostname or '')[:120] if ref else '',
             'accept': request.headers.get('Accept', '')[:60],
             'reason': reason or 'no-credential',
             'grants': states or {},

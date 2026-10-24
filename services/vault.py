@@ -1935,7 +1935,7 @@ def _refresh_oauth_token(cred_id: str, refresh_token: str) -> Optional[dict]:
         'grant_type': 'refresh_token',
     })
     if not data.get('access_token'):
-        logger.error(f"OAuth refresh failed for {cred_id}: {data.get('error', 'no access token')}")
+        logger.error("OAuth refresh failed")
         return None
     return {
         'access_token': data['access_token'],
@@ -1969,7 +1969,7 @@ def _revoke_provider_grant(cat_entry: dict, token_data: dict):
                 json={'access_token': token_data['access_token']},
                 headers={'Accept': 'application/vnd.github+json'}, timeout=10)
     except Exception as exc:
-        logger.warning(f"[vault] revoke at {provider} failed (disconnect continues): {exc.__class__.__name__}")
+        logger.warning("OAuth grant revocation failed; disconnect continues")
 
 
 def disconnect_oauth(username: str, cred_id: str):

@@ -756,7 +756,7 @@ def _write_platform_oauth_env(updates: dict) -> None:
             raise PlatformOAuthEnvWriteError('platform_env_write_failed',
                                              f'Cannot create {path}: {exc}')
     elif not _platform_env_writable(path):
-        logger.error(f"platform-oauth env is read-only in this container: {path}")
+        logger.error("platform-oauth env is read-only in this container")
         raise PlatformOAuthEnvWriteError(
             'platform_env_read_only',
             f'{path} is read-only in this container; platform OAuth credentials are set on the host.')

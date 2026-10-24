@@ -1461,7 +1461,7 @@ def _resolve_page_entry_locked(page_id: str) -> tuple[dict, str | None, bool]:
         file_on_disk = False
     else:
         try:
-            file_on_disk = (CANVAS_PAGES_DIR / Path(f'{stem}.html').name).is_file()
+            file_on_disk = safe_join(CANVAS_PAGES_DIR, f'{stem}.html', allow_base=False).is_file()
         except (OSError, ValueError):
             file_on_disk = False
     # STEM FIRST, always. The /pages/ gate keys on Path(path).stem and consults

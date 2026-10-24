@@ -56,3 +56,27 @@ def test_process_directory_rejects_external_symlink(tmp_path, monkeypatch):
     monkeypatch.setattr(suno, 'GENERATED_MUSIC_DIR', root)
     with pytest.raises(UnsafePathError):
         suno._process_dir('wav_convert')
+
+
+def test_lyric_cache_rejects_external_symlink(tmp_path, monkeypatch):
+    from services import suno_lyrics
+    root = tmp_path / 'cache'
+    root.mkdir()
+    private = tmp_path / 'private.json'
+    private.write_text('{"private":true}')
+    (root / 'lyrics-song.json').symlink_to(private)
+    monkeypatch.setattr(suno_lyrics, 'CACHE_DIR', root)
+    with pytest.raises(UnsafePathError):
+        suno_lyrics.write_cache('song.mp3', [], 0, 'task', 'audio')
+    assert private.read_text() == '{"private":true}'
+
+
+def test_lyric_cache_and_markers_are_shared_group_only(tmp_path, monkeypatch):
+    from services import suno_lyrics
+    monkeypatch.setattr(suno_lyrics, 'CACHE_DIR', tmp_path)
+    cached = suno_lyrics.write_cache('song.mp3', [], 0, 'task', 'audio')
+    assert stat.S_IMODE(cached.stat().st_mode) == 0o660
+    assert suno_lyrics._claim('audio', {'state': 'pending'})
+    assert stat.S_IMODE(suno_lyrics.marker_path('audio').stat().st_mode) & 0o007 == 0
+    suno_lyrics._finish_marker('audio', {'state': 'done'})
+    assert stat.S_IMODE(suno_lyrics.marker_path('audio').stat().st_mode) == 0o660

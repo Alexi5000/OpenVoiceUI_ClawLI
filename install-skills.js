@@ -124,10 +124,25 @@ function validateBundle(bundleDir) {
   for (const ent of fs.readdirSync(bundleDir, { withFileTypes: true })) {
     if (!ent.isDirectory() || ent.name.startsWith(".") || ent.name === "__pycache__") continue;
     const md = path.join(bundleDir, ent.name, "SKILL.md");
-    if (!fs.existsSync(md)) { problems.push(`${ent.name}/: missing SKILL.md`); continue; }
-    const size = fs.statSync(md).size;
-    if (size > MAX_SKILL_MD_BYTES) problems.push(`${ent.name}/SKILL.md: ${size} bytes exceeds ${MAX_SKILL_MD_BYTES}`);
-    const fm = readFrontmatter(fs.readFileSync(md, "utf8"));
+    let content;
+    let fd;
+    try {
+      fd = fs.openSync(md, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      if (!fs.fstatSync(fd).isFile()) throw new Error("not a regular file");
+      const buffer = Buffer.alloc(MAX_SKILL_MD_BYTES + 1);
+      const size = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      if (size > MAX_SKILL_MD_BYTES) {
+        problems.push(`${ent.name}/SKILL.md: exceeds ${MAX_SKILL_MD_BYTES}`);
+        continue;
+      }
+      content = buffer.subarray(0, size).toString("utf8");
+    } catch {
+      problems.push(`${ent.name}/: missing or unsafe SKILL.md`);
+      continue;
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+    const fm = readFrontmatter(content);
     if (!fm) { problems.push(`${ent.name}/SKILL.md: no YAML frontmatter`); continue; }
     if (fm.name !== ent.name) problems.push(`${ent.name}/SKILL.md: frontmatter name "${fm.name || ""}" must equal the folder name`);
     if (!fm.description) problems.push(`${ent.name}/SKILL.md: frontmatter description is empty`);

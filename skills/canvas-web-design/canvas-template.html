@@ -589,7 +589,8 @@ function menu() {
       if (!document.hidden) canvasRefit();
     });
     window.addEventListener("message", function (e) {
-      if (e && e.data && e.data.type === "canvas-visible") canvasRefit();
+      if (e.origin !== window.location.origin || e.source !== window.parent) return;
+      if (e.data && e.data.type === "canvas-visible") canvasRefit();
     });
     if (document.readyState === "complete") canvasRefit();
     else window.addEventListener("load", canvasRefit);

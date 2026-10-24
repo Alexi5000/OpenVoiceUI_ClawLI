@@ -73,6 +73,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request, Response
 
 from services.paths import RUNTIME_DIR, UPLOADS_DIR
+from services.safe_paths import safe_join
 from routes.static_files import append_upload_index, _MAX_UPLOAD_BYTES
 
 logger = logging.getLogger(__name__)
@@ -416,10 +417,12 @@ def intake_upload(token: str):
     #    strings like "../../etc/passwd" or embedded path separators are
     #    moot because we never join them into a path at all.
     stored_name = f"intake_{uuid.uuid4().hex}{ext}"
-    dest = UPLOADS_DIR / stored_name
+    dest = safe_join(UPLOADS_DIR, stored_name, allow_base=False)
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        f.save(str(dest))  # streams to disk immediately — never held fully in memory
+        descriptor = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, 'wb') as output:
+            f.save(output)
     except OSError as exc:
         logger.error('intake: save failed for token_suffix=%s: %s', token[-8:], exc)
         return _refuse(500, 'save_failed', 'Upload failed. Please try again.')

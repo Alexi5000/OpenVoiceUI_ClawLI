@@ -49,6 +49,7 @@ import logging
 import os
 import re
 import threading
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,6 +57,7 @@ from pathlib import Path
 import requests as http_requests
 
 from services.paths import CANVAS_PAGES_DIR, GENERATED_MUSIC_DIR
+from services.safe_paths import safe_join
 
 logger = logging.getLogger(__name__)
 
@@ -82,17 +84,34 @@ def slug(filename: str) -> str:
 
 
 def cache_path(filename: str) -> Path:
-    return CACHE_DIR / f'lyrics-{slug(filename)}.json'
+    return safe_join(CACHE_DIR, f'lyrics-{slug(filename)}.json', allow_base=False)
 
 
 def marker_path(audio_id: str) -> Path:
     safe = re.sub(r'[^A-Za-z0-9_\-]', '_', audio_id or '')[:128]
-    return CACHE_DIR / MARKER_DIRNAME / f'{safe}.json'
+    return safe_join(CACHE_DIR, MARKER_DIRNAME, f'{safe}.json', allow_base=False)
 
 
 def aligned_path(audio_id: str) -> Path:
     safe = re.sub(r'[^A-Za-z0-9_\-]', '_', audio_id or '')[:128]
-    return CACHE_DIR / ALIGNED_DIRNAME / f'{safe}.json'
+    return safe_join(CACHE_DIR, ALIGNED_DIRNAME, f'{safe}.json', allow_base=False)
+
+
+def _atomic_json(path: Path, payload: dict) -> None:
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix='.lyrics-', suffix='.tmp')
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as output:
+            json.dump(payload, output)
+            output.flush()
+            os.fsync(output.fileno())
+            os.fchmod(output.fileno(), 0o660)
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
 
 
 def save_aligned(audio_id: str, task_id: str, aligned: list, filename: str = '') -> None:
@@ -106,11 +125,9 @@ def save_aligned(audio_id: str, task_id: str, aligned: list, filename: str = '')
     p = aligned_path(audio_id)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(f'.json.tmp-{os.getpid()}-{threading.get_ident()}')
-        tmp.write_text(json.dumps({'audio_id': audio_id, 'task_id': task_id,
-                                   'filename': filename or None, 'saved': _now_iso(),
-                                   'alignedWords': aligned}))
-        os.replace(tmp, p)
+        _atomic_json(p, {'audio_id': audio_id, 'task_id': task_id,
+                         'filename': filename or None, 'saved': _now_iso(),
+                         'alignedWords': aligned})
     except OSError as exc:
         logger.warning(f'suno aligned words not saved ({p}): {exc}')
 
@@ -246,20 +263,14 @@ def write_cache(filename: str, lines: list, n_aligned: int, task_id: str, audio_
     out = cache_path(filename)
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
-        bak = out.with_suffix(f'.json.bak-pregen-{os.getpid()}')
-        bak.write_bytes(out.read_bytes())
+        bak = safe_join(CACHE_DIR, out.name + f'.bak-pregen-{os.getpid()}', allow_base=False)
+        _atomic_json(bak, json.loads(out.read_text()))
     payload = {'source': 'suno', 'offset': 0, 'lines': lines,
                'filename': filename,
                'saved': _now_iso(),
                'sync': {'via': VIA, 'aligned_words': n_aligned,
                         'task_id': task_id, 'audio_id': audio_id}}
-    tmp = out.with_suffix(f'.json.tmp-{os.getpid()}-{threading.get_ident()}')
-    tmp.write_text(json.dumps(payload))
-    try:
-        os.chmod(tmp, 0o644)
-    except OSError:
-        pass
-    os.replace(tmp, out)
+    _atomic_json(out, payload)
     return out
 
 
@@ -291,7 +302,7 @@ def _claim(audio_id: str, info: dict):
     p = marker_path(audio_id)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o660)
     except FileExistsError:
         return False
     except OSError as exc:
@@ -305,9 +316,7 @@ def _claim(audio_id: str, info: dict):
 def _finish_marker(audio_id: str, info: dict) -> None:
     p = marker_path(audio_id)
     try:
-        tmp = p.with_suffix(f'.json.tmp-{os.getpid()}-{threading.get_ident()}')
-        tmp.write_text(json.dumps({**info, 'ts': time.time(), 'at': _now_iso()}))
-        os.replace(tmp, p)
+        _atomic_json(p, {**info, 'ts': time.time(), 'at': _now_iso()})
     except OSError as exc:
         logger.warning(f'suno lyrics marker update failed ({p}): {exc}')
 

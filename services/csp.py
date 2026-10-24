@@ -32,7 +32,7 @@ def trusted_hosts() -> list:
         if not token:
             continue
         if not _HOST_SOURCE_RE.match(token):
-            logger.warning('CSP_TRUSTED_HOSTS: ignoring %r (expected scheme://host[:port])', token)
+            logger.warning('CSP_TRUSTED_HOSTS: ignoring malformed host source')
             continue
         if token not in hosts:
             hosts.append(token)
