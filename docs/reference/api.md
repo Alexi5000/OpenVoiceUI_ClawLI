@@ -548,7 +548,7 @@ Unified Suno endpoint. Action is specified via query param or POST body.
 
 ### POST /api/suno/callback
 
-Webhook endpoint for sunoapi.org. Called when song generation completes. When `SUNO_WEBHOOK_SECRET` is configured, the request must carry either the derived `token` query parameter (appended automatically to `callBackUrl`) or a valid `X-Suno-Signature` HMAC-SHA256 of the body; otherwise it gets 403. When Clerk auth is enabled and no secret is configured, callbacks are rejected with 503 (status polling still delivers songs). Local mode without Clerk accepts unsigned callbacks.
+Webhook endpoint for sunoapi.org. Called when song generation completes. sunoapi.org does not sign callbacks, so each submission appends a fresh, unguessable `cb` query token to `callBackUrl`. The server stores only its SHA-256, binds it to the first provider `taskId` it reports, and expires it after 7 days. A callback with a missing, unknown, expired or mismatched token gets 403 whenever Clerk auth (or `CANVAS_REQUIRE_AUTH=true`) is on or `SUNO_WEBHOOK_SECRET` is set. With `SUNO_WEBHOOK_SECRET`, the legacy derived `token` parameter and an `X-Suno-Signature` HMAC-SHA256 of the body are also accepted. Local mode without Clerk or a secret still accepts unsigned callbacks.
 
 `GET /api/suno` is public without a session only for the read-only actions `list`, `list_jingles` and `jingle_styles`. Every other action (generation, status, credits, editing) requires a Clerk session or the agent key when Clerk auth is enabled.
 

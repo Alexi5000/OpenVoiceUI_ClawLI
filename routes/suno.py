@@ -68,21 +68,116 @@ SUNO_CALLBACK_URL = (
 
 
 def _callback_token() -> str:
-    """Shared callback token derived from SUNO_WEBHOOK_SECRET (never the raw secret).
+    """Legacy shared callback token derived from SUNO_WEBHOOK_SECRET.
 
-    sunoapi.org calls back whatever callBackUrl we hand it, so the token rides in
-    the URL query string and is checked by suno_callback(). Deriving it with HMAC
-    keeps the configured secret itself out of provider logs.
+    Kept so callbacks for jobs submitted before per-request tokens shipped still
+    verify. New submissions use _issue_callback_token() instead.
     """
     return hmac.new(SUNO_WEBHOOK_SECRET.encode(), b'suno-callback-v1', hashlib.sha256).hexdigest()
 
 
+# Per-request callback tokens. sunoapi.org does not sign callbacks (its docs only
+# say "verify the legitimacy of the request source"), so every submission gets a
+# fresh unguessable token in its callBackUrl. Only the SHA-256 of each token is
+# stored, so the registry file cannot be replayed if it is read. A token is
+# bound to the first provider taskId it reports, and expires after the TTL.
+SUNO_CALLBACK_TOKENS_FILE = Path(os.environ.get(
+    'SUNO_CALLBACK_TOKENS_FILE',
+    str(GENERATED_MUSIC_DIR.parent / '.suno-callback-tokens.json')))
+_CALLBACK_TOKEN_TTL_S = 7 * 24 * 3600
+_CALLBACK_TOKEN_MAX = 5000
+_cb_token_lock = threading.Lock()
+
+
+def _cb_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+
+def _cb_tokens_load() -> dict:
+    try:
+        with open(SUNO_CALLBACK_TOKENS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _cb_tokens_save(registry: dict) -> None:
+    path = SUNO_CALLBACK_TOKENS_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f'{path.name}.{uuid.uuid4().hex}.tmp')
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(registry, f)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _cb_tokens_prune(registry: dict, now: float) -> dict:
+    live = {h: e for h, e in registry.items()
+            if isinstance(e, dict) and now - float(e.get('issued_at', 0)) < _CALLBACK_TOKEN_TTL_S}
+    if len(live) > _CALLBACK_TOKEN_MAX:
+        keep = sorted(live.items(), key=lambda kv: kv[1].get('issued_at', 0))[-_CALLBACK_TOKEN_MAX:]
+        live = dict(keep)
+    return live
+
+
+def _issue_callback_token() -> str:
+    """Create and register a fresh per-request callback token."""
+    import secrets
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    with _cb_token_lock:
+        registry = _cb_tokens_prune(_cb_tokens_load(), now)
+        registry[_cb_token_hash(token)] = {'issued_at': now, 'task_id': ''}
+        _cb_tokens_save(registry)
+    return token
+
+
+def _verify_callback_token(token: str, task_id: str) -> bool:
+    """True if token was issued by us, is unexpired, and matches the bound taskId.
+
+    The first callback that reports a taskId binds the token to it; later
+    callbacks with the same token must carry the same taskId.
+    """
+    if not token or len(token) > 256:
+        return False
+    now = time.time()
+    key = _cb_token_hash(token)
+    with _cb_token_lock:
+        registry = _cb_tokens_load()
+        entry = registry.get(key)
+        if not isinstance(entry, dict) or now - float(entry.get('issued_at', 0)) >= _CALLBACK_TOKEN_TTL_S:
+            return False
+        bound = entry.get('task_id') or ''
+        if bound:
+            return bool(task_id) and hmac.compare_digest(bound.encode(), task_id.encode())
+        if task_id:
+            entry['task_id'] = task_id
+            try:
+                _cb_tokens_save(_cb_tokens_prune(registry, now))
+            except OSError:
+                logger.warning('Suno callback: could not persist token binding')
+        return True
+
+
 def _callback_url() -> str:
-    """SUNO_CALLBACK_URL with the shared callback token appended when a secret is set."""
-    if not SUNO_CALLBACK_URL or not SUNO_WEBHOOK_SECRET:
+    """SUNO_CALLBACK_URL with a fresh per-request callback token appended."""
+    if not SUNO_CALLBACK_URL:
         return SUNO_CALLBACK_URL
     sep = '&' if '?' in SUNO_CALLBACK_URL else '?'
-    return f'{SUNO_CALLBACK_URL}{sep}token={_callback_token()}'
+    try:
+        return f'{SUNO_CALLBACK_URL}{sep}cb={_issue_callback_token()}'
+    except OSError as exc:
+        logger.warning('Suno: could not register callback token (%s); callbacks will rely on polling',
+                       type(exc).__name__)
+        return SUNO_CALLBACK_URL
 
 
 def _callback_auth_required() -> bool:
@@ -2400,16 +2495,23 @@ def _action_file_upload(_q, body: dict):
 def suno_callback():
     """Webhook from sunoapi.org — downloads song and queues frontend notification."""
     try:
-        # Authenticate the provider callback. When SUNO_WEBHOOK_SECRET is set,
-        # accept either a valid X-Suno-Signature HMAC of the body or the shared
-        # token that _callback_url() appends to callBackUrl. Without a secret,
-        # unsigned callbacks are refused whenever Clerk auth (or hosted
+        # Authenticate the provider callback. sunoapi.org does not sign
+        # callbacks, so every submission carries a fresh per-request token in
+        # its callBackUrl (?cb=...), registered server-side and bound to the
+        # provider taskId (see _verify_callback_token). When SUNO_WEBHOOK_SECRET
+        # is set, the legacy shared ?token= and an X-Suno-Signature body HMAC are
+        # also accepted so in-flight jobs keep working. Without any valid proof,
+        # callbacks are refused whenever Clerk auth (or hosted
         # CANVAS_REQUIRE_AUTH) is on: the route is auth-exempt, so an unsigned
-        # event would let any caller write media / job state. Songs still arrive
-        # via the authenticated status-polling path. Only intentional local mode
-        # (no Clerk) keeps accepting unsigned callbacks, constrained to https
-        # downloads capped at SUNO_MAX_DOWNLOAD_BYTES.
-        _require_https = not SUNO_WEBHOOK_SECRET
+        # event would let any caller write media / job state. Only intentional
+        # local mode (no Clerk) keeps accepting unproven callbacks, constrained to
+        # https downloads capped at SUNO_MAX_DOWNLOAD_BYTES.
+        _peek = request.get_json(silent=True) or {}
+        _peek_data = _peek.get('data') if isinstance(_peek, dict) else None
+        _peek_data = _peek_data if isinstance(_peek_data, dict) else {}
+        _cb_task = str(_peek_data.get('taskId') or _peek_data.get('task_id') or '')
+        cb_ok = _verify_callback_token(request.args.get('cb', ''), _cb_task)
+        sig_ok = token_ok = False
         if SUNO_WEBHOOK_SECRET:
             sig_header = request.headers.get('X-Suno-Signature', '')
             payload = request.get_data()
@@ -2417,17 +2519,15 @@ def suno_callback():
             token = request.args.get('token', '')
             sig_ok = bool(sig_header) and hmac.compare_digest(sig_header.encode(), expected.encode())
             token_ok = bool(token) and hmac.compare_digest(token.encode(), _callback_token().encode())
-            if not (sig_ok or token_ok):
-                logger.warning('Suno callback rejected: invalid signature')
+        authenticated = cb_ok or sig_ok or token_ok
+        _require_https = not authenticated
+        if not authenticated:
+            if SUNO_WEBHOOK_SECRET or _callback_auth_required():
+                logger.warning('Suno callback rejected: missing or invalid callback token')
                 return jsonify({'status': 'forbidden'}), 403
-        elif _callback_auth_required():
-            logger.warning('Suno callback rejected: SUNO_WEBHOOK_SECRET is required when auth is enabled')
-            return jsonify({'status': 'webhook_secret_required'}), 503
-        else:
             logger.warning(
                 'Suno callback accepted UNSIGNED (local mode, no Clerk); '
-                'download restricted to https + %d byte cap. Set SUNO_WEBHOOK_SECRET '
-                'to authenticate callbacks.', SUNO_MAX_DOWNLOAD_BYTES
+                'download restricted to https + %d byte cap.', SUNO_MAX_DOWNLOAD_BYTES
             )
 
         data = request.json or {}
