@@ -331,8 +331,7 @@ def generate_tts_b64(
     if _mm:
         _mapped = _map_voice_to_fallback(voice, owner_of(voice) or 'unknown', tts_provider)
         if _mapped != voice:
-            logger.warning(f"### TTS VOICE MISMATCH: {_mm} — speaking with {tts_provider}/{_mapped} "
-                           f"(same gender); fix the profile's voice")
+            logger.warning("TTS voice mismatch: using a compatible fallback voice; fix the profile voice")
             voice = _mapped
 
     # ── Try primary provider ──────────────────────────────────────────────────

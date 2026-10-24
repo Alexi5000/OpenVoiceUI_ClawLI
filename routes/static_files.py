@@ -638,7 +638,7 @@ def _upload_access_denied(filename, exists, listing=False):
     _upload_shadow_record(filename, exists, states, reason, listing=listing)
     if UPLOADS_AUTH_MODE != 'enforce':
         return None
-    logger.warning('[uploads-auth] DENIED %s (%s)', filename[:200], reason)
+    logger.warning('[uploads-auth] denied request without a valid credential')
     if _upload_enforce_action(listing) == 'login-redirect':
         return redirect('/?redirect=/uploads/' + filename)
     if listing:

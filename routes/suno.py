@@ -313,7 +313,7 @@ def _record_submit_rejection(kind: str, reason: str, title: str = '', brand: str
         del failed_songs_queue[:-_FAILED_QUEUE_MAX]
     _task_log('rejected', op=kind, title=title, brand=brand,
               prompt=(prompt or '')[:300], reason=(reason or '')[:300])
-    logger.warning(f'Suno {kind} refused at submit: {reason[:200]}')
+    logger.warning('Suno submission refused by provider')
 
 
 def _surface_submit_rejection(response):
@@ -1792,7 +1792,7 @@ def _action_timestamped_lyrics(_q, body: dict):
         # generations, 0.5 credit each). Word timings never expire and are kept at the first fetch.
         have = suno_lyrics.saved_result(src['filename'], audio_id)
         if have:
-            logger.info(f'Suno timestamped_lyrics: {audio_id[:8]} already owned - no paid call')
+            logger.info('Suno timestamped lyrics already owned - no paid call')
             return jsonify({'action': 'timestamped_lyrics', 'cached': True, 'data': have,
                             'response': 'Got timestamped lyrics (saved copy, no new charge).'})
         if suno_lyrics.fetch_in_flight(audio_id):
@@ -2424,7 +2424,7 @@ def _save_process_result(kind: str, task_id: str, payload, src_filename: str = '
                 write_media_file(d, f'lyrics-{_process_tid(task_id)}.json',
                                  json.dumps({'task_id': task_id, 'lyrics': items}, indent=2).encode('utf-8'))
             except OSError as exc:
-                logger.warning(f'Could not save lyrics for {task_id}: {exc}')
+                logger.warning('Could not save process lyrics')
         return items
     if not existing:
         base = _slugify_title(Path(src_filename).stem) if src_filename else kind.replace('_', '-')
@@ -2432,7 +2432,7 @@ def _save_process_result(kind: str, task_id: str, payload, src_filename: str = '
         if not _download_capped(payload, save_path, require_https=require_https):
             return None
         existing = save_path
-        logger.info(f'Suno {kind} saved: {existing.name}')
+        logger.info('Suno process result saved')
     return f'/generated_music/{spec["subdir"]}/{existing.name}'
 
 

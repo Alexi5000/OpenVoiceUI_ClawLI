@@ -2823,7 +2823,7 @@ def _conversation_inner():
                                 _tts_buf = ''
                                 _tts_pending = []
                                 logger.info(
-                                    f"### DEFERRED TURN — gateway={gateway_id or 'openclaw'} "
+                                    "### DEFERRED TURN — gateway "
                                     f"ended the turn with no reply on purpose "
                                     f"({metrics['llm_inference_ms']}ms, tools={metrics['tool_count']}); "
                                     f"answer will arrive via push — no retry, no fallback, no TTS"

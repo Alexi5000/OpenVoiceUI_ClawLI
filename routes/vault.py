@@ -44,8 +44,7 @@ def _platform_admin_only(view):
         if gate_on:
             user_id = getattr(g, 'clerk_user_id', None)
             if not _auth.is_platform_admin(user_id):
-                logger.warning('Platform-setup denied: user_id=%s path=%s (tenant admin is not platform admin)',
-                               user_id, request.path)
+                logger.warning('Platform-setup denied: platform administrator required')
                 return jsonify({
                     'error': 'Platform OAuth setup is managed by the platform operator, not per tenant.',
                     'code': 'platform_admin_only',

@@ -220,8 +220,7 @@ def mint_intake_token():
         if not _save_tokens(tokens):
             return jsonify({'error': 'Failed to persist token'}), 500
 
-    logger.info('intake: minted token for tenant=%s label=%r expiry_hours=%s max_uses=%s',
-                record['tenant'], label, expiry_hours, max_uses)
+    logger.info('intake: minted upload token')
 
     return jsonify({
         'token': token,
@@ -424,7 +423,7 @@ def intake_upload(token: str):
         with os.fdopen(descriptor, 'wb') as output:
             f.save(output)
     except OSError as exc:
-        logger.error('intake: save failed for token_suffix=%s: %s', token[-8:], exc)
+        logger.error('intake: upload save failed')
         return _refuse(500, 'save_failed', 'Upload failed. Please try again.')
 
     # 7. Burn one use, atomically w.r.t. this process.
@@ -435,7 +434,7 @@ def intake_upload(token: str):
             # Token was exhausted/removed by a racing request between step 1
             # and here. The file is already saved (never discard received
             # content), but don't credit a use that no longer exists.
-            logger.warning('intake: token exhausted mid-upload race, keeping saved file %s', stored_name)
+            logger.warning('intake: token exhausted mid-upload race; saved file retained')
         else:
             live['use_count'] = live.get('use_count', 0) + 1
             live.setdefault('uploads', []).append({
@@ -470,5 +469,5 @@ def intake_upload(token: str):
         'size': file_size,
     })
 
-    logger.info('intake: upload accepted token_suffix=%s stored=%s size=%d', token[-8:], stored_name, file_size)
+    logger.info('intake: upload accepted')
     return jsonify({'ok': True, 'filename': original_name}), 200

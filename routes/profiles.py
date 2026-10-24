@@ -189,7 +189,7 @@ def update_profile(profile_id):
     try:
         updated = manager.apply_partial_update(profile_id, data)
     except ValueError as exc:
-        msg = f"voice.voice_id: {exc}"
+        msg = "voice.voice_id: Invalid voice selection"
         return jsonify({"error": msg, "errors": [msg]}), 400   # admin.html reads `error`
     if updated is None:
         return jsonify({"error": "Failed to update profile"}), 500
