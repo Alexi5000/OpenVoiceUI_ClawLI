@@ -255,7 +255,7 @@ npm ci
 npm run build
 ```
 
-Browse the [published documentation](https://alexi5000.github.io/OpenVoiceUI_ClawLI/), [architecture](ARCHITECTURE.md), and [contribution guide](CONTRIBUTING.md). See [SECURITY.md](SECURITY.md) for reporting and known limitations. Passing repository tests does not validate live gateway, microphone, provider, or shared-volume deployment behavior.
+Browse the [published documentation](https://alexi5000.github.io/OpenVoiceUI_ClawLI/), [architecture](docs/ARCHITECTURE.md), and [contribution guide](CONTRIBUTING.md). See [SECURITY.md](SECURITY.md) for reporting and known limitations. Passing repository tests does not validate live gateway, microphone, provider, or shared-volume deployment behavior.
 
 ### Security status (2026-10-20)
 

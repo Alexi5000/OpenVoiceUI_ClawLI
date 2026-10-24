@@ -354,7 +354,7 @@ Force-sync the manifest with the pages directory. Adds new pages and removes ent
 Manage individual page metadata.
 
 - **GET** -- Return full metadata for a page.
-- **PATCH** -- Update metadata fields: `display_name`, `description`, `category`, `tags`, `starred`, `is_public`, `is_locked`, `icon`. Locked pages cannot have `is_public` changed by agents (returns 403). New pages cannot be made public within 30 seconds of creation (returns 429).
+- **PATCH** -- Update metadata fields: `display_name`, `description`, `category`, `tags`, `starred`, `is_public`, `is_locked`, `icon`. Publishing (`is_public: true`) is self-service for the tenant agent on an unlocked page. Error bodies carry a `code` that names the real cause: `page_locked` (403 — admin lock; no credential opens it, ask an admin), `page_lock_unset` (403 — entry has no `is_locked` key, registered outside the app, treated as locked until an admin sets it), `admin_only` (403 — only an admin may change `is_locked`), `publish_cooldown` (429 — within 30 s of creation, `retry_after_seconds` given), `created_unverifiable` (409), `page_not_found` (404 — with `file_on_disk`). `<page_id>.html` is accepted as an alias of `<page_id>`. If the file exists in `canvas-pages/` but has no manifest entry yet, the route discovers it before judging the request, so the first PATCH after writing a file never returns 404.
 - **DELETE** -- Archive the page (renames file to `.bak`, removes from manifest).
 
 ### GET/POST/PATCH /api/canvas/manifest/category
@@ -504,6 +504,11 @@ Serve a library music file.
 
 Serve an AI-generated music file.
 
+### GET /generated_music/\{subdir\}/\{filename\}
+
+Serve a generated file that is not a song: `sfx/` (sound effects), `wav/` (WAV conversions) or
+`video/` (music videos). `?download=1` saves it instead of playing it.
+
 ---
 
 ## Suno (AI Song Generation)
@@ -513,6 +518,11 @@ Generate songs using the Suno API. Generated songs are saved to the `generated_m
 ### GET/POST /api/suno
 
 Unified Suno endpoint. Action is specified via query param or POST body.
+
+When login is required (Clerk configured), only the read actions `list`, `list_jingles`,
+`jingle_styles`, `status` and `credits` are public on GET. Every other action spends Suno credits
+or changes state, and needs a signed-in session or the agent key (`X-Agent-Key`) on GET and POST
+alike.
 
 **Actions:**
 

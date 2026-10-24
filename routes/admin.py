@@ -549,7 +549,11 @@ def install_start():
                     if hello.get('type') != 'res' or hello.get('error'):
                         raise RuntimeError(f"Gateway auth failed: {hello.get('error')}")
                     req_id = str(uuid.uuid4())
-                    await ws.send(_json.dumps({'type':'req','id':req_id,'method':'chat.send','params':{'sessionKey':'admin-install','message':message,'idempotencyKey':req_id}}))
+                    # Agent-scope the key (openclaw >=2026.8 rejects a bare key
+                    # when several agents are configured) — see wire_session_key.
+                    from services.gateways.openclaw import wire_session_key, extract_default_agent_id
+                    _sk = wire_session_key('admin-install', extract_default_agent_id(hello))
+                    await ws.send(_json.dumps({'type':'req','id':req_id,'method':'chat.send','params':{'sessionKey':_sk,'message':message,'idempotencyKey':req_id}}))
                     collected = ''
                     for _ in range(120):
                         try:
@@ -675,7 +679,7 @@ _OPENCLAW_CONFIG_PATH = Path('/app/runtime/openclaw.json')
 _OPENCLAW_CONFIG_RO_FALLBACK = Path('/app/runtime/openclaw-client.json')
 
 # Known providers and their config shape.
-# Canonical source: /home/mike/MIKE-AI/docs/jambot/llm-provider-registry.md
+# Canonical source: <ops-repo>/docs/jambot/llm-provider-registry.md
 # Active chain is Z.AI account A ('zai') + account B ('zai_fb') — both route to
 # api.z.ai/api/anthropic. MiniMax ('mx'), bigmodel-GLM, and Groq-for-LLM are
 # DROPPED providers and must never be offered here (Groq stays TTS-only).

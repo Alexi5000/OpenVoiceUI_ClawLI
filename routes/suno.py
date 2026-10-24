@@ -39,6 +39,7 @@ from flask import Blueprint, jsonify, request
 from services.paths import GENERATED_MUSIC_DIR
 from services.safe_paths import UnsafePathError, safe_join
 from services.public_download import download_public, write_media_file
+from services import suno_lyrics
 
 GENERATED_MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 GENERATED_METADATA_FILE = GENERATED_MUSIC_DIR / 'generated_metadata.json'
@@ -203,7 +204,7 @@ logger = logging.getLogger(__name__)
 # Host-side provider calls emit one JSONL row per call via provider-call-log.sh
 # so the Watch map lights the provider node the instant a call happens. This
 # container can't reach the host's canonical provider-calls dir, but the
-# monitoring-events mount (host: /home/mike/monitoring/events) is RW — receipts
+# monitoring-events mount (host: /home/user/monitoring/events) is RW — receipts
 # drop into a provider-calls/ subdir there, same one-line schema, and the Watch
 # tailer scans that drop dir too. Best-effort: NEVER blocks or fails a
 # generation; on containers without the mount the write is invisible/harmless.
@@ -253,6 +254,90 @@ def _task_log(event: str, **fields) -> None:
             f.write(json.dumps(row) + '\n')
     except Exception:  # never let telemetry touch the generation path
         pass
+
+
+def _schedule_lyrics_fetch(task_id: str, audio_id: str, filename: str, lyrics: str = '',
+                           instrumental: bool = False, kind: str = 'song') -> None:
+    """LYRICS-AT-GENERATION (2026-10-12): pull Suno word timings ONCE, the moment a song
+    completes, in the background. Called from BOTH completion legs (status poll + webhook);
+    services/suno_lyrics.py's per-audioId marker makes the second leg a no-op. Every
+    get-timestamped-lyrics call is paid — see that module's header."""
+    try:
+        suno_lyrics.schedule(task_id=task_id, audio_id=audio_id, filename=filename,
+                             lyrics=lyrics or '', instrumental=bool(instrumental), kind=kind,
+                             api_key=SUNO_API_KEY, receipt=_provider_receipt)
+    except Exception as exc:  # never let this touch song delivery
+        logger.warning(f'suno lyrics scheduling failed for {filename}: {exc}')
+
+
+# ---------------------------------------------------------------------------
+# SUNO-REJECT-SURFACED (2026-09-29) — a generation refused AT SUBMIT must reach the agent.
+#
+# failed_songs_queue only ever received failures AFTER Suno accepted a task (status poll +
+# callback). A refusal at submit — `{"code":429,"msg":"The current credits are insufficient"}`
+# wrapped in HTTP 200, a missing key, a network error — returned {'action':'error'} to the
+# browser, which flashed a 5-second banner and nothing else. Measured 2026-09-28 03:50Z on
+# tenant-g: the agent told a client his son's song would be ready in "45 seconds", Suno refused
+# it for credits, and neither the agent nor the client was ever told. No task-log row either.
+# This hook sits on the blueprint so EVERY submit path (including ones added later) is covered
+# without each handler remembering to call it.
+# ---------------------------------------------------------------------------
+_GENERATION_ACTIONS = frozenset({
+    'generate', 'jingle', 'sfx', 'extend', 'cover', 'add_vocals',
+    'add_instrumental', 'replace_section', 'voice_generate',
+})
+_FAILED_QUEUE_MAX = 10
+
+
+def _provider_failure_message(data: dict) -> str:
+    message = str(data.get('msg', '')).lower()
+    if 'credit' in message and any(word in message for word in ('insufficient', 'used up', 'not enough')):
+        return 'Suno credits are insufficient.'
+    return 'Suno API error'
+
+
+def _record_submit_rejection(kind: str, reason: str, title: str = '', brand: str = '',
+                             prompt: str = '') -> None:
+    """Queue a submit-time refusal for the agent's next turn + write a durable task-log row."""
+    entry = {
+        'job_id': f'submit-{uuid.uuid4().hex[:12]}',
+        'stage': 'submit',
+        'kind': kind,
+        'brand': brand,
+        'title': title,
+        'reason': reason,
+        'failed_at': datetime.now().isoformat(),
+    }
+    with _suno_lock:
+        failed_songs_queue.append(entry)
+        del failed_songs_queue[:-_FAILED_QUEUE_MAX]
+    _task_log('rejected', op=kind, title=title, brand=brand,
+              prompt=(prompt or '')[:300], reason=(reason or '')[:300])
+    logger.warning(f'Suno {kind} refused at submit: {reason[:200]}')
+
+
+def _surface_submit_rejection(response):
+    try:
+        if request.path != '/api/suno':
+            return response
+        body = (request.get_json(silent=True) or {}) if request.method == 'POST' else {}
+        action = body.get('action') or request.args.get('action', 'list')
+        if action not in _GENERATION_ACTIONS:
+            return response
+        data = response.get_json(silent=True)
+        if not isinstance(data, dict) or data.get('action') != 'error':
+            return response
+
+        def _field(k: str) -> str:
+            return str(body.get(k) or request.args.get(k) or '')
+
+        _record_submit_rejection(action, str(data.get('response') or 'refused'),
+                                 title=_field('title'), brand=_field('brand'),
+                                 prompt=_field('prompt'))
+    except Exception as exc:  # telemetry must never break the response
+        logger.debug(f'submit-rejection surfacing skipped: {exc}')
+    return response
+
 
 # ---------------------------------------------------------------------------
 # Jingle style presets — proven 2026-05-05. The recipe is:
@@ -311,6 +396,7 @@ def _is_safe_download_url(url: str) -> bool:
 # ---------------------------------------------------------------------------
 
 suno_bp = Blueprint('suno', __name__)
+suno_bp.after_request(_surface_submit_rejection)   # SUNO-REJECT-SURFACED — see above
 
 # ---------------------------------------------------------------------------
 # Metadata helpers
@@ -606,7 +692,8 @@ def _action_generate(_q, body: dict):
     style = _q('style') or body.get('style', '')
     title = _q('title') or body.get('title', '')
     lyrics = _q('lyrics') or body.get('lyrics', '')
-    instrumental = (_q('instrumental') or str(body.get('instrumental', 'false'))).lower() == 'true'
+    # str(): a JSON POST carries a real bool, and True.lower() raised AttributeError (-> 500).
+    instrumental = str(_q('instrumental') or body.get('instrumental', 'false')).lower() in ('true', '1', 'yes')
     vocal_gender = _q('vocal_gender') or body.get('vocal_gender', 'm')
     # Persona / custom-voice passthrough (2026-07-14). personaId can be a STYLE
     # persona (from generate-persona) or a cloned VOICE id (from the Suno Voice
@@ -717,6 +804,8 @@ def _action_generate(_q, body: dict):
                     'style': style,
                     'task_id': task_id,
                     'created_at': time.time(),
+                    # Read at completion: an instrumental gets NO paid lyrics call.
+                    'instrumental': instrumental,
                 }
                 _provider_receipt('song')   # live Watch pulse — task accepted, credits committed
                 _task_log('submitted', op='song', task_id=task_id, title=title,
@@ -729,9 +818,9 @@ def _action_generate(_q, body: dict):
                     'estimated_seconds': 45,
                 })
             else:
-                return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+                return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
         else:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
 
     except http_requests.RequestException as exc:
         return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
@@ -842,7 +931,7 @@ def _action_sfx(_q, body: dict):
         return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
 
 
-# ── JINGLE LENGTH HONESTY (host@mesh 2026-09-06, Mike's request) ──────────────
+# ── JINGLE LENGTH HONESTY (the host agent 2026-09-06, Mike's request) ──────────────
 # Suno's jingle recipe is NOT length-deterministic. Measured over the whole task
 # log: 13 jingle requests -> 72 generations, only 16 came back <=20s. That is a
 # 22% hit rate, with the SAME parameters returning 9.2s and 167.8s on adjacent
@@ -984,11 +1073,11 @@ def _action_jingle(_q, body: dict):
         logger.info(f'Suno jingle API response: {resp.status_code}')
 
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
 
         data = resp.json()
         if data.get('code') != 200 or not data.get('data', {}).get('taskId'):
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
 
         task_id = data['data']['taskId']
         job_id = str(uuid.uuid4())
@@ -1068,6 +1157,11 @@ def _action_status(job_id: str):
         return jsonify({'action': 'status', 'status': 'not_found', 'response': "Can't find that job."})
 
     job = suno_jobs[job_id]
+
+    # WAV / video / lyrics jobs produce a file or text, not a song: their result
+    # lives behind a different record-info endpoint (see _PROCESS_RESULTS).
+    if job.get('kind') in _PROCESS_RESULTS:
+        return _process_status(job_id, job)
 
     # If already complete, just report
     if job.get('status') == 'complete':
@@ -1202,6 +1296,11 @@ def _action_status(job_id: str):
                                 extra=extra,
                                 task_id=task_id,
                             )
+                            # audioId is the clip's own id — never the task_id fallback.
+                            _schedule_lyrics_fetch(task_id, song.get('id', ''), filename,
+                                                   lyrics=song_lyrics,
+                                                   instrumental=job.get('instrumental', False),
+                                                   kind=kind)
 
                         # Update job
                         job['status'] = 'complete'
@@ -1263,6 +1362,7 @@ def _action_status(job_id: str):
                         'action': 'failed',
                         'status': 'failed',
                         'job_id': job_id,
+                        'kind': job.get('kind', 'song'),
                         'reason': reason,
                         'response': f"Suno couldn't make the song: {reason}",
                     })
@@ -1281,14 +1381,20 @@ def _action_status(job_id: str):
 def _action_credits():
     """Check remaining Suno API credits."""
     try:
+        # sunoapi.org's credits endpoint is /api/v1/generate/credit and answers
+        # {"code": 200, "data": <number>}. The old /api/v1/account/credits path is a 404,
+        # so this check always reported an error (measured 2026-10-12).
         resp = http_requests.get(
-            f'{SUNO_API_BASE}/api/v1/account/credits',
+            f'{SUNO_API_BASE}/api/v1/generate/credit',
             headers={'Authorization': f'Bearer {SUNO_API_KEY}'},
             timeout=10,
         )
         if resp.status_code == 200:
             data = resp.json()
-            credits = data.get('data', {}).get('credits', data.get('credits', '?'))
+            if isinstance(data, dict) and data.get('code') not in (None, 200):
+                return jsonify({'action': 'error', 'response': f"Credits check failed: {data.get('msg') or data.get('code')}"})
+            d = data.get('data') if isinstance(data, dict) else None
+            credits = d.get('credits', '?') if isinstance(d, dict) else (d if d is not None else '?')
             return jsonify({'action': 'credits', 'credits': credits, 'response': f'Suno credits remaining: {credits}'})
         return jsonify({'action': 'error', 'response': f'Credits check failed: HTTP {resp.status_code}'})
     except Exception as exc:
@@ -1394,11 +1500,11 @@ def _submit_suno_job(endpoint: str, request_body: dict, kind: str,
         logger.info(f'Suno {kind} response: {resp.status_code}')
 
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
 
         data = resp.json()
         if data.get('code') != 200 or not data.get('data', {}).get('taskId'):
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
 
         task_id = data['data']['taskId']
         job_id = str(uuid.uuid4())
@@ -1410,6 +1516,7 @@ def _submit_suno_job(endpoint: str, request_body: dict, kind: str,
             'task_id': task_id,
             'created_at': time.time(),
             'kind': kind,
+            'instrumental': bool(request_body.get('instrumental', False)),
         }
         if job_extra:
             job.update(job_extra)
@@ -1610,9 +1717,9 @@ def _action_replace_section(_q, body: dict):
 def _action_generate_lyrics(_q, body: dict):
     """Generate lyrics from a prompt. POST /api/v1/lyrics.
 
-    Lyrics come back asynchronously via callback; the studio polls the
-    timestamped/record endpoints — but for the common case we return the taskId
-    so the UI can fetch results. We DON'T register an audio job (no audio).
+    Lyrics come back asynchronously (callback, or GET /api/v1/lyrics/record-info).
+    A process job is registered so `action=status&job_id=...` fetches and returns
+    them (and saves them under generated_music/lyrics/). No audio is produced.
     """
     prompt = (_q('prompt') or body.get('prompt', '')).strip()
     if not prompt:
@@ -1631,17 +1738,29 @@ def _action_generate_lyrics(_q, body: dict):
         )
         logger.info(f'Suno generate_lyrics response: {resp.status_code}')
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
         data = resp.json()
         if data.get('code') != 200 or not data.get('data', {}).get('taskId'):
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
         task_id = data['data']['taskId']
+        job_id = str(uuid.uuid4())
+        suno_jobs[job_id] = {
+            'status': 'generating',
+            'title': 'Lyrics',
+            'prompt': prompt[:200],
+            'task_id': task_id,
+            'created_at': time.time(),
+            'kind': 'lyrics',
+            'process_only': True,
+        }
         _provider_receipt('generate_lyrics')
+        _task_log('submitted', op='generate_lyrics', task_id=task_id, prompt=prompt[:300])
         return jsonify({
             'action': 'lyrics_generating',
+            'job_id': job_id,
             'task_id': task_id,
             'kind': 'lyrics',
-            'response': 'Writing lyrics — fetch results with action=song_details&task_id=...',
+            'response': 'Writing lyrics — poll action=status with this job_id for the text.',
             'estimated_seconds': 15,
         })
     except http_requests.RequestException as exc:
@@ -1657,20 +1776,54 @@ def _action_timestamped_lyrics(_q, body: dict):
     if not (task_id and audio_id):
         return jsonify({'action': 'error', 'response': 'Timestamped lyrics need both Suno task id and audio id for the track.'})
 
-    request_body = {'taskId': task_id, 'audioId': audio_id}
+    # PAID CALL. An instrumental has nothing to time, and the generation-time fetch
+    # (or the host sync) already recorded that — don't buy the same empty answer again
+    # every time someone opens the track in the sing-along page.
+    if suno_lyrics.known_instrumental(src['filename'], audio_id):
+        return jsonify({'action': 'error', 'instrumental': True,
+                        'response': 'This track is instrumental — there are no lyrics to time.'})
+
+    _log = {'via': 'action', 'task_id': task_id, 'audio_id': audio_id,
+            'filename': src['filename'] or None}
+    # Serialize per clip: the second of two concurrent requests then sees the first's saved result.
+    with suno_lyrics.audio_lock(audio_id):
+        # REUSE BEFORE BUYING (2026-10-18, mike): this path used to call Suno unconditionally, so
+        # a clip the generation leg had just paid for was charged again (both clips of two
+        # generations, 0.5 credit each). Word timings never expire and are kept at the first fetch.
+        have = suno_lyrics.saved_result(src['filename'], audio_id)
+        if have:
+            logger.info(f'Suno timestamped_lyrics: {audio_id[:8]} already owned - no paid call')
+            return jsonify({'action': 'timestamped_lyrics', 'cached': True, 'data': have,
+                            'response': 'Got timestamped lyrics (saved copy, no new charge).'})
+        if suno_lyrics.fetch_in_flight(audio_id):
+            return jsonify({'action': 'error', 'in_flight': True,
+                            'response': 'Word timings for this track are being fetched right now - try again in a moment.'})
+        return _paid_timestamped_lyrics(task_id, audio_id, src, _log)
+
+
+def _paid_timestamped_lyrics(task_id: str, audio_id: str, src: dict, _log: dict):
+    """The ONE paid explicit fetch. Caller holds suno_lyrics.audio_lock(audio_id)."""
     try:
-        resp = http_requests.post(
-            f'{SUNO_API_BASE}/api/v1/generate/get-timestamped-lyrics',
-            headers=_suno_headers(),
-            json=request_body,
-            timeout=30,
-        )
+        resp = suno_lyrics.post_timestamped_lyrics(task_id, audio_id, SUNO_API_KEY)
         logger.info(f'Suno timestamped_lyrics response: {resp.status_code}')
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            suno_lyrics.log_call({**_log, 'result': 'failed', 'http_status': resp.status_code})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
         data = resp.json()
         if data.get('code') != 200:
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            suno_lyrics.log_call({**_log, 'result': 'failed', 'http_status': 200,
+                                  'suno_code': data.get('code'),
+                                  'credits': suno_lyrics.credits_from(data),
+                                  'error': f"suno code={data.get('code')} msg={data.get('msg')!r}"[:200]})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
+        _d = data.get('data') or {}
+        _aw = _d.get('alignedWords') or _d.get('aligned_words') or []
+        suno_lyrics.log_call({**_log, 'result': 'ok' if _aw else 'instrumental',
+                              'http_status': 200, 'suno_code': 200,
+                              'aligned_words': len(_aw) or None,
+                              'credits': suno_lyrics.credits_from(data)})
+        suno_lyrics.record_paid_result(task_id=task_id, audio_id=audio_id, filename=src['filename'],
+                                       aligned=_aw, via='action')
         _provider_receipt('timestamped_lyrics')
         return jsonify({
             'action': 'timestamped_lyrics',
@@ -1695,7 +1848,8 @@ def _action_wav_convert(_q, body: dict):
     return _submit_process_job(
         '/api/v1/wav/generate', request_body, 'wav_convert',
         op='wav_convert', est_seconds=20,
-        response_msg='Converting to WAV — results delivered when ready.',
+        response_msg='Converting to WAV — poll action=status with this job_id for the file.',
+        job_extra={'src_filename': src['filename']},
     )
 
 
@@ -1851,7 +2005,7 @@ def _fetch_stems_once(task_id: str, name_stem: str) -> dict:
         f'{SUNO_API_BASE}/api/v1/vocal-removal/record-info',
         headers=_suno_headers(), params={'taskId': task_id}, timeout=30)
     if resp.status_code != 200:
-        return {'status': 'pending', 'error': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'}
+        return {'status': 'pending', 'error': f'Suno API HTTP {resp.status_code}'}
     data = resp.json().get('data') or {}
 
     urls = {}
@@ -2059,10 +2213,10 @@ def _action_style_boost(_q, body: dict):
         )
         logger.info(f'Suno style_boost response: {resp.status_code}')
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
         data = resp.json()
         if data.get('code') != 200:
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
         result = data.get('data', {})
         boosted = result.get('result') or result.get('content') or result
         _provider_receipt('style_boost')
@@ -2096,7 +2250,9 @@ def _action_music_video(_q, body: dict):
     return _submit_process_job(
         '/api/v1/mp4/generate', request_body, 'music_video',
         op='music_video', est_seconds=90,
-        response_msg='Rendering music video — this can take a couple minutes.',
+        response_msg='Rendering music video — this can take a couple minutes. '
+                     'Poll action=status with this job_id for the file.',
+        job_extra={'src_filename': src['filename']},
     )
 
 
@@ -2115,10 +2271,10 @@ def _action_song_details(_q, body: dict):
             timeout=15,
         )
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
         data = resp.json()
         if data.get('code') != 200:
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
         return jsonify({
             'action': 'song_details',
             'data': data.get('data', {}),
@@ -2130,7 +2286,8 @@ def _action_song_details(_q, body: dict):
 
 def _submit_process_job(endpoint: str, request_body: dict, kind: str,
                         op: str = None, est_seconds: int = 30,
-                        response_msg: str = None, on_task_id=None):
+                        response_msg: str = None, on_task_id=None,
+                        job_extra: dict = None):
     """POST a process request (WAV/stem/video) that returns a taskId but whose
     output is NOT a normal song download. Registers a lightweight job so the UI
     can show it in the queue; results are delivered via callback / song_details.
@@ -2146,10 +2303,10 @@ def _submit_process_job(endpoint: str, request_body: dict, kind: str,
         )
         logger.info(f'Suno {kind} response: {resp.status_code}')
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
         data = resp.json()
         if data.get('code') != 200 or not data.get('data', {}).get('taskId'):
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
         task_id = data['data']['taskId']
         if on_task_id:
             try:
@@ -2164,6 +2321,7 @@ def _submit_process_job(endpoint: str, request_body: dict, kind: str,
             'created_at': time.time(),
             'kind': kind,
             'process_only': True,  # status poller won't try to download as music
+            **(job_extra or {}),
         }
         _provider_receipt(op or kind)
         _task_log('submitted', op=op or kind, task_id=task_id,
@@ -2179,6 +2337,216 @@ def _submit_process_job(endpoint: str, request_body: dict, kind: str,
         })
     except http_requests.RequestException as exc:
         return jsonify({'action': 'error', 'response': "Couldn't reach Suno API"})
+
+
+# ---------------------------------------------------------------------------
+# Results of process jobs that are not songs (WAV conversion, music video, lyrics)
+#
+# These were submitted and paid for, but nothing ever fetched their output: the
+# status poller asked /api/v1/generate/record-info (the SONG endpoint) and the
+# webhook only understood song payloads, so a WAV, a video or a set of lyrics
+# never reached the user. Each kind has its own record-info endpoint and its own
+# callback shape (sunoapi.org docs: wav/mp4 callbacks are snake_case `task_id`
+# with `audioWavUrl` / `video_url`; lyrics callbacks are camelCase `taskId` with
+# `callbackType` and a `data` list of {text, title, status}).
+# Files land in generated_music/<subdir>/ and are served by routes/music.py at
+# /generated_music/<subdir>/<file>. Lyrics are saved as JSON (not served).
+# ---------------------------------------------------------------------------
+
+_PROCESS_RESULTS = {
+    'wav_convert': {'record': '/api/v1/wav/record-info', 'flag': 'successFlag',
+                    'url_keys': ('audioWavUrl', 'audio_wav_url'),
+                    'subdir': 'wav', 'ext': '.wav', 'noun': 'WAV file'},
+    'music_video': {'record': '/api/v1/mp4/record-info', 'flag': 'successFlag',
+                    'url_keys': ('videoUrl', 'video_url'),
+                    'subdir': 'video', 'ext': '.mp4', 'noun': 'music video'},
+    'lyrics':      {'record': '/api/v1/lyrics/record-info', 'flag': 'status',
+                    'subdir': 'lyrics', 'ext': '.json', 'noun': 'lyrics'},
+}
+_PROCESS_PENDING_FLAGS = ('', 'PENDING', 'TEXT_SUCCESS', 'FIRST_SUCCESS')
+
+
+def _process_dir(kind: str) -> Path:
+    return safe_join(GENERATED_MUSIC_DIR, _PROCESS_RESULTS[kind]['subdir'], allow_base=False)
+
+
+def _process_tid(task_id: str) -> str:
+    return ''.join(ch for ch in (task_id or '') if ch.isalnum())[:16] or 'task'
+
+
+def _existing_process_file(kind: str, task_id: str):
+    """A result already saved for this task (the callback and the poller can both land it)."""
+    spec = _PROCESS_RESULTS[kind]
+    d = _process_dir(kind)
+    suffix = f'-{_process_tid(task_id)}{spec["ext"]}'
+    if d.is_dir():
+        for f in d.iterdir():
+            if not f.is_symlink() and f.is_file() and f.name.endswith(suffix):
+                return f
+    return None
+
+
+def _download_capped(url: str, save_path: Path, require_https: bool = False) -> bool:
+    """Download url to save_path with the same SSRF check and size cap as song downloads."""
+    if not url or not _is_safe_download_url(url):
+        return False
+    if require_https and not url.lower().startswith('https://'):
+        logger.warning('Unsigned Suno callback: rejecting non-https result URL')
+        return False
+    try:
+        content = download_public(url, max_bytes=SUNO_MAX_DOWNLOAD_BYTES,
+                                  timeout=120, require_https=require_https)
+        safe_path = safe_join(GENERATED_MUSIC_DIR, save_path.relative_to(GENERATED_MUSIC_DIR), allow_base=False)
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
+        write_media_file(safe_path.parent, safe_path.name, content)
+        return True
+    except (http_requests.RequestException, OSError, ValueError) as exc:
+        logger.warning(f'Suno result download error: {exc}')
+        return False
+
+
+def _save_process_result(kind: str, task_id: str, payload, src_filename: str = '',
+                         require_https: bool = False):
+    """Persist a finished process result. Returns the public URL (media) or the
+    lyrics list (lyrics), or None when nothing could be saved."""
+    spec = _PROCESS_RESULTS[kind]
+    existing = _existing_process_file(kind, task_id)
+    if kind == 'lyrics':
+        items = [{'title': (i.get('title') or '').strip(), 'text': i.get('text') or ''}
+                 for i in (payload or []) if isinstance(i, dict) and i.get('text')
+                 and str(i.get('status', 'complete')).lower() != 'failed']
+        if not items:
+            return None
+        if not existing:
+            try:
+                d = _process_dir(kind)
+                d.mkdir(parents=True, exist_ok=True)
+                write_media_file(d, f'lyrics-{_process_tid(task_id)}.json',
+                                 json.dumps({'task_id': task_id, 'lyrics': items}, indent=2).encode('utf-8'))
+            except OSError as exc:
+                logger.warning(f'Could not save lyrics for {task_id}: {exc}')
+        return items
+    if not existing:
+        base = _slugify_title(Path(src_filename).stem) if src_filename else kind.replace('_', '-')
+        save_path = _process_dir(kind) / f'{base}-{_process_tid(task_id)}{spec["ext"]}'
+        if not _download_capped(payload, save_path, require_https=require_https):
+            return None
+        existing = save_path
+        logger.info(f'Suno {kind} saved: {existing.name}')
+    return f'/generated_music/{spec["subdir"]}/{existing.name}'
+
+
+def _finish_process_job(job: dict, kind: str, task_id: str, result) -> None:
+    job['status'] = 'complete'
+    if kind == 'lyrics':
+        job['lyrics'] = result
+    else:
+        job['url'] = result
+    _task_log('result', op=kind, task_id=task_id,
+              url=result if isinstance(result, str) else '',
+              lyrics=len(result) if isinstance(result, list) else None)
+
+
+def _process_complete_response(job_id: str, job: dict) -> dict:
+    kind = job.get('kind')
+    noun = _PROCESS_RESULTS[kind]['noun']
+    out = {'action': 'complete', 'status': 'complete', 'job_id': job_id, 'kind': kind,
+           'task_id': job.get('task_id', '')}
+    if kind == 'lyrics':
+        out['lyrics'] = job.get('lyrics', [])
+        out['response'] = f"Lyrics ready ({len(out['lyrics'])} version(s))."
+    else:
+        out['url'] = job.get('url', '')
+        out['download_url'] = out['url'] + '?download=1' if out['url'] else ''
+        out['response'] = f"Your {noun} is ready: {out['url']}"
+    return out
+
+
+def _process_status(job_id: str, job: dict):
+    """Poll a WAV / video / lyrics task and save its result when it is ready."""
+    kind = job.get('kind')
+    spec = _PROCESS_RESULTS[kind]
+    if job.get('status') == 'complete':
+        return jsonify(_process_complete_response(job_id, job))
+    if job.get('status') == 'failed':
+        return jsonify({'action': 'failed', 'status': 'failed', 'job_id': job_id, 'kind': kind,
+                        'reason': job.get('error', ''),
+                        'response': f"Suno couldn't make the {spec['noun']}: {job.get('error', '')}"})
+
+    elapsed = int(time.time() - job.get('created_at', time.time()))
+    still = {'action': 'status', 'status': 'generating', 'job_id': job_id, 'kind': kind,
+             'elapsed_seconds': elapsed, 'response': f"Still working on the {spec['noun']}..."}
+    task_id = job.get('task_id')
+    if not task_id:
+        return jsonify(still)
+    try:
+        check = http_requests.get(f"{SUNO_API_BASE}{spec['record']}",
+                                  headers={'Authorization': f'Bearer {SUNO_API_KEY}'},
+                                  params={'taskId': task_id}, timeout=15)
+        if check.status_code != 200:
+            return jsonify(still)
+        cdata = check.json()
+        if cdata.get('code') != 200:
+            return jsonify(still)
+        data = cdata.get('data') or {}
+        flag = str(data.get(spec['flag']) or '').upper()
+        if flag == 'SUCCESS':
+            response = data.get('response') or {}
+            if kind == 'lyrics':
+                payload = response.get('data') or []
+            else:
+                payload = next((response.get(k) for k in spec['url_keys'] if response.get(k)), '')
+            result = _save_process_result(kind, task_id, payload, job.get('src_filename', ''))
+            if result is None:
+                still['response'] = (f"The {spec['noun']} is ready at Suno but could not be "
+                                     'saved yet; poll again.')
+                return jsonify(still)
+            _finish_process_job(job, kind, task_id, result)
+            return jsonify(_process_complete_response(job_id, job))
+        if flag in _PROCESS_PENDING_FLAGS:
+            return jsonify(still)
+        reason = data.get('errorMessage') or flag
+        job['status'] = 'failed'
+        job['error'] = reason
+        _task_log('failed', op=kind, task_id=task_id, reason=reason)
+        return jsonify({'action': 'failed', 'status': 'failed', 'job_id': job_id, 'kind': kind,
+                        'reason': reason,
+                        'response': f"Suno couldn't make the {spec['noun']}: {reason}"})
+    except (http_requests.RequestException, ValueError) as exc:
+        logger.warning(f'Suno {kind} status poll error: {exc}')
+        return jsonify(still)
+
+
+def _process_callback(data: dict, require_https: bool) -> bool:
+    """Handle a webhook for a WAV / video / lyrics task. True when it was one."""
+    d = data.get('data') if isinstance(data.get('data'), dict) else {}
+    task_id = d.get('task_id') or d.get('taskId') or ''
+    items = d.get('data')
+    if 'audioWavUrl' in d or 'audio_wav_url' in d:
+        kind, payload = 'wav_convert', d.get('audioWavUrl') or d.get('audio_wav_url')
+    elif 'video_url' in d or 'videoUrl' in d:
+        kind, payload = 'music_video', d.get('video_url') or d.get('videoUrl')
+    elif (isinstance(items, list) and items
+          and all(isinstance(i, dict) and 'text' in i
+                  and not (i.get('audioUrl') or i.get('audio_url')) for i in items)):
+        kind, payload = 'lyrics', items
+    else:
+        return False
+    job = next((j for j in suno_jobs.values() if j.get('task_id') == task_id), None)
+    if data.get('code') != 200 or not payload:
+        if job and job.get('status') != 'complete':
+            job['status'] = 'failed'
+            job['error'] = data.get('msg') or 'Suno reported an error'
+        _task_log('failed', op=kind, task_id=task_id, reason=data.get('msg', ''), leg='callback')
+        return True
+    result = _save_process_result(kind, task_id, payload,
+                                  (job or {}).get('src_filename', ''), require_https=require_https)
+    if result is not None and job:
+        _finish_process_job(job, kind, task_id, result)
+    elif result is not None:
+        _task_log('result', op=kind, task_id=task_id, leg='callback',
+                  url=result if isinstance(result, str) else '')
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -2246,10 +2614,10 @@ def _action_generate_persona(_q, body: dict):
         )
         logger.info(f'Suno generate_persona response: {resp.status_code}')
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
         data = resp.json()
         if data.get('code') != 200:
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
         _provider_receipt('generate_persona')
         return jsonify({
             'action': 'ok',
@@ -2295,10 +2663,10 @@ def _action_voice_validate(_q, body: dict):
         )
         logger.info(f'Suno voice_validate response: {resp.status_code}')
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
         data = resp.json()
         if data.get('code') != 200:
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
         _provider_receipt('voice_validate')
         return jsonify({
             'action': 'voice_validate',
@@ -2324,10 +2692,10 @@ def _action_voice_validate_info(_q, body: dict):
         )
         logger.info(f'Suno voice_validate_info response: {resp.status_code}')
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
         data = resp.json()
         if data.get('code') != 200:
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
         return jsonify({
             'action': 'voice_validate_info',
             'data': data.get('data', {}),
@@ -2374,10 +2742,10 @@ def _action_voice_generate(_q, body: dict):
         )
         logger.info(f'Suno voice_generate response: {resp.status_code}')
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
         data = resp.json()
         if data.get('code') != 200:
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
         _provider_receipt('voice_generate')
         return jsonify({
             'action': 'voice_generate',
@@ -2403,10 +2771,10 @@ def _action_voice_info(_q, body: dict):
         )
         logger.info(f'Suno voice_info response: {resp.status_code}')
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
         data = resp.json()
         if data.get('code') != 200:
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
         return jsonify({
             'action': 'voice_info',
             'data': data.get('data', {}),
@@ -2434,10 +2802,10 @@ def _action_voice_check(_q, body: dict):
         )
         logger.info(f'Suno voice_check response: {resp.status_code}')
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
         data = resp.json()
         if data.get('code') != 200:
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
         return jsonify({
             'action': 'voice_check',
             'data': data.get('data', {}),
@@ -2472,10 +2840,10 @@ def _action_file_upload(_q, body: dict):
         )
         logger.info(f'Suno file_upload response: {resp.status_code}')
         if resp.status_code != 200:
-            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}: {resp.text[:200]}'})
+            return jsonify({'action': 'error', 'response': f'Suno API HTTP {resp.status_code}'})
         data = resp.json()
         if data.get('code') != 200:
-            return jsonify({'action': 'error', 'response': f"Suno API error: {data.get('msg', 'Unknown error')}"})
+            return jsonify({'action': 'error', 'response': _provider_failure_message(data)})
         _provider_receipt('file_upload')
         return jsonify({
             'action': 'file_upload',
@@ -2549,12 +2917,16 @@ def suno_callback():
                 logger.warning(str(f'Suno callback: stem persist failed ({name_stem}): {exc}').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
             return jsonify({'status': 'ok'})
 
+        # WAV conversion / music video / lyrics results (not songs).
+        if _process_callback(data, _require_https):
+            return jsonify({'status': 'ok'})
+
         if data.get('code') == 200:
             callback_type = data.get('data', {}).get('callbackType', '')
             # BOTH CASINGS (2026-08-24). Suno's webhook delivers this field as snake_case
             # `task_id` on some callback types and camelCase `taskId` on others. This line read
             # ONLY camelCase, so every snake_case callback wrote its song to metadata with an
-            # EMPTY task_id — measured by host-clone@mesh: 62 callback rows, ZERO task_ids,
+            # EMPTY task_id — measured by a host agent: 62 callback rows, ZERO task_ids,
             # while the poller leg was 36/36 clean.
             #
             # Why that is expensive rather than untidy: a Suno taskId+audioId pair is the key to
@@ -2652,6 +3024,7 @@ def suno_callback():
                             style = ''
                             job_id = None
                             kind = 'song'
+                            job_instrumental = False
                             extra = {}
                             for jid, job in suno_jobs.items():
                                 if job.get('task_id') == task_id:
@@ -2662,6 +3035,7 @@ def suno_callback():
                                     style = job.get('style', '')
                                     job_id = jid
                                     kind = job.get('kind', 'song')
+                                    job_instrumental = bool(job.get('instrumental', False))
                                     if kind == 'jingle':
                                         extra = {
                                             'brand': job.get('brand', ''),
@@ -2680,6 +3054,10 @@ def suno_callback():
                             _add_song_to_metadata(filename, song_title, prompt, style,
                                                   duration, song_id, kind=kind, extra=extra,
                                                   task_id=task_id)
+
+                            _schedule_lyrics_fetch(task_id, song.get('id', ''), filename,
+                                                   lyrics=song_lyrics,
+                                                   instrumental=job_instrumental, kind=kind)
 
                             completed_songs_queue.append({
                                 'song_id': song_id,

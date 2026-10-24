@@ -1,6 +1,6 @@
 {
   "name": "@alexi5000/openvoiceui-clawli",
-  "version": "2026.9.7",
+  "version": "2026.9.29",
   "description": "TechTide ClawLI Voice Interface. Connect any LLM, any TTS, with a live web canvas, music generation, and agent orchestration.",
   "bin": {
     "openvoiceui": "cli/index.js"
@@ -75,12 +75,17 @@
     "config/",
     "data/",
     "default-pages/",
+    "default-faces/",
+    "default-styles/*.json",
+    "canvas-shared/",
+    "skills/",
+    "install-skills.js",
     "profiles/",
     "prompts/",
     "sounds/",
     "README.md",
     "LICENSE",
-    "SETUP.md",
+    "docs/SETUP.md",
     "!**/__pycache__",
     "!**/*.pyc"
   ]

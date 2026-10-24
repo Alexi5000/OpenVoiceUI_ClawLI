@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import threading
+import tempfile
 import time
 from datetime import datetime
 import mimetypes
@@ -52,6 +53,16 @@ BRAIN_EVENTS_PATH = Path('/tmp/openvoiceui-events.jsonl')
 # Self-hosted installs: auth is disabled by default. Set CANVAS_REQUIRE_AUTH=true to enable Clerk JWT checks.
 CANVAS_REQUIRE_AUTH = os.getenv('CANVAS_REQUIRE_AUTH', 'false').lower() == 'true'
 
+# Embedded-resource types /pages/ serves WITHOUT a session: public pages need their images, styles, scripts, fonts
+# and media. Every OTHER non-.html file under /pages/ (page backups, .htm, .json/.md/.txt/.pdf, no extension)
+# requires the same session as _data/ -- see canvas_pages_proxy. Add a type here only if a public page needs it.
+_CANVAS_OPEN_ASSET_EXTS = frozenset({
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'svg', 'ico', 'bmp',
+    'css', 'js', 'mjs', 'woff', 'woff2', 'ttf', 'otf', 'eot',
+    'mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus', 'mp4', 'webm', 'mov', 'm4v', 'vtt',
+    'glb', 'gltf', 'wasm', 'webmanifest',
+})
+
 CATEGORY_KEYWORDS = {
     'dashboards': ['dashboard', 'monitor', 'status', 'overview', 'control panel', 'panel'],
     'weather': ['weather', 'temperature', 'forecast', 'climate', 'rain', 'sunny', 'humidity'],
@@ -62,6 +73,11 @@ CATEGORY_KEYWORDS = {
     'reference': ['guide', 'reference', 'documentation', 'help', 'how to', 'tutorial'],
     'entertainment': ['music', 'radio', 'playlist', 'dj', 'audio', 'song'],
     'video': ['video', 'remotion', 'render', 'animation', 'movie', 'clip', 'recording'],
+}
+
+_KEYWORD_RE = {
+    kw: re.compile(r'\b' + re.escape(kw) + r'(?:s|es)?\b')
+    for _kws in CATEGORY_KEYWORDS.values() for kw in _kws
 }
 
 CATEGORY_ICONS = {
@@ -346,11 +362,21 @@ def save_canvas_manifest(manifest: dict) -> bool:
 
 
 def suggest_category(title: str, content: str = '') -> str:
-    """Suggest category based on title and content keywords."""
+    """Suggest category based on title and content keywords.
+
+    Keyword matching is word-boundary aware (\b...\b), not plain substring —
+    a plain "in text" check let short ambiguous tokens match inside unrelated
+    longer words, e.g. the finance keyword "market" matched inside "marketing"
+    and forced every marketing-strategy page into 'finance' regardless of
+    content (found 2026-09-18 by a shadow-classifier replay over the fleet).
+    Fixed for the mechanism, not just that one word, so any other keyword with
+    the same shape is covered too; a simple plural suffix (s/es) still matches
+    so "charts"/"videos"/"songs" keep scoring as before.
+    """
     text = (title + ' ' + (content or '')[:500]).lower()
     scores = {}
     for category, keywords in CATEGORY_KEYWORDS.items():
-        score = sum(3 if kw in text else 0 for kw in keywords)
+        score = sum(3 if _KEYWORD_RE[kw].search(text) else 0 for kw in keywords)
         if score > 0:
             scores[category] = score
     return max(scores, key=scores.get) if scores else 'uncategorized'
@@ -402,7 +428,7 @@ def _kick_off_pending_icon_generation(manifest: dict) -> None:
     their independent 6h cooldowns expired. Only one batch may run at a time,
     fleet-wide within this process."""
     # GATED OFF by default (2026-07-29): auto-icon gen on Gemini was 100% 429-failing
-    # (josh 588/0, danielle 286/0 — zero icons produced, permanent retry storm because
+    # (tenant-k 588/0, tenant-j 286/0 — zero icons produced, permanent retry storm because
     # failed pages stay pending and re-fire every sync). Mike confirmed pages show only
     # default icons. Re-enable ONLY once icon-gen is repointed off Gemini to the Mac's
     # ComfyUI (env AUTO_ICON_GEN=on). Root fix = the Mac creative node, not this path.
@@ -483,6 +509,55 @@ def _generate_pending_icons_inner(page_ids) -> None:
             logger.warning(f'Auto icon-gen error for {page_id}: {e}')
 
 
+def _normalize_manifest_page_keys(manifest: dict) -> list[str]:
+    """Fold manifest page entries keyed '<id>.html' into '<id>' (#477 defect 3).
+
+    The /pages/ gate and every API route key on ``Path(filename).stem``. An entry
+    registered under the full filename (seen live 2026-09-04: a page under BOTH
+    '<client>-songs' and '<client>-songs.html') renders a second tile whose link
+    resolves to '/pages/<id>.html.html' -> 404, and is never consulted by the
+    gate. When the stem entry also exists the duplicate is MERGED into it (the
+    stem entry wins on every field it already has); otherwise the key is
+    renamed. Category / uncategorized / recently_viewed references follow.
+    Returns the keys that were fixed, so the caller can log them.
+    """
+    pages = manifest.get('pages') or {}
+    fixed: list[str] = []
+    for key in [k for k in list(pages) if k.endswith('.html') and len(k) > 5]:
+        stem = key[:-5]
+        dup = pages.pop(key)
+        if stem in pages:
+            canon = pages[stem]
+            for k, v in dup.items():
+                canon.setdefault(k, v)
+            # Security flags merge to the MORE RESTRICTIVE value, never by
+            # precedence: an admin lock held on the phantom tile must survive,
+            # and a duplicate must not be able to publish the gated entry.
+            if dup.get('is_locked') is True or canon.get('is_locked') is True:
+                canon['is_locked'] = True
+            if canon.get('is_public') is not True or dup.get('is_public') is not True:
+                canon['is_public'] = False
+        else:
+            pages[stem] = dup
+        for cat in (manifest.get('categories') or {}).values():
+            cat_pages = cat.get('pages')
+            if isinstance(cat_pages, list) and key in cat_pages:
+                cat_pages.remove(key)
+                if stem not in cat_pages:
+                    cat_pages.append(stem)
+        for list_name in ('uncategorized', 'recently_viewed'):
+            lst = manifest.get(list_name)
+            if isinstance(lst, list) and key in lst:
+                seen: list[str] = []
+                for item in lst:
+                    item = stem if item == key else item
+                    if item not in seen:
+                        seen.append(item)
+                lst[:] = seen
+        fixed.append(key)
+    return fixed
+
+
 def _sync_canvas_manifest_locked() -> dict:
     """Inner implementation — caller must hold _manifest_lock."""
     global _last_sync_time
@@ -493,6 +568,9 @@ def _sync_canvas_manifest_locked() -> dict:
     if not CANVAS_PAGES_DIR.exists():
         logger.warning(f'Canvas pages directory not found: {CANVAS_PAGES_DIR}')
         return manifest
+
+    for _bad_key in _normalize_manifest_page_keys(manifest):
+        logger.info(f'Canvas manifest: folded duplicate page key {_bad_key!r} into {_bad_key[:-5]!r}')
 
     existing_files = {p.name for p in CANVAS_PAGES_DIR.glob('*.html')}
     # Only consider pages that have a proper 'filename' field — entries using
@@ -527,6 +605,24 @@ def _sync_canvas_manifest_locked() -> dict:
             'voice_aliases': existing.get('voice_aliases') or generate_voice_aliases(title),
             'access_count': existing.get('access_count', 0),
         }
+        # is_locked / is_public are written EXPLICITLY, but ONLY for entries this
+        # sync CREATES (#477). The PATCH visibility guard reads an ABSENT
+        # is_locked key as LOCKED (fail closed), so a discovered page with no key
+        # could never be published by the tenant agent — measured 2026-10-14 on
+        # hr-blog-search-tuneup. Discovery is how every page an agent writes
+        # straight to canvas-pages/ gets registered; those are the agent's own
+        # deliverables: unlocked, private until published. An admin lock is an
+        # explicit opt-in from the admin dashboard.
+        #
+        # An entry that ALREADY EXISTS (legacy 'file'/'title' keys being
+        # normalised here) keeps exactly the flags it had — an absent key stays
+        # absent. This sync runs on an UNAUTHENTICATED manifest GET (public-read
+        # prefix), so if it wrote is_locked:false onto a pre-existing key-absent
+        # entry, any anonymous GET would turn a fail-closed page into an
+        # agent-publishable one (reviewer-measured on PR #540: 403 -> GET -> 200).
+        if not existing:
+            manifest['pages'][page_id]['is_public'] = False
+            manifest['pages'][page_id]['is_locked'] = False
         if page_icon:
             manifest['pages'][page_id]['icon'] = page_icon
         # Agents write page files directly (not via the pages API), so newly
@@ -593,6 +689,24 @@ def _sync_canvas_manifest_locked() -> dict:
     return manifest
 
 
+def _write_page_replacing(filepath: Path, html_content: str) -> None:
+    """Atomically replace a page while retaining shared-group write access."""
+    descriptor, tmp = tempfile.mkstemp(dir=filepath.parent, prefix='.canvas-', suffix='.tmp')
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as output:
+            output.write(html_content)
+            output.flush()
+            os.fsync(output.fileno())
+            os.fchmod(output.fileno(), 0o660)
+        os.replace(tmp, filepath)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def add_page_to_manifest(filename: str, title: str, description: str = '', content: str = '') -> dict:
     """Add or update a page in the manifest (called after page creation/update).
     When updating an existing page, all user-customised fields are preserved —
@@ -650,11 +764,16 @@ def _add_page_to_manifest_locked(filename: str, title: str, description: str = '
             'modified': datetime.now().isoformat(),
             'starred': False,
             'is_public': False,
-            # LOCKED BY DEFAULT (2026-08-29). The admin-only visibility guard below only
-            # fires on locked pages; with this False it never fired on ANY page ever created
-            # (measured: 0 locked / 72 unlocked / 2127 key-absent fleet-wide), leaving a 30s
-            # cooldown as the only thing between an agent and a public page.
-            'is_locked': True,
+            # UNLOCKED, EXPLICITLY (#477, 2026-10-14). This reverses the 2026-08-29
+            # lock-by-default (e3b9c5e): that made every page an agent created need
+            # an admin click before the agent could deliver it, and a finished,
+            # paid-for deliverable sat undeliverable for hours. Publishing a page
+            # is the tenant agent's own self-service action: the page stays
+            # PRIVATE until the agent flips is_public (30s cooldown below), and an
+            # admin can still LOCK any page from the admin dashboard — the lock
+            # is an explicit opt-in, not the default. The key is always written so
+            # the guard never has to guess (an ABSENT key still reads as locked).
+            'is_locked': False,
             'voice_aliases': generate_voice_aliases(title),
             'access_count': 0,
         }
@@ -895,6 +1014,22 @@ def canvas_pages_proxy(path):
             denied = _canvas_data_denied(path)
             if denied:
                 return denied
+        # NON-ASSET FILES under /pages/ (2026-09-15). The *.html gate below used to wave every other type through
+        # as an "embedded resource". Measured on the fleet, that served to anyone with the URL: 900 page BACKUPS
+        # (*.html.bak-* as octet-stream = full old page HTML), 116 .htm pages, and plans/data such as seo-plan.json,
+        # website-plan.md, email-data.json and a brand-plan .pdf. Only real asset types stay open. Measured before
+        # this change: 0 of 45 public pages reference an existing non-asset file outside _data/.
+        if CANVAS_REQUIRE_AUTH and not _is_html and not (path.startswith('_data/') or '/_data/' in path):
+            _name = Path(path).name
+            _ext = _name.rsplit('.', 1)[-1].lower() if '.' in _name else ''
+            if _ext not in _CANVAS_OPEN_ASSET_EXTS:
+                _target = _safe_canvas_path(str(CANVAS_PAGES_DIR), path)
+                # A slug-only URL that is not a file falls through to the .html redirect below, where the
+                # page's own is_public gate applies. Anything that IS a file needs a session.
+                if _ext or (_target is not None and _target.is_file()):
+                    denied = _canvas_data_denied(path)
+                    if denied:
+                        return denied
         if CANVAS_REQUIRE_AUTH and _is_html and path not in _OS_PAGES:
             page_id = Path(path).stem
             manifest = load_canvas_manifest()
@@ -962,13 +1097,23 @@ def canvas_pages_proxy(path):
                     b"});"
                     b'</script>'
                 )
-                # Inject nav() and speak() helpers into every page
+                # Inject nav() and speak() helpers into every page.
+                # speak() marks the message userInitiated when it runs during a real user
+                # gesture in this frame (transient user activation, or a trusted input event
+                # where the browser lacks navigator.userActivation). The shell drops untagged
+                # speaks within 15 s of a page load and allows one per minute after that, so
+                # without the flag a button calling speak() was throttled like a page that
+                # announces itself on open. Calls with no gesture (page load, timers that
+                # outlive the activation) stay untagged and keep that throttle.
                 _nav_helpers = (
                     b'<script id="canvas-nav-helpers">'
                     b'if(!window.nav){window.nav=function(p){'
                     b'window.parent.postMessage({type:"canvas-action",action:"navigate",page:p},"*");};}'
                     b'if(!window.speak){window.speak=function(t){'
-                    b'window.parent.postMessage({type:"canvas-action",action:"speak",text:t},"*");};}'
+                    b'var a=navigator.userActivation,e=window.event;'
+                    b'var u=!!((a&&a.isActive)||(!a&&e&&e.isTrusted&&'
+                    b'/^(click|pointerup|mouseup|touchend|keydown|keyup|submit|change)$/.test(e.type)));'
+                    b'window.parent.postMessage({type:"canvas-action",action:"speak",text:t,userInitiated:u},"*");};}'
                     b'</script>'
                 )
                 # Inject auth token bridge — parent pushes fresh Clerk JWT,
@@ -1012,28 +1157,32 @@ def canvas_pages_proxy(path):
                 # Canvas CSP: allow scripts and styles inline, allow API connections
                 # for interactive apps (Awesome App Library etc.) that call AI APIs
                 # directly from the browser with user's own API keys.
+                # Deployment hosts come from CSP_TRUSTED_HOSTS (services/csp.py); a stock
+                # install trusts none. Never hard-code a deployment's domain here.
+                from services import csp as _csp
+                _trusted = _csp.sources()
+                _trusted_ws = _csp.sources(websockets=True)
                 resp.headers['Content-Security-Policy'] = (
                     "default-src 'none'; "
                     # maps.googleapis.com + maps.gstatic.com: required by the `maps` skill's
                     # Google Maps JS canvas pages. Omitting them silently blanks every map
                     # (console-only CSP violation). Found 2026-07-24. Do NOT re-strip.
                     # cdn.jsdelivr.net in style-src: Monaco/xterm stylesheets (Code Blocks).
-                    "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://cdn.tailwindcss.com https://games.jam-bot.com https://maps.googleapis.com https://maps.gstatic.com blob:; "
-                    "style-src 'unsafe-inline' https://games.jam-bot.com https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+                    "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://cdn.tailwindcss.com https://maps.googleapis.com https://maps.gstatic.com blob:" + _trusted + "; "
+                    "style-src 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net" + _trusted + "; "
                     "img-src 'self' data: blob: https:; "
                     "media-src 'self' blob: https:; "
                     "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; "
-                    "connect-src 'self' blob: https://games.jam-bot.com "
-                        "https://*.jam-bot.com wss://*.jam-bot.com "
+                    "connect-src 'self' blob: "
                         "https://api.openai.com https://generativelanguage.googleapis.com "
                         "https://api.x.ai https://api.groq.com "
                         "https://api.together.xyz https://openrouter.ai "
                         "https://api.anthropic.com https://api.cohere.ai "
                         "https://api.dataforseo.com https://sandbox.dataforseo.com "
-                        "https://maps.googleapis.com; "
+                        "https://maps.googleapis.com" + _trusted_ws + "; "
                     "worker-src blob:; "
-                    "frame-src 'self' https://*.jam-bot.com https://*.netlify.app https://midiviz.com "
-                        "https://w.soundcloud.com https://bandcamp.com https://*.bandcamp.com"
+                    "frame-src 'self' https://*.netlify.app https://midiviz.com "
+                        "https://w.soundcloud.com https://bandcamp.com https://*.bandcamp.com" + _trusted
                 )
                 return resp
             else:
@@ -1289,21 +1438,82 @@ def sync_manifest():
     })
 
 
+def _resolve_page_entry_locked(page_id: str) -> tuple[dict, str | None, bool]:
+    """Find the manifest entry for ``page_id`` — caller must hold _manifest_lock.
+
+    Returns ``(manifest, resolved_key_or_None, file_on_disk)``.
+
+    - '<id>.html' is accepted as well as '<id>' (#477 defect 3 — keys are stems).
+    - If there is no entry yet but '<id>.html' exists in canvas-pages/, the
+      discovery sync runs FIRST and the lookup is retried. Before this, a page
+      written straight to disk was only registered by the next throttled
+      ``GET /api/canvas/manifest``, so the agent's first PATCH after writing the
+      file returned "Page not found" (measured on test-dev 2026-10-14:
+      PATCH -> 404, GET manifest, PATCH -> 200). Discovery must happen before
+      the request is judged, not after a poller happens to run.
+    """
+    manifest = load_canvas_manifest()
+    stem = page_id[:-5] if page_id.endswith('.html') and len(page_id) > 5 else page_id
+    # page_id comes from a non-path URL segment (no '/'), so it cannot escape the
+    # pages dir; a NUL byte would make is_file() raise, and '.'/'..'/'' are not
+    # page ids. All of those are simply "no file".
+    if not stem or stem in ('.', '..') or any(c in stem for c in '/\\\0'):
+        file_on_disk = False
+    else:
+        try:
+            file_on_disk = (CANVAS_PAGES_DIR / Path(f'{stem}.html').name).is_file()
+        except (OSError, ValueError):
+            file_on_disk = False
+    # STEM FIRST, always. The /pages/ gate keys on Path(path).stem and consults
+    # ONLY that entry, so when a pre-normalisation manifest holds both 'foo'
+    # (locked) and 'foo.html' (unlocked), resolving 'foo.html' to the phantom
+    # would tell the agent "published" (200) while the gate kept serving 401 and
+    # the next sync's merge discarded the flag — a lie, not a publish. The
+    # phantom key is only consulted when no stem entry exists at all.
+    for key in (stem, page_id):
+        if key in manifest['pages']:
+            return manifest, key, file_on_disk
+    if file_on_disk:
+        manifest = _sync_canvas_manifest_locked()
+        for key in (stem, page_id):
+            if key in manifest['pages']:
+                return manifest, key, file_on_disk
+    return manifest, None, file_on_disk
+
+
+def _page_not_found(page_id: str, file_on_disk: bool):
+    """404 that says WHY (#477: the error must name the real cause)."""
+    if file_on_disk:
+        hint = ('The file exists in canvas-pages/ but could not be registered in the manifest '
+                '(manifest write failed — see server log).')
+    else:
+        hint = ('No such file in canvas-pages/. Write the page first (POST /api/canvas/pages or '
+                'write <page_id>.html into canvas-pages/), then retry.')
+    return jsonify({
+        'error': 'Page not found',
+        'code': 'page_not_found',
+        'page_id': page_id,
+        'file_on_disk': file_on_disk,
+        'hint': hint,
+    }), 404
+
+
 @canvas_bp.route('/api/canvas/manifest/page/<page_id>', methods=['GET', 'PATCH', 'DELETE'])
 def handle_page_metadata(page_id):
     """Get, update, or delete page metadata."""
     if request.method == 'GET':
-        manifest = load_canvas_manifest()
-        if page_id not in manifest['pages']:
-            return jsonify({'error': 'Page not found'}), 404
-        return jsonify(manifest['pages'][page_id])
+        with _manifest_lock:
+            manifest, key, file_on_disk = _resolve_page_entry_locked(page_id)
+        if key is None:
+            return _page_not_found(page_id, file_on_disk)
+        return jsonify(manifest['pages'][key])
 
     # PATCH/DELETE — hold lock to prevent concurrent manifest clobbering
     with _manifest_lock:
-        manifest = load_canvas_manifest()
-
-        if page_id not in manifest['pages']:
-            return jsonify({'error': 'Page not found'}), 404
+        manifest, key, file_on_disk = _resolve_page_entry_locked(page_id)
+        if key is None:
+            return _page_not_found(page_id, file_on_disk)
+        page_id = key
 
         if request.method == 'DELETE':
             page = manifest['pages'][page_id]
@@ -1373,8 +1583,24 @@ def handle_page_metadata(page_id):
             return jsonify({'status': 'ok', 'message': 'Page archived', 'page_id': page_id, 'title': page_title})
 
         # PATCH — update metadata
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Request body must be a JSON object', 'code': 'bad_request'}), 400
         page = manifest['pages'][page_id]
+
+        # TYPE GATE, before any guard (#477 review, pre-existing on main). The
+        # lock and cooldown guards below test `data.get('is_public') is True`,
+        # but the field loop stored ANY value and the /pages/ gate reads it
+        # truthy — so {"is_public": 1}, "true", "no" or [1] from the agent key
+        # PUBLISHED A LOCKED PAGE with no cooldown. Security flags are booleans
+        # or the request is rejected; nothing below may see a non-bool.
+        for _flag in ('is_public', 'is_locked'):
+            if _flag in data and not isinstance(data[_flag], bool):
+                return jsonify({
+                    'error': f'{_flag} must be a JSON boolean (true/false), got {type(data[_flag]).__name__}',
+                    'code': 'invalid_type',
+                    'field': _flag,
+                }), 400
 
         # Detect agent requests (X-Agent-Key header) vs admin requests (Clerk JWT)
         _agent_api_key = os.getenv('AGENT_API_KEY', '').strip()
@@ -1392,17 +1618,49 @@ def handle_page_metadata(page_id):
         # Only the UNSAFE direction is blocked: making a page PUBLIC needs an admin.
         # Making a page PRIVATE is always allowed — an agent that realises it exposed
         # something must never be prevented from closing it.
-        # Default is True: a page with no is_locked key is treated as LOCKED (fail closed).
+        #
+        # ABSENT KEY = LOCKED (fail closed) — kept from e3b9c5e (2026-08-29), on
+        # purpose. Every path in THIS app now writes is_locked explicitly
+        # (creation + discovery, #477), so an absent key can only come from an
+        # entry registered by something outside the app (a host-side script, a
+        # hand edit) or from before the key existed; those are not this
+        # container's agent's deliverables and no admin ever chose to unlock
+        # them. Flipping the default would silently unlock every such entry
+        # (measured 2026-10-14 across 24 tenants: 196 key-absent of 2131, 0 of
+        # them lacking a filename). What #477 DOES require is that the refusal
+        # names the real cause — lock vs absent key, never "auth" — and how to
+        # clear it.
         if data.get('is_public') is True and page.get('is_locked', True) and not is_admin:
+            lock_recorded = page.get('is_locked')  # True, or None when absent
+            if 'is_locked' in page:
+                return jsonify({
+                    'error': 'This page is admin-locked. It can only be made public by an admin '
+                             '(admin dashboard → Canvas → unlock). This is an authorization '
+                             'state, not a credential problem — no token or key will open it; '
+                             'ask the admin to unlock the page.',
+                    'code': 'page_locked',
+                    'is_locked': lock_recorded,
+                    'lock_source': 'explicit',
+                    'how_to_unlock': 'admin: PATCH {"is_locked": false} with a Clerk admin session, '
+                                     'or toggle the lock in the admin dashboard',
+                }), 403
             return jsonify({
-                'error': 'This page is locked. Visibility can only be changed from the admin dashboard.',
-                'is_locked': True,
+                'error': 'This page has no is_locked key in the manifest (it was registered '
+                         'outside the app) and is treated as LOCKED until an admin sets it. '
+                         'This is an authorization state, not a credential problem — no token '
+                         'or key will open it; ask the admin to unlock the page.',
+                'code': 'page_lock_unset',
+                'is_locked': None,
+                'lock_source': 'absent_key',
+                'how_to_unlock': 'admin: PATCH {"is_locked": false} with a Clerk admin session, '
+                                 'or set "is_locked": false on the manifest entry',
             }), 403
 
         # Guard: only an admin may lock/unlock pages (never the agent).
         if 'is_locked' in data and not is_admin:
             return jsonify({
                 'error': 'Page lock status can only be changed from the admin dashboard.',
+                'code': 'admin_only',
             }), 403
 
         # Guard: reject is_public=True if page was created less than 30 seconds ago.
@@ -1417,12 +1675,18 @@ def handle_page_metadata(page_id):
                         return jsonify({
                             'error': 'Cannot make a page public within 30 seconds of creation. '
                                      'Wait a moment and try again.',
+                            'code': 'publish_cooldown',
                             'age_seconds': round(age_seconds, 1),
+                            'retry_after_seconds': round(30 - age_seconds, 1),
                         }), 429
                 except (ValueError, TypeError):
                     # FAIL CLOSED: an unparseable 'created' must not become a free pass
                     # past the cooldown. Previously this allowed the change through.
-                    return jsonify({'error': 'Cannot verify page age; refusing to make public.'}), 409
+                    return jsonify({
+                        'error': 'Cannot verify page age; refusing to make public.',
+                        'code': 'created_unverifiable',
+                        'created': created_str,
+                    }), 409
 
         for field in ['display_name', 'description', 'category', 'tags', 'starred', 'is_public', 'is_locked', 'icon', 'style']:
             if field in data:
@@ -1541,7 +1805,7 @@ def create_canvas_page():
         except UnsafePathError:
             return jsonify({'error': 'Invalid filename'}), 400
 
-        filepath.write_text(html_content, encoding='utf-8')
+        _write_page_replacing(filepath, html_content)
         logger.info(str(f'Canvas page saved: {filename} ({len(html_content)} bytes)').replace('\r', '\\r').replace('\n', '\\n').replace('\x00', '\\0').replace('\x1b', '\\x1b').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029').replace('\x0b', '\\v').replace('\x0c', '\\f').replace('\x85', '\\x85'))
 
         page_meta = add_page_to_manifest(filename, title, content=html_content[:500])
@@ -1664,7 +1928,7 @@ def canvas_data_static(filename):
     ANY file type with a correct mimetype so the Suno Studio audio editor can load
     vocal/stem .mp3 files and processed-song fixtures from a stable /canvas-data/ path.
     The dir is mounted in both openclaw + openvoiceui, so it's the shared media bridge.
-    Added 2026-06-25 for the suno-audio-editor Phase 1 bridge (bun submesh)."""
+    Added 2026-06-25 for the suno-audio-editor Phase 1 bridge (tenant-n submesh)."""
     denied = _canvas_data_denied(filename)
     if denied:
         return denied

@@ -12,6 +12,7 @@ import { createMusicEmbed } from './security/music-embed.mjs';
 import { inject } from './ui/AppShell.js';
 import { initUpdateChecker } from './ui/UpdateBanner.js';
 import { connectAiradio } from './shell/airadio-bridge.js';
+import { safeRedirectTarget } from './core/safeRedirect.js';
 
 // Inject the application DOM structure before any module accesses the DOM
 inject();
@@ -107,7 +108,7 @@ connectAiradio();
                 // Shell-level verbs act on the SHELL, never the page. Posting these
                 // into the iframe was a structural no-op: the page has no handler,
                 // and the shell's own 'close' case only fires on messages FROM pages.
-                // (2026-08-18: phatty/Hart — agent emitted close, canvas stayed open.)
+                // (2026-08-18: tenant-e — agent emitted close, canvas stayed open.)
                 if (action === 'close') { CanvasControl.hide(); return; }
                 if (action === 'menu') { CanvasControl.showMenu(); return; }
                 if (action === 'navigate' && (payload?.page || payload?.pageId)) {
@@ -196,7 +197,7 @@ connectAiradio();
         // Rewrites external dev-domain URLs to same-domain /devsite-*/ proxies,
         // bypassing Cloudflare's cross-subdomain iframe blocking.
         // Map is injected by Flask from DEVSITE_MAP env var (set per user in compose/.env).
-        // Example: {"dev-nick.jam-bot.com": "https://nick.jam-bot.com/devsite-printguys-web-2/"}
+        // Example: {"dev-tenant-l.jam-bot.com": "https://tenant-l.jam-bot.com/devsite-example-web-2/"}
         function resolveCanvasUrl(url) {
             if (typeof url !== 'string' || !url.trim()) return null;
             const isWebUrl = value => {
@@ -1895,10 +1896,10 @@ connectAiradio();
                 if (this.statusEl) this.statusEl.style.display = 'none';
             },
 
-            async generateJingle(brand, style, gender, instrumental) {
-                // Dedup on the brand+style+gender+instrumental combo
+            async generateJingle(brand, style, gender, instrumental, repeat) {
+                // Dedup on the brand+style+gender+instrumental+repeat combo
                 const now = Date.now();
-                const dedupKey = `JINGLE|${brand}|${style}|${gender}|${instrumental}`;
+                const dedupKey = `JINGLE|${brand}|${style}|${gender}|${instrumental}|${repeat || ''}`;
                 for (const [k, t] of this._recentPrompts) {
                     if (now - t > this._DEDUP_WINDOW_MS) this._recentPrompts.delete(k);
                 }
@@ -1921,6 +1922,9 @@ connectAiradio();
                             style: style || '',
                             vocal_gender: gender || 'm',
                             instrumental: !!instrumental,
+                            // How many times the brand is sung (1-3). The tag's 5th field;
+                            // omitted when absent so the server keeps its own default.
+                            ...(repeat ? { repeat } : {}),
                         }),
                     });
                     const data = await resp.json();
@@ -1931,13 +1935,15 @@ connectAiradio();
                         const err = data.response || 'unknown error';
                         ActionConsole?.addEntry('error', `🎵 Jingle failed to start: ${err}`);
                         this._showStatus(`🎵 Jingle: ${err}`);
-                        setTimeout(() => this._hideStatus(), 5000);
+                        setTimeout(() => this._hideStatus(), 12000);
+                        this._announceFailure('jingle');
                     }
                 } catch (err) {
                     console.error('[Suno] jingle error:', err);
                     ActionConsole?.addEntry('error', `🎵 Jingle: connection error — ${err.message || err}`);
                     this._showStatus('🎵 Jingle: connection error');
-                    setTimeout(() => this._hideStatus(), 4000);
+                    setTimeout(() => this._hideStatus(), 8000);
+                    this._announceFailure('jingle');
                 }
             },
 
@@ -1990,12 +1996,14 @@ connectAiradio();
                         const err = data.response || 'Error starting generation';
                         ActionConsole?.addEntry('error', `🎵 Suno failed to start: ${err}`);
                         this._showStatus(`🎵 Suno: ${err}`);
-                        setTimeout(() => this._hideStatus(), 5000);
+                        setTimeout(() => this._hideStatus(), 12000);
+                        this._announceFailure('song');
                     }
                 } catch (err) {
                     console.error('[Suno] generate error:', err);
                     this._showStatus('🎵 Suno: connection error');
-                    setTimeout(() => this._hideStatus(), 4000);
+                    setTimeout(() => this._hideStatus(), 8000);
+                    this._announceFailure('song');
                 }
             },
 
@@ -2021,7 +2029,8 @@ connectAiradio();
                             const reason = data.reason || data.response || 'unknown error';
                             ActionConsole?.addEntry('error', `🎵 Suno generation failed: ${reason}`);
                             this._showStatus(`🎵 Suno failed: ${reason}`);
-                            setTimeout(() => this._hideStatus(), 8000);
+                            setTimeout(() => this._hideStatus(), 12000);
+                            this._announceFailure(data.kind === 'jingle' ? 'jingle' : 'song');
                         } else if (data.status === 'not_found' || data.status === 'no_jobs') {
                             this._stopPolling();
                             this._hideStatus();
@@ -2113,6 +2122,37 @@ connectAiradio();
                     this._playMutedAnnouncement(url);
                 } catch (e) {
                     console.warn('[Suno] TTS completion error:', e);
+                }
+            },
+
+            // A generation that does not go through must be SAID, not only shown in a banner
+            // the user may never look at (2026-09-28: a client was told "45 seconds" for his
+            // son's song; Suno refused it for credits and nothing told him or the agent). The
+            // server queues the failure for the agent's next turn (routes/suno.py
+            // SUNO-REJECT-SURFACED); this says it now — after the agent's own sentence finishes,
+            // so it never talks over it. Deliberately plain: no cause, no promise.
+            async _announceFailure(kind) {
+                const what = kind === 'jingle' ? 'jingle' : 'song';
+                const line = `Heads up, that ${what} didn't go through.`;
+                TranscriptPanel?.addMessage('system', `🎵 ${line}`);
+                const cm = (typeof ModeManager !== 'undefined') ? ModeManager?.clawdbotMode : null;
+                const deadline = Date.now() + 45000;
+                while (cm?._ttsPlaying && Date.now() < deadline) {
+                    await new Promise(r => setTimeout(r, 400));
+                }
+                try {
+                    const provider = window.voiceAgent?.selectedProvider || 'groq';
+                    const voice = window.voiceAgent?.currentVoice || 'autumn';
+                    const resp = await fetch(`${CONFIG.serverUrl}/api/tts/generate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: line, provider, voice }),
+                    });
+                    if (!resp.ok) throw new Error(`tts ${resp.status}`);
+                    const blob = await resp.blob();
+                    this._playMutedAnnouncement(URL.createObjectURL(blob));
+                } catch (e) {
+                    console.warn('[Suno] failure announce TTS failed:', e);
                 }
             },
 
@@ -3180,15 +3220,13 @@ connectAiradio();
                         // and direct page URLs are authenticated (browser only sends
                         // cookies with navigation requests, not Authorization headers).
                         this._syncSessionCookie();
-                        // If redirected here from a canvas page (or other protected route), go back there
-                        const redirectTo = new URLSearchParams(window.location.search).get('redirect');
-                        if (redirectTo && redirectTo.startsWith('/')) {
-                            try {
-                                const target = new URL(redirectTo, window.location.origin);
-                                if (target.origin === window.location.origin) {
-                                    window.location.href = target.href;
-                                }
-                            } catch {}
+                        // If redirected here from a canvas page (or other protected route), go back there.
+                        // Same-origin targets only: see src/core/safeRedirect.js.
+                        const redirectTo = safeRedirectTarget(
+                            new URLSearchParams(window.location.search).get('redirect'),
+                            window.location.origin);
+                        if (redirectTo) {
+                            window.location.href = redirectTo;
                         }
                     };
 
@@ -4544,6 +4582,7 @@ connectAiradio();
                             .replace(/\[MUSIC_NEXT\]/gi, '')
                             .replace(/\[SESSION_RESET\]/gi, '')
                             .replace(/\[SUNO_GENERATE:[^\]]*\]/gi, '')
+                            .replace(/\[JINGLE_GENERATE:[^\]]*\]/gi, '')
                             .replace(/\[SPOTIFY:[^\]]*\]/gi, '')
                             .replace(/\[SOUNDCLOUD:[^\]]*\]/gi, '')
                             .replace(/\[SOUNDCLOUD_PAGE:[^\]]*\]/gi, '')
@@ -4663,7 +4702,7 @@ connectAiradio();
                             const style = parts[1] || '';
                             const gender = (parts[2] || 'm').toLowerCase();
                             const instrumental = (parts[3] || '').toLowerCase() === 'true';
-                            const repeat = parseInt(parts[4], 10) || 2;
+                            const repeat = Math.min(3, Math.max(1, parseInt(parts[4], 10) || 2));
                             if (!brand) {
                                 ActionConsole?.addEntry('error', `🎵 Jingle: missing brand name`);
                                 return;
@@ -5045,6 +5084,21 @@ connectAiradio();
                                     // through /interject (which would steer into a
                                     // closed turn and poison the session).
                                     this._textDoneReceived = true;
+                                    // Deferred turn: the gateway ended the turn on purpose
+                                    // with nothing to say yet — the agent will answer later
+                                    // via the proactive push channel. Not an error and not
+                                    // empty-cascade: close the streaming bubble quietly and
+                                    // keep reading so the following no_audio re-enables the mic.
+                                    if (data.deferred && !(data.response || '').trim()) {
+                                        console.log('[text_done] Deferred turn — answer will arrive via push');
+                                        TranscriptPanel.removeThinking();
+                                        TranscriptPanel.finalizeStreaming(null);
+                                        document.getElementById('thought-bubbles')?.classList.remove('active');
+                                        window.HaloSmokeFace?.setThinking(false);
+                                        window.BigHeadFace?.setThinking(false);
+                                        ActionConsole.addEntry('system', 'Agent is still working — the answer will arrive when ready');
+                                        continue;
+                                    }
                                     const fullResponse = data.response || streamingText;
                                     const cleanedResponse = this.stripReasoningTokens(fullResponse);
                                     const displayText = stripCanvasTags(cleanedResponse);
@@ -5189,7 +5243,9 @@ connectAiradio();
                                 // Server signals this explicitly so we can unblock isProcessing immediately.
                                 if (data.type === 'no_audio') {
                                     console.log('No audio for this response — resetting STT');
-                                    ActionConsole.addEntry('system', 'Silent response — canvas/action only, mic re-enabled');
+                                    ActionConsole.addEntry('system', data.deferred
+                                        ? 'Waiting on the agent — mic re-enabled'
+                                        : 'Silent response — canvas/action only, mic re-enabled');
                                     FaceModule.setMood('neutral');
                                     if (this._voiceActive && this.stt) {
                                         if (this.stt.resume) {
@@ -6405,6 +6461,7 @@ connectAiradio();
                             .replace(/\[MUSIC_NEXT\]/gi, '')
                             .replace(/\[SESSION_RESET\]/gi, '')
                             .replace(/\[SUNO_GENERATE:[^\]]*\]/gi, '')
+                            .replace(/\[JINGLE_GENERATE:[^\]]*\]/gi, '')
                             .replace(/\[SPOTIFY:[^\]]*\]/gi, '')
                             .replace(/\[SOUNDCLOUD:[^\]]*\]/gi, '')
                             .replace(/\[SOUNDCLOUD_PAGE:[^\]]*\]/gi, '')
@@ -7685,7 +7742,7 @@ connectAiradio();
             // Server profile is AUTHORITATIVE (VPS = source of truth) — never let a stale
             // per-tab localStorage voice_mode strand the UI in Hume mode, which hides the
             // TTS Voice picker (Hume EVI controls voice itself, so #voice-select-group is
-            // hidden). BHB 2026-07-11: localStorage voice_mode='hume' left over from a past
+            // hidden). persona-tenant 2026-07-11: localStorage voice_mode='hume' left over from a past
             // Hume session hid the Voice field despite the server profile being supertonic/
             // resemble. Mirror line ~7178's server-first resolution.
             const activeMode = window._serverProfile?.ui?.voice_mode || localStorage.getItem('voice_mode') || 'supertonic';
@@ -9444,12 +9501,33 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                 if (fileInput) fileInput.value = '';
             },
 
+            // WebKit bug 319985 (Safari/iOS 26.5+, still open 2026-09-29): a disk-backed File
+            // from the picker, handed to fetch/XHR, can go out as Content-Length: 0 with no
+            // error anywhere. The networking process is refused read access to the picker's
+            // temp copy; the page itself can still read every byte. A Blob built from
+            // file.arrayBuffer() uploads intact (the workaround verified on device in that
+            // bug). Measured on tenant-i 2026-09-30: an iPhone bulk upload sent every photo empty.
+            // Uploads run one at a time, so only one file's bytes are held at once.
+            async _readIntoMemory(file, fname) {
+                if (!file || typeof file.arrayBuffer !== 'function') return file;
+                let buf;
+                try {
+                    buf = await file.arrayBuffer();
+                } catch (e) {
+                    console.error('upload: could not read file bytes:', fname, e);
+                    throw new Error(`${fname} could not be read — re-attach it and try again`);
+                }
+                return new Blob([buf], { type: file.type || 'application/octet-stream' });
+            },
+
             async uploadFile(file, staged) {
                 const formData = new FormData();
-                // Prefer the byte snapshot taken at stage time (see _stageFile). Falls back
-                // to the live handle when there is no snapshot (drag-drop, desktop picker).
-                const body = (staged && staged.blob) ? staged.blob : file;
                 const fname = (staged && staged.name) || file.name || 'upload';
+                // Send bytes the page has read, never the picker's live File (see
+                // _readIntoMemory). Prefer the snapshot taken at stage time (see _stageFile);
+                // otherwise read it now. The bulk path never had a snapshot, and a single file
+                // sent before its stage-time read finished fell back to the live handle.
+                const body = (staged && staged.blob) ? staged.blob : await this._readIntoMemory(file, fname);
                 if (body && body.size === 0) {
                     throw new Error(`${fname} came back empty — re-attach the photo and try again`);
                 }
@@ -10349,6 +10427,9 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                     }
                 }
 
+                // No call running: this press sends one message, like the transcript text box
+                this._beginStandalone(stt);
+
                 // Start recording — pttActivate handles all state
                 stt.pttActivate();
             },
@@ -10361,6 +10442,52 @@ ${meta.artwork ? `<img class="art" src="${esc(meta.artwork)}" alt="">` : ''}
                 // Stop recording and force transcription — pttRelease handles all state
                 // onstop handler will send to Groq and call onResult asynchronously
                 stt.pttRelease();
+
+                // Standalone press: if no transcript comes back (nothing was said),
+                // still give the mic back.
+                if (this._standalone) {
+                    clearTimeout(this._standalone.timer);
+                    this._standalone.timer = setTimeout(() => this._endStandalone(stt, ''), 6000);
+                }
+            },
+
+            // ── Standalone PTT (no call running) ──
+            // Borrows the shared STT for one utterance and sends it through
+            // ClawdbotMode.sendMessage — the same path as the transcript text box —
+            // then restores the callbacks and releases the mic. Same borrow pattern
+            // as Listen mode in ModeSelector.select().
+            _standalone: null,
+
+            _beginStandalone(stt) {
+                if (this._standalone) return;              // re-press while the last one finishes
+                const cm = ModeManager?.clawdbotMode;
+                if (!cm || cm._voiceActive) return;        // a call owns the STT callbacks
+                if (stt.isListening || window.ModeSelector?.currentMode === 'listen') return;  // Listen mode owns the mic
+                this._standalone = { onResult: stt.onResult, onListenFinal: stt.onListenFinal, timer: null };
+                stt.onListenFinal = null;                  // sendMessage shows the user's text itself
+                stt.onResult = (text) => this._endStandalone(stt, text);
+            },
+
+            _endStandalone(stt, text) {
+                const s = this._standalone;
+                if (!s) return;
+                const message = (text || '').trim();
+                if (stt._pttHolding) {
+                    // Pressed again before this one finished: send it and keep the
+                    // borrow for the press in progress.
+                    if (message) ModeManager.clawdbotMode.sendMessage(message);
+                    return;
+                }
+                this._standalone = null;
+                clearTimeout(s.timer);
+                stt.onResult = s.onResult;
+                stt.onListenFinal = s.onListenFinal;
+                if (!ModeManager.clawdbotMode._voiceActive) {
+                    stt.stop();                            // release the mic
+                    stt.resetProcessing?.();
+                    if (this.pttMode) stt.pttMute();       // stop() clears the provider's PTT mute
+                }
+                if (message) ModeManager.clawdbotMode.sendMessage(message);
             },
 
             // Set PTT mode to a specific target state (idempotent). Delegates to

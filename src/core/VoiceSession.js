@@ -310,6 +310,10 @@ export class VoiceSession {
                     }
 
                     if (data.type === 'text_done') {
+                        // Deferred turn: no reply yet (answer arrives via push) — emit nothing.
+                        if (data.deferred && !(data.response || '').trim()) {
+                            continue;
+                        }
                         const fullText = data.response || streamingText;
                         const cleanText = this._stripReasoningTokens(fullText);
                         const displayText = this._stripCmdTags(cleanText);
@@ -436,6 +440,7 @@ export class VoiceSession {
             .replace(/\[MUSIC_NEXT\]/gi, '')
             .replace(/\[SESSION_RESET\]/gi, '')
             .replace(/\[SUNO_GENERATE:[^\]]*\]/gi, '')
+            .replace(/\[JINGLE_GENERATE:[^\]]*\]/gi, '')
             .replace(/\[SPOTIFY:[^\]]*\]/gi, '')
             .replace(/\[SLEEP\]/gi, '')
             .replace(/\[REGISTER_FACE:[^\]]*\]/gi, '')

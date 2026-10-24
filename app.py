@@ -113,6 +113,7 @@ def create_app(config_override: dict = None):
     # Without it, the app runs fully open (single-user / local mode).
     from services.auth import clerk_auth_enabled
     _auth_enabled = clerk_auth_enabled()
+    app.config['CLERK_AUTH_ENABLED'] = _auth_enabled
 
     # Privileged surfaces — require an admin user (services.auth.ADMIN_USER_IDS),
     # not just any allowlisted tenant user. ALLOWED_USER_IDS gates the voice app;
@@ -193,12 +194,18 @@ def create_app(config_override: dict = None):
                                     # All other /api/plugins routes (install/uninstall/restart/config)
                                     # are state-changing admin operations and require admin auth below.
             '/api/vault/oauth/callback/',  # OAuth callbacks — redirected from external providers
+            '/api/vault/oauth/relay/',     # single-callback OAuth relay (GET only): forwards code+state to
+                                           # an allow-listed tenant callback; reads no vault, exchanges nothing
             '/plugins/',      # Plugin static assets — face scripts, CSS, previews
             '/faces/custom/', # custom face HTML — loaded in iframe by face-box
             '/registry/',     # Pinokio registry check-in — accessed by Pinokio, not logged-in user
             '/checkpoints/',  # Pinokio snapshot endpoint — called from /registry/checkin page JS
             '/openclaw-ui/',  # OpenClaw Control UI SPA + assets — proxied to internal gateway
             '/share/capture/', # Camera Capture share portal — token-gated public access for clients
+            '/u/',         # Signed one-time upload links (routes/intake.py) — the TOKEN is the
+                           # gate, not Clerk; GET renders the form, POST accepts the upload. Never
+                           # add '/api/intake/mint' here — minting stays behind require_auth below
+                           # (agent key or Clerk session), only /u/<token> itself is public.
         )
         # Public for READS ONLY (GET/HEAD/OPTIONS). These prefixes serve config
         # lists the UI loads before Clerk init, but their state-changing methods
@@ -342,7 +349,20 @@ def create_app(config_override: dict = None):
             if not user_id:
                 # For API calls return JSON 401; for page navigations redirect to /
                 if path.startswith('/api/') or request.headers.get('X-Requested-With'):
-                    return jsonify({'error': 'Unauthorized', 'code': 'auth_required'}), 401
+                    # Name what IS accepted (#477): an agent that got here spent hours
+                    # cycling gateway tokens / X-API-Key / X-Auth-Token, none of which
+                    # this gate reads. auth_required means "no accepted credential was
+                    # presented" — never an authorization state like a page lock
+                    # (those come back 403 from the route with their own code).
+                    return jsonify({
+                        'error': 'Unauthorized',
+                        'code': 'auth_required',
+                        'accepted_credentials': [
+                            'Authorization: Bearer <Clerk session JWT>',
+                            '__session cookie (Clerk)',
+                            'X-Agent-Key: <AGENT_API_KEY> (tenant agent, non-admin paths only)',
+                        ],
+                    }), 401
                 # HTML page request — redirect to root (login gate)
                 return redirect('/')
 
@@ -377,6 +397,10 @@ def create_app(config_override: dict = None):
         response.headers.setdefault(
             'Permissions-Policy', 'camera=(self), microphone=*, geolocation=(self), pointer-lock=*'
         )
+        # Hosts this deployment runs its own services on (CSP_TRUSTED_HOSTS, services/csp.py).
+        # Empty on a stock install; never hard-code a deployment's domain here.
+        from services import csp as _csp
+        _trusted = _csp.sources()
         response.headers.setdefault(
             'Content-Security-Policy',
             "default-src 'self'; "
@@ -393,20 +417,23 @@ def create_app(config_override: dict = None):
             # map page renders an empty box — silently, since the only signal is a console
             # CSP violation. Found 2026-07-24: the maps skill documented these as allowed
             # but they were never actually in either CSP. Do NOT re-strip.
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://cdn.tailwindcss.com https://*.clerk.accounts.dev https://*.jam-bot.com https://maps.googleapis.com https://maps.gstatic.com; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://cdn.tailwindcss.com https://*.clerk.accounts.dev https://maps.googleapis.com https://maps.gstatic.com" + _trusted + "; "
             # jsdelivr serves stylesheets as well as scripts (Leaflet, etc). It was in
             # script-src but NOT style-src, so a canvas page could load a library's JS
             # and have its CSS silently blocked — which renders as "the widget is
             # missing and everything overlaps", not as an obvious error. Found 2026-07-27
-            # on allstate's Leaflet map page.
+            # on tenant-f's Leaflet map page.
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
             "font-src 'self' data: https://fonts.gstatic.com; "
             # Map tiles/markers come from maps.gstatic.com, *.googleapis.com (khms tile
             # shards) and *.ggpht.com (Street View); googleusercontent serves place photos.
-            "img-src 'self' data: blob: https://img.clerk.com https://images.clerk.dev https://*.clerk.accounts.dev https://lh3.googleusercontent.com https://avatars.githubusercontent.com https://bhaleyart.github.io https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.ggpht.com https://*.googleusercontent.com;  https://*.tile.openstreetmap.org https://tile.openstreetmap.org https://*.basemaps.cartocdn.com"
+            # (Map tiles: OpenStreetMap + CARTO for Leaflet pages. Until 2026-10-16 a stray ';'
+            # cut these hosts out of img-src and the missing separator after them swallowed
+            # media-src, so neither applied.)
+            "img-src 'self' data: blob: https://img.clerk.com https://images.clerk.dev https://*.clerk.accounts.dev https://lh3.googleusercontent.com https://avatars.githubusercontent.com https://bhaleyart.github.io https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.ggpht.com https://*.googleusercontent.com https://*.tile.openstreetmap.org https://tile.openstreetmap.org https://*.basemaps.cartocdn.com; "
             "media-src 'self' blob:; "
             "connect-src 'self' wss: https:; "
-            "frame-src 'self' https://*.clerk.accounts.dev https://*.jam-bot.com https:; "
+            "frame-src 'self' https://*.clerk.accounts.dev https:" + _trusted + "; "
             "worker-src 'self' blob:"
         )
         return response
