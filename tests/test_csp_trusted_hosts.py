@@ -81,7 +81,7 @@ def test_invalid_entries_cannot_inject_sources_or_directives(client, monkeypatch
                        "data: https://x.test/path")
     app_csp, page_csp = _csps(client)
     for csp in (app_csp, page_csp):
-        assert 'https://ok.example.test' in _directives(csp)['script-src']
+        assert any(source == 'https://ok.example.test' for source in _directives(csp)['script-src'])
         for bad in ("'unsafe-hashes'", 'evil.test', 'x.test/path'):
             assert bad not in csp, (bad, csp)
         assert set(_directives(csp)) <= KNOWN_DIRECTIVES

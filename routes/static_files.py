@@ -614,7 +614,7 @@ def _upload_shadow_record(filename, exists, states=None, reason=None, listing=Fa
             'grants': states or {},
             'enforce_action': _upload_enforce_action(listing),
         }
-        fd = os.open(str(UPLOADS_SHADOW_LOG), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o640)
+        fd = os.open(str(UPLOADS_SHADOW_LOG), os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
             os.write(fd, (json.dumps(row) + '\n').encode('utf-8'))
         finally:

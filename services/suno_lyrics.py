@@ -302,7 +302,7 @@ def _claim(audio_id: str, info: dict):
     p = marker_path(audio_id)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o660)
+        fd = os.open(str(p), os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     except FileExistsError:
         return False
     except OSError as exc:
